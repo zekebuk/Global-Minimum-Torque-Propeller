@@ -1,0 +1,7 @@
+mode_number,left_frequency_Hz,right_frequency_Hz,percent_difference,left_mode_type,right_mode_type
+1,149.141724566978,149.077504195325,-0.0430599631592171,flapwise bending,flapwise bending
+2,551.040302953821,549.146898904281,-0.343605365958,flapwise bending,flapwise bending
+3,1218.97757091207,1229.03960097978,0.825448335376864,flapwise bending,flapwise bending
+4,1786.26917861494,1745.77625535874,-2.26689928600786,flapwise bending,flapwise bending
+5,2790.45410282453,2829.6923619791,1.40616034912928,flapwise bending,flapwise bending
+6,4352.9853818458,4298.3958423616,-1.25407127972138,flapwise bending,flapwise bending

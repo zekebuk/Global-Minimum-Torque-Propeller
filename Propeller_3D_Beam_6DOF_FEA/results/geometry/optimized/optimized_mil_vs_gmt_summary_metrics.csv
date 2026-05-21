@@ -1,0 +1,3 @@
+case_name,geometry_path,geometry_variant,max_combined_stress_MPa,max_flapwise_stress_MPa,max_axial_stress_MPa,max_tip_deflection_m,root_bending_moment_Nm,root_axial_force_N,estimated_mass_kg,first_frequency_Hz
+Optimized MIL,C:\Users\Zekeb\OneDrive\OneDrive - Cal Poly\ME 599 THESIS\Code\outputs\optimized_mil\optimized_mil.csv,,24.8290371041918,13.4534251743807,11.1435808958999,0.000785142316164613,2.67997382339105,2108.40105085286,0.0842054991594498,148.483988290914
+Optimized GMT,C:\Users\Zekeb\OneDrive\OneDrive - Cal Poly\ME 599 THESIS\Code\outputs\optimized_gmt\optimized_gmt.csv,,24.8198555890031,13.4292674042621,11.1435808958999,0.000784707976648667,2.68046262921857,2108.40105085286,0.0842054991594498,148.559341297596

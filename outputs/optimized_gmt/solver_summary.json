@@ -1,0 +1,71 @@
+{
+  "solver_mode": "reference_regularized",
+  "solver_mode_label": "reference-regularized optimization",
+  "optimizer": "coordinate_search",
+  "spanload_type": "gmt_bell",
+  "reference_geometry_source": "C:\\Users\\Zekeb\\OneDrive\\OneDrive - Cal Poly\\ME 599 THESIS\\Code\\Reference_Propeller_Geometry.xlsx (gmt_22)",
+  "reference_regularization": {
+    "twist_weight": 0.85,
+    "chord_weight": 0.35,
+    "statement": "Reference terms are calibration/regularization terms, not undisclosed hard-coded optimizer output."
+  },
+  "aero_calibration": {
+    "section_force_scale": 0.4674450060765847,
+    "statement": "This scalar calibrates the reduced-order section-force model in reference-regularized runs and is reported explicitly."
+  },
+  "locked_inputs": {
+    "diameter_m": 0.5588,
+    "diameter_in": 22.0,
+    "chord_locked": true,
+    "airfoil_locked": true,
+    "optimize_twist_only": true,
+    "rpm": 4000.0,
+    "v_inf_mps": 0.0,
+    "advance_ratio": 0.0,
+    "target_thrust_n": 35.0
+  },
+  "final_metrics": {
+    "objective": 5.623033536236517,
+    "thrust_n": 35.00019666012455,
+    "thrust_error_percent": 0.0005618860701466539,
+    "torque_nm": 1.2006030973938968,
+    "power_w": 502.9074494199756,
+    "CT": 0.06593125220930754,
+    "CQ": 0.004047286064342108,
+    "CP": 0.025429848333427024,
+    "eta_dynamic": 0.0,
+    "eta_static": 0.5421227857227657,
+    "spanload_error": 0.1526988741612383,
+    "reference_twist_rms_deg": 7.426062377025035,
+    "reference_twist_max_deg": 13.706591726956965,
+    "reference_chord_rms_percent": 2.2814942616433313e-16,
+    "smoothness_penalty": 0.06316150258184762,
+    "bounds_penalty": 0.7297297297297298
+  },
+  "objective_breakdown": {
+    "normalized_thrust_error": 0.00013485265683519694,
+    "normalized_torque": 0.6382045784354151,
+    "spanload_shape_error": 0.6871449337255724,
+    "reference_twist_error": 0.6312153020471281,
+    "reference_chord_error": 1.5970459831503317e-17,
+    "smoothness_penalty": 0.017685220722917335,
+    "bounds_penalty": 3.648648648648649
+  },
+  "parameters": {
+    "base_alpha_deg": -2.9599609375,
+    "twist_bias_inner": 1.40625,
+    "twist_bias_outer": 25.3125,
+    "twist_curvature": 8.6875,
+    "tip_unload_strength": 0.36328125,
+    "loading_scale": 1.45,
+    "chord_scale": 1.0
+  },
+  "warnings": [
+    "merged 2 duplicate stations at mu=0.6200 before integration",
+    "applied reference aerodynamic calibration scale 0.4674 to the reduced-order section forces (raw reference thrust 74.875 N at target condition)",
+    "scipy optimizer unavailable or failed; used coordinate search instead (scipy.optimize is unavailable: No module named 'scipy')",
+    "48.6% of stations are clipped at reduced-order Cl limits",
+    "48.6% of stations are at the reduced-order Cl limit"
+  ],
+  "methodology_statement": "This script implements a reduced-order inverse geometry solver for a GMT-inspired propeller. The solver minimizes a weighted objective consisting of thrust error, torque, spanload-shape error, smoothness, geometric bounds, and optional reference-geometry regularization. In the reference-regularized mode used for the manufactured propeller, chord distribution and airfoil schedule were constrained to the selected manufacturable reference geometry, while twist was adjusted to match the GMT-inspired inboard-loaded spanload and target thrust condition. When the reduced-order reference-aero calibration is active, the scalar section-force scale is reported in the solver summary rather than hidden in the geometry. Therefore, the resulting geometry should be interpreted as a calibrated reproduction of the published GMT propeller methodology rather than an independent high-fidelity aerodynamic optimum."
+}
