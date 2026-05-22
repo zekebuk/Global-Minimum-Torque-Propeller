@@ -222,7 +222,7 @@ The comparison script also exports:
 - paired radial stress data for a paired t-test
 - combined-stress and modal-frequency comparison plots
 
-The default plot set includes both centerline deflection and a twisted chord ribbon colored by approximate combined beam stress. The ribbon is a visualization of chord and twist from the beam stations; it is not a shell or solid mesh.
+The default plot set includes both centerline deflection and a twisted chord ribbon colored by approximate combined beam stress. The simplified beam view shows the reduced-order structural model. Ribbon view is for visualization and stress envelope display; it is not a shell or solid mesh.
 
 Element midpoint stress is available as a one-point element evaluation in
 `stress.element_one_point`. The station-level stress curves use nodal

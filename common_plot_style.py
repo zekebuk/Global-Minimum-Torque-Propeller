@@ -34,6 +34,19 @@ def apply_matplotlib_style(plt) -> None:
     )
 
 
+def style_matplotlib_axes(ax, legend: bool = True) -> None:
+    ax.grid(True, which="major")
+    ax.grid(True, which="minor", alpha=0.18)
+    ax.minorticks_on()
+    for spine in ax.spines.values():
+        spine.set_linewidth(0.8)
+    ax.tick_params(direction="in", top=True, right=True, width=0.8)
+    if legend:
+        handles, labels = ax.get_legend_handles_labels()
+        if handles:
+            ax.legend(frameon=False, handlelength=2.7)
+
+
 def save_matplotlib_figure(fig, out_dir: Path, stem: str) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_dir / f"{stem}.pdf")

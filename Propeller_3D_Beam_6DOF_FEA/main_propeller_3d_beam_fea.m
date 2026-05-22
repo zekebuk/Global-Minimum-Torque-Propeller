@@ -11,6 +11,10 @@ clear; clc; close all;
 
 this_dir = fileparts(mfilename('fullpath'));
 repo_root = fileparts(this_dir);
+[project_root,code_folder] = fileparts(repo_root);
+if ~strcmpi(code_folder,'Code')
+    project_root = repo_root;
+end
 addpath(this_dir,'-begin');
 helpers_dir = fullfile(this_dir,'helpers');
 if isfolder(helpers_dir)
@@ -38,6 +42,10 @@ output_name = 'reference_gmt';
 diameter_in = 22;
 radius_m = (diameter_in/2)*0.0254;
 RPM = 4000;
+aero_case_name = 'thesis_22_static_35N';
+aero_station_csv_path = fullfile(project_root,'results','aero',[aero_case_name '_stations.csv']);
+aero_summary_json_path = fullfile(project_root,'results','aero',[aero_case_name '_summary.json']);
+omega_override_rad_s = [];
 
 total_thrust_per_propeller_N = 48;
 number_of_blades = 2;
@@ -56,6 +64,7 @@ rho_eff = 1550;                   % kg/m^3
 thickness_ratio = 0.10;
 num_nodes = [];                   % [] uses the CSV stations directly
 
+load_source = 'aero_solver_csv';  % 'aero_solver_csv' for thesis, 'legacy_uniform' for comparison/debug
 load_distribution_type = 'bell';  % 'uniform', 'elliptical', 'bell', or 'csv'
 include_edgewise_load = false;
 include_torsional_moment = false;
@@ -77,7 +86,7 @@ campbell_warning_tolerance = 0.10;
 % Change these to create distributed torsion from thrust load offset.
 elastic_axis_fraction_chord = 0.25;
 aero_center_fraction_chord = 0.25;
-include_aero_torsion_from_offset = true;
+include_aero_torsion_from_offset = false;
 
 %% ------------------------- Case setup ---------------------------------
 
@@ -103,6 +112,10 @@ params.total_thrust_per_propeller_N = total_thrust_per_propeller_N;
 params.number_of_blades = number_of_blades;
 params.thickness_ratio = thickness_ratio;
 params.num_nodes = num_nodes;
+params.load_source = load_source;
+params.aero_station_csv_path = aero_station_csv_path;
+params.aero_summary_json_path = aero_summary_json_path;
+params.omega_override_rad_s = omega_override_rad_s;
 params.load_distribution_type = load_distribution_type;
 params.include_edgewise_load = include_edgewise_load;
 params.include_torsional_moment = include_torsional_moment;
@@ -133,6 +146,8 @@ props = section_properties_from_geometry(mesh,material,thickness_ratio);
 
 [K,element_data,dof] = assemble_global_stiffness(mesh,props,material);
 [F,loads,element_data] = apply_propeller_loads_3d(mesh,props,material,params,geom,element_data,dof);
+load_report_paths = write_fea_load_consistency_report(loads,params,results_dir);
+load_plot_files = plot_fea_imported_loads(mesh,loads,params,this_dir);
 
 bc = apply_boundary_conditions(mesh,dof,1);
 solution = solve_static_fea(K,zeros(size(F)),bc,dof,loads.F0_global);
@@ -179,6 +194,8 @@ fprintf('Geometry: %s\n',geometry_csv_path);
 fprintf('Results directory: %s\n',results_dir);
 fprintf('Results CSV: %s\n',results_csv);
 fprintf('Plots written: %d\n',numel(plot_files));
+fprintf('Load consistency report: %s\n',load_report_paths.text);
+fprintf('Imported load plots written: %d\n',numel(load_plot_files));
 fprintf('Max normal stress envelope: %.3f MPa\n',max(abs(stress.sigma_combined_Pa))/1e6);
 fprintf('Tip displacement magnitude: %.6g m\n',norm(solution.displacements(end,1:3)));
 if ~isempty(modal)

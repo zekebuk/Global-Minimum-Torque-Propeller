@@ -1222,31 +1222,9 @@ def export_results(results: Mapping[str, Any], output_dir: str | Path, case_name
 
 def plot_results(results: Mapping[str, Any], output_dir: str | Path) -> dict[str, list[Path]]:
     import matplotlib.pyplot as plt
+    from common_plot_style import apply_matplotlib_style, save_matplotlib_figure, style_matplotlib_axes
 
-    plt.rcParams.update(
-        {
-            "font.family": "Times New Roman",
-            "font.size": 11,
-            "axes.titlesize": 11,
-            "axes.labelsize": 11,
-            "xtick.labelsize": 10,
-            "ytick.labelsize": 10,
-            "legend.fontsize": 10,
-            "mathtext.fontset": "custom",
-            "mathtext.rm": "Times New Roman",
-            "mathtext.it": "Times New Roman:italic",
-            "mathtext.bf": "Times New Roman:bold",
-            "axes.unicode_minus": False,
-            "lines.linewidth": 1.5,
-            "grid.linewidth": 0.4,
-            "grid.alpha": 0.35,
-            "savefig.dpi": 300,
-            "savefig.bbox": "tight",
-            "pdf.fonttype": 42,
-            "ps.fonttype": 42,
-            "svg.fonttype": "none",
-        }
-    )
+    apply_matplotlib_style(plt)
 
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1272,8 +1250,8 @@ def plot_results(results: Mapping[str, Any], output_dir: str | Path) -> dict[str
         ax.plot(r_R, [row[field] for row in stations], color="black")
         ax.set_xlabel("r/R [-]")
         ax.set_ylabel(ylabel)
-        ax.grid(True)
         ax.set_xlim(min(r_R), max(r_R))
+        style_matplotlib_axes(ax, legend=False)
         fig.tight_layout()
         full_stem = f"{case_name}_{stem}"
         paths = [
@@ -1281,9 +1259,7 @@ def plot_results(results: Mapping[str, Any], output_dir: str | Path) -> dict[str
             out_dir / f"{full_stem}.svg",
             out_dir / f"{full_stem}.png",
         ]
-        fig.savefig(paths[0])
-        fig.savefig(paths[1])
-        fig.savefig(paths[2], dpi=300)
+        save_matplotlib_figure(fig, out_dir, full_stem)
         plt.close(fig)
         written[stem] = paths
     return written

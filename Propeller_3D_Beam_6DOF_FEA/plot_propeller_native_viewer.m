@@ -60,16 +60,25 @@ try
 catch
 end
 
-controls = uigridlayout(scroll_panel,[34 2]);
+controls = uigridlayout(scroll_panel,[52 2]);
 controls.ColumnWidth = {132,'1x'};
-controls.RowHeight = repmat({28},1,34);
-controls.Padding = [0 0 8 0];
+controls.RowHeight = repmat({30},1,52);
+controls.RowSpacing = 4;
+controls.Padding = [0 0 14 0];
+try
+    controls.Scrollable = 'on';
+catch
+end
 
 row = 1;
+[default_aero_station_csv,default_aero_summary_json] = defaultAeroLoadPaths();
+
+addSectionLabel('Plot');
 view_dropdown = addDropdown('View', ...
     {'3D isometric ribbon','planform','span-flap projection', ...
      'span-edge projection','spanwise line plot','internal force diagrams', ...
      'section property plots','load distribution plots', ...
+     'simplified beam model', ...
      'deformed vs undeformed overlay','natural frequency table', ...
      'mode shape 3D','mode shape span-flap','mode shape span-edge', ...
      'Campbell diagram','comparison plot'},initial_view);
@@ -78,6 +87,7 @@ type_dropdown = addDropdown('Type',resultTypeItems(),'combined stress');
 geometry_dropdown = addDropdown('Geometry',{'undeformed','deformed','both'},'both');
 xaxis_dropdown = addDropdown('X Axis',{'r/R','r [m]','station'},'r/R');
 
+addSectionLabel('Display');
 addLabel('Deformation Scale');
 deformation_scale_field = uieditfield(controls,'numeric','Value',1);
 deformation_scale_field.Layout.Row = row;
@@ -108,6 +118,7 @@ stress_breakdown_checkbox = addCheckbox('Stress breakdown',true);
 node_labels_checkbox = addCheckbox('Node numbers',false);
 element_labels_checkbox = addCheckbox('Element numbers',false);
 mesh_lines_checkbox = addCheckbox('Mesh lines',true);
+show_load_arrows_checkbox = addCheckbox('Show load arrows',false);
 
 addLabel('Every nth label');
 label_stride_field = uieditfield(controls,'numeric','Value',5,'Limits',[1 1000], ...
@@ -116,6 +127,7 @@ label_stride_field.Layout.Row = row;
 label_stride_field.Layout.Column = 2;
 row = row + 1;
 
+addSectionLabel('Allowables');
 addLabel('Tensile allowable MPa');
 tensile_allowable_field = uieditfield(controls,'numeric','Value',250,'Limits',[eps Inf]);
 tensile_allowable_field.Layout.Row = row;
@@ -134,6 +146,7 @@ shear_allowable_field.Layout.Row = row;
 shear_allowable_field.Layout.Column = 2;
 row = row + 1;
 
+addSectionLabel('Probe');
 addLabel('Probe station or r/R');
 probe_field = uieditfield(controls,'text','Value','1', ...
     'ValueChangedFcn',@(~,~) probeStation());
@@ -146,11 +159,38 @@ probe_button.Layout.Row = row;
 probe_button.Layout.Column = [1 2];
 row = row + 1;
 
+addSectionLabel('Export / Advanced');
 import_button = uibutton(controls,'Text','Import Hand/Abaqus CSV', ...
     'ButtonPushedFcn',@(~,~) importComparison());
 import_button.Layout.Row = row;
 import_button.Layout.Column = [1 2];
 row = row + 1;
+
+load_source_dropdown = addDropdown('Load Source',{'aero_solver_csv','legacy_uniform'},'aero_solver_csv');
+
+addLabel('Aero stations CSV');
+aero_station_csv_field = uieditfield(controls,'text','Value',default_aero_station_csv);
+aero_station_csv_field.Layout.Row = row;
+aero_station_csv_field.Layout.Column = 2;
+row = row + 1;
+
+addLabel('Aero summary JSON');
+aero_summary_json_field = uieditfield(controls,'text','Value',default_aero_summary_json);
+aero_summary_json_field.Layout.Row = row;
+aero_summary_json_field.Layout.Column = 2;
+row = row + 1;
+
+import_aero_loads_button = uibutton(controls,'Text','Import Aero Loads', ...
+    'ButtonPushedFcn',@(~,~) importAeroLoads());
+import_aero_loads_button.Layout.Row = row;
+import_aero_loads_button.Layout.Column = [1 2];
+row = row + 1;
+
+aero_load_status_text = uitextarea(controls,'Editable','off');
+aero_load_status_text.Value = {'Aero loads not imported.'};
+aero_load_status_text.Layout.Row = [row row + 1];
+aero_load_status_text.Layout.Column = [1 2];
+row = row + 2;
 
 export_png_button = uibutton(controls,'Text','Export Current Plot PNG', ...
     'ButtonPushedFcn',@(~,~) exportCurrentPlotPNG());
@@ -226,6 +266,11 @@ app.modal = modal_data;
 app.raw_table = raw_table;
 app.controls = struct('view',view_dropdown,'type',type_dropdown, ...
     'geometry',geometry_dropdown,'xaxis',xaxis_dropdown, ...
+    'load_source',load_source_dropdown, ...
+    'aero_station_csv',aero_station_csv_field, ...
+    'aero_summary_json',aero_summary_json_field, ...
+    'aero_load_status',aero_load_status_text, ...
+    'show_load_arrows',show_load_arrows_checkbox, ...
     'deformation_scale',deformation_scale_field, ...
     'mode_number',mode_number_field,'mode_shape_scale',mode_shape_scale_field, ...
     'color_bands',color_bands_field);
@@ -244,10 +289,51 @@ app.controls = struct('view',view_dropdown,'type',type_dropdown, ...
         node_labels_checkbox.ValueChangedFcn = redraw;
         element_labels_checkbox.ValueChangedFcn = redraw;
         mesh_lines_checkbox.ValueChangedFcn = redraw;
+        show_load_arrows_checkbox.ValueChangedFcn = redraw;
         label_stride_field.ValueChangedFcn = redraw;
         tensile_allowable_field.ValueChangedFcn = redraw;
         compressive_allowable_field.ValueChangedFcn = redraw;
         shear_allowable_field.ValueChangedFcn = redraw;
+    end
+
+    function importAeroLoads()
+        if strcmpi(load_source_dropdown.Value,'legacy_uniform')
+            aero_load_status_text.Value = {'Load source is legacy_uniform.'; ...
+                'No aero CSV import is required for this viewer session.'};
+            return
+        end
+
+        try
+            aero = load_aero_loads_for_fea(aero_station_csv_field.Value,aero_summary_json_field.Value);
+            aero_load_status_text.Value = {
+                sprintf('target_matched: %d',logical(aero.target_matched))
+                sprintf('valid_for_thesis: %d',logical(aero.valid_for_thesis))
+                sprintf('thrust: %.6g N',aero.thrust_N)
+                sprintf('torque: %.6g N-m',aero.torque_Nm)
+                sprintf('power: %.6g W',aero.power_W)
+                };
+        catch ME
+            aero_load_status_text.Value = [{'Aero load import failed:'}; cellstr(string(ME.message))];
+        end
+    end
+
+    function source_text = loadSourceForSummary()
+        source_text = resultLoadSourceText(raw_table,results_csv);
+        if isempty(source_text)
+            source_text = sprintf('unavailable in results CSV; viewer selection = %s', ...
+                char(string(load_source_dropdown.Value)));
+        end
+    end
+
+    function [station_csv,summary_json] = defaultAeroLoadPaths()
+        code_dir = fileparts(this_dir);
+        [project_root,code_folder] = fileparts(code_dir);
+        if ~strcmpi(code_folder,'Code')
+            project_root = code_dir;
+        end
+        case_name = 'thesis_22_static_35N';
+        station_csv = fullfile(project_root,'results','aero',[case_name '_stations.csv']);
+        summary_json = fullfile(project_root,'results','aero',[case_name '_summary.json']);
     end
 
     function item = addDropdown(label_text,items,value)
@@ -271,6 +357,13 @@ app.controls = struct('view',view_dropdown,'type',type_dropdown, ...
         label.Layout.Column = 1;
     end
 
+    function addSectionLabel(label_text)
+        label = uilabel(controls,'Text',label_text,'FontWeight','bold');
+        label.Layout.Row = row;
+        label.Layout.Column = [1 2];
+        row = row + 1;
+    end
+
     function drawPlot()
         resetAxes(ax,fig);
         hold(ax,'on');
@@ -292,6 +385,18 @@ app.controls = struct('view',view_dropdown,'type',type_dropdown, ...
                 [values,meta] = getResultVector(station,result_type,allowables);
                 meta.x = get_x_axis_data(station,x_axis_mode);
                 updateSummaryPanel(values,meta);
+
+            case 'simplified beam model'
+                stride = max(1,round(label_stride_field.Value));
+                [plot_values,meta] = plotSimplifiedBeamModel(ax,station,geometry_mode, ...
+                    deformation_scale,x_axis_mode,mesh_lines_checkbox.Value, ...
+                    node_labels_checkbox.Value,element_labels_checkbox.Value, ...
+                    stride,show_load_arrows_checkbox.Value);
+                [summary_lines,last_summary] = simplifiedBeamSummary(station, ...
+                    geometry_mode,meta,loadSourceForSummary());
+                summary_text.Value = summary_lines;
+                last_plot = struct('values',plot_values,'x',meta.x,'label',meta.label, ...
+                    'units',meta.units,'series_name',meta.series_name);
 
             case 'deformed vs undeformed overlay'
                 plotRibbonResult(ax,station,'3D isometric ribbon','mesh','both', ...
@@ -1130,6 +1235,186 @@ end
 
 end
 
+function [plot_values,meta] = plotSimplifiedBeamModel(ax,station,geometry_mode, ...
+    deformation_scale,x_axis_mode,show_mesh_lines,show_nodes,show_elements, ...
+    label_stride,show_load_arrows)
+
+[center0,centerd,x_label,span_x] = beamCenterlinePoints(station,deformation_scale,x_axis_mode);
+show_undeformed_only = strcmp(geometry_mode,'undeformed');
+
+if show_undeformed_only
+    plotBeamCenterline(ax,center0,show_mesh_lines,[0.25 0.25 0.25],'--','undeformed');
+    label_points = center0;
+    visible_points = center0;
+else
+    plotBeamCenterline(ax,center0,show_mesh_lines,[0.70 0.70 0.70],'--','undeformed');
+    plotBeamCenterline(ax,centerd,show_mesh_lines,[0.00 0.25 0.85],'-','deformed');
+    label_points = centerd;
+    visible_points = [center0; centerd];
+end
+
+if show_nodes
+    for node_id = 1:label_stride:station.n
+        addTextAtPoint(ax,label_points(node_id,:),sprintf('n%d',node_id),[0.1 0.1 0.1]);
+    end
+end
+if show_elements && show_mesh_lines
+    for elem_id = 1:label_stride:max(station.n - 1,0)
+        center = 0.5*(label_points(elem_id,:) + label_points(elem_id + 1,:));
+        addTextAtPoint(ax,center,sprintf('e%d',elem_id),[0.65 0 0]);
+    end
+end
+
+if show_load_arrows
+    addSimplifiedBeamLoadArrows(ax,station,label_points);
+end
+
+grid(ax,'on');
+view(ax,35,25);
+ax.DataAspectRatioMode = 'auto';
+ax.PlotBoxAspectRatioMode = 'auto';
+xlabel(ax,x_label);
+ylabel(ax,'Chordwise/edgewise coordinate [m]');
+zlabel(ax,'Flapwise/thickness coordinate [m]');
+title(ax,'simplified 1D beam model','Interpreter','none');
+xlim(ax,paddedRange(visible_points(:,1),0.08));
+ylim(ax,paddedRange(visible_points(:,2),0.18));
+zlim(ax,paddedRange(visible_points(:,3),0.18));
+legend(ax,'show','Location','best');
+
+plot_values = station.displacement_magnitude(:);
+meta = resultMeta(station,'simplified beam model','m',span_x);
+meta.summary_kind = 'beam_model';
+meta.series_name = 'simplified beam model';
+
+end
+
+function [center0,centerd,x_label,span_x] = beamCenterlinePoints(station,deformation_scale,x_axis_mode)
+
+[span_x,x_label] = get_x_axis_data(station,x_axis_mode);
+ux_axis = spanDisplacementForAxis(station,x_axis_mode);
+center0 = [span_x(:), zeros(station.n,1), zeros(station.n,1)];
+centerd = center0 + deformation_scale*[ux_axis(:), station.uy(:), station.uz(:)];
+
+end
+
+function plotBeamCenterline(ax,points,show_mesh_lines,color,line_style,display_name)
+
+if show_mesh_lines
+    plot3(ax,points(:,1),points(:,2),points(:,3),'o-', ...
+        'Color',color,'LineStyle',line_style,'MarkerFaceColor','w', ...
+        'MarkerSize',5,'LineWidth',1.4,'DisplayName',display_name);
+else
+    plot3(ax,points(:,1),points(:,2),points(:,3),'o', ...
+        'Color',color,'MarkerFaceColor','w','MarkerSize',5, ...
+        'LineStyle','none','DisplayName',display_name);
+end
+hold(ax,'on');
+
+end
+
+function addSimplifiedBeamLoadArrows(ax,station,points)
+
+n_arrows = min(station.n,9);
+idx = unique(round(linspace(1,station.n,n_arrows)));
+x_len = 0.08*max(finiteSpan(points(:,1)),1);
+section_len = max([0.5*finiteMaxAbs(station.chord), ...
+    0.25*finiteMaxAbs(points(:,2)), 0.25*finiteMaxAbs(points(:,3)), 0.02]);
+
+qx = scaledLoadVector(station.q_centrifugal(idx),x_len);
+qy = scaledLoadVector(station.q_edgewise(idx),section_len);
+qz = scaledLoadVector(station.q_thrust(idx),section_len);
+
+if any(isfinite(qx) & abs(qx) > 0)
+    quiver3(ax,points(idx,1),points(idx,2),points(idx,3), ...
+        qx,zeros(size(qx)),zeros(size(qx)),0,'Color',[0.20 0.20 0.20], ...
+        'LineWidth',1.0,'DisplayName','q_x centrifugal');
+end
+if any(isfinite(qy) & abs(qy) > 0)
+    quiver3(ax,points(idx,1),points(idx,2),points(idx,3), ...
+        zeros(size(qy)),qy,zeros(size(qy)),0,'Color',[0.85 0.33 0.10], ...
+        'LineWidth',1.0,'DisplayName','q_y edgewise');
+end
+if any(isfinite(qz) & abs(qz) > 0)
+    quiver3(ax,points(idx,1),points(idx,2),points(idx,3), ...
+        zeros(size(qz)),zeros(size(qz)),qz,0,'Color',[0.00 0.45 0.74], ...
+        'LineWidth',1.0,'DisplayName','q_z thrust');
+end
+
+end
+
+function values = scaledLoadVector(load_values,arrow_length)
+
+load_values = load_values(:);
+denom = finiteMaxAbs(load_values);
+if denom <= 0
+    values = zeros(size(load_values));
+else
+    values = arrow_length*load_values/denom;
+end
+
+end
+
+function value = finiteMaxAbs(values)
+
+values = values(:);
+values = values(isfinite(values));
+if isempty(values)
+    value = 0;
+else
+    value = max(abs(values));
+end
+
+end
+
+function value = finiteSpan(values)
+
+values = values(:);
+values = values(isfinite(values));
+if numel(values) < 2
+    value = 0;
+else
+    value = max(values) - min(values);
+end
+
+end
+
+function [summary_lines,summary_table] = simplifiedBeamSummary(station,geometry_mode,meta,load_source_text)
+
+num_nodes = station.n;
+num_elements = max(station.n - 1,0);
+root_idx = 1;
+tip_idx = station.n;
+max_displacement = max(station.displacement_magnitude,[],'omitnan');
+
+summary_lines = { ...
+    'Beam model:', ...
+    sprintf('nodes = %d',num_nodes), ...
+    sprintf('elements = %d',num_elements), ...
+    'DOF per node = 6', ...
+    sprintf('root station = %d, r/R = %.6g, r = %.6g m', ...
+        root_idx,station.mu(root_idx),station.r(root_idx)), ...
+    sprintf('tip station = %d, r/R = %.6g, r = %.6g m', ...
+        tip_idx,station.mu(tip_idx),station.r(tip_idx)), ...
+    'root constrained = ux, uy, uz, rx, ry, rz', ...
+    sprintf('load source = %s',char(string(load_source_text)))};
+
+if strcmp(geometry_mode,'deformed') || strcmp(geometry_mode,'both')
+    summary_lines{end+1} = sprintf('max displacement = %.6g m',max_displacement);
+end
+summary_lines = [summary_lines(:); { ...
+    ''; ...
+    'The structural solver uses one 6-DOF beam node per radial station. The 3D ribbon view is a visualization/stress-recovery representation, not a shell mesh.'}];
+
+summary_table = table(num_nodes,num_elements,6,station.mu(root_idx), ...
+    station.r(root_idx),station.mu(tip_idx),station.r(tip_idx), ...
+    max_displacement,string(load_source_text),string(meta.label), ...
+    'VariableNames',{'nodes','elements','dof_per_node','root_r_over_R', ...
+    'root_r_m','tip_r_over_R','tip_r_m','max_displacement_m', ...
+    'load_source','view'});
+
+end
+
 function [plot_values,meta] = plotSpanwiseLine(ax,station,result_type,x_axis_mode,allowables,stress_breakdown)
 
 [x,xlabel_text] = spanAxis(station,x_axis_mode);
@@ -1582,6 +1867,38 @@ for i = 1:numel(candidates)
         values = double(tmp(:));
         return
     end
+end
+
+end
+
+function source_text = resultLoadSourceText(T,results_csv)
+
+source_text = '';
+names = T.Properties.VariableNames;
+norm_names = normalizeNames(names);
+idx = find(strcmp(norm_names,'loadsource'),1,'first');
+if ~isempty(idx)
+    raw = T.(names{idx});
+    if iscell(raw)
+        source_text = char(string(raw{1}));
+    elseif isstring(raw)
+        source_text = char(raw(1));
+    elseif ischar(raw)
+        source_text = raw;
+    else
+        source_text = char(string(raw(1)));
+    end
+    source_text = strtrim(source_text);
+    if ~isempty(source_text)
+        return
+    end
+end
+
+path_text = lower(char(string(results_csv)));
+if contains(path_text,'aero_solver_csv')
+    source_text = 'aero_solver_csv';
+elseif contains(path_text,'legacy_uniform')
+    source_text = 'legacy_uniform';
 end
 
 end
@@ -2196,6 +2513,8 @@ switch view_name
         view_name = 'span-flap projection';
     case {"span-edge","span_edge","edge","span-edge projection"}
         view_name = 'span-edge projection';
+    case {"simplified beam model","1d beam centerline","1d beam","beam centerline","beam model","simplified beam"}
+        view_name = 'simplified beam model';
     case {"natural frequency table","frequencies","modal table","frequency table"}
         view_name = 'natural frequency table';
     case {"mode shape 3d","modal 3d","mode 3d"}
