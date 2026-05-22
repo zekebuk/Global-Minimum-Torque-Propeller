@@ -1,3 +1,0 @@
-case_name,geometry_path,geometry_variant,max_combined_stress_MPa,max_flapwise_stress_MPa,max_axial_stress_MPa,max_tip_deflection_m,root_bending_moment_Nm,root_axial_force_N,estimated_mass_kg,first_frequency_Hz
-Reference MIL,C:\Users\Zekeb\OneDrive\OneDrive - Cal Poly\ME 599 THESIS\Code\Reference_Propeller_Geometry.xlsx,mil_22,24.4395989679007,12.8361561083283,11.1422060918394,0.000767435580317388,2.67802823362854,2108.39449047128,0.0842039792298807,149.141724566978
-Reference GMT,C:\Users\Zekeb\OneDrive\OneDrive - Cal Poly\ME 599 THESIS\Code\Reference_Propeller_Geometry.xlsx,gmt_22,24.3929270795145,12.7726210785359,11.1448398117691,0.000764867010858195,2.67591005664636,2108.892858617,0.0842142142168162,149.077504195325

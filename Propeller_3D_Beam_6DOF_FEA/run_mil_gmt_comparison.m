@@ -11,6 +11,10 @@ clear; clc; close all;
 
 this_dir = fileparts(mfilename('fullpath'));
 repo_root = fileparts(this_dir);
+[project_root,code_folder] = fileparts(repo_root);
+if ~strcmpi(code_folder,'Code')
+    project_root = repo_root;
+end
 addpath(this_dir,'-begin');
 helpers_dir = fullfile(this_dir,'helpers');
 if isfolder(helpers_dir)
@@ -37,6 +41,7 @@ reference_gmt_geometry = require_geometry({
     },'22-inch NASA/SciTech reference GMT geometry');
 
 optimized_mil_geometry = require_geometry({
+    fullfile(project_root,'results','geometry','optimized','optimized_mil.csv')
     fullfile(repo_root,'results','geometry','optimized','optimized_mil.csv')
     fullfile(repo_root,'outputs','optimized_mil','optimized_mil.csv')
     fullfile(repo_root,'optimized_mil.csv')
@@ -44,6 +49,7 @@ optimized_mil_geometry = require_geometry({
     },'optimized MIL geometry');
 
 optimized_gmt_geometry = require_geometry({
+    fullfile(project_root,'results','geometry','optimized','optimized_gmt.csv')
     fullfile(repo_root,'results','geometry','optimized','optimized_gmt.csv')
     fullfile(repo_root,'outputs','optimized_gmt','optimized_gmt.csv')
     fullfile(repo_root,'optimized_gmt.csv')
@@ -98,21 +104,21 @@ reference_summary = compare_pair('Reference Geometry', ...
     'reference_mil_vs_gmt','reference', ...
     'Reference MIL',reference_mil_geometry,'mil_22', ...
     'Reference GMT',reference_gmt_geometry,'gmt_22', ...
-    material,params,this_dir);
+    material,params,this_dir,project_root);
 
 optimized_summary = compare_pair('Optimized Geometry', ...
     fullfile('geometry','optimized'), ...
     'optimized_mil_vs_gmt','optimized', ...
     'Optimized MIL',optimized_mil_geometry,'', ...
     'Optimized GMT',optimized_gmt_geometry,'', ...
-    material,params,this_dir);
+    material,params,this_dir,project_root);
 
 fprintf('\nAll requested MIL/GMT comparisons complete.\n');
 disp(reference_summary.metrics);
 disp(optimized_summary.metrics);
 
 function summary = compare_pair(title_text,folder_name,output_prefix,figure_category,left_label,left_geometry,left_variant, ...
-    right_label,right_geometry,right_variant,material,params,this_dir)
+    right_label,right_geometry,right_variant,material,params,this_dir,project_root)
 
 comparison_dir = prepareResultsDirectory(this_dir,folder_name,true);
 
@@ -185,7 +191,7 @@ text(ax2,0.02,0.88,sprintf('max |\\Delta| = %.3g%%',max_percent_difference), ...
 linkaxes([ax1 ax2],'x');
 xlim(ax1,[min(common_mu) max(common_mu)]);
 export_figure_set(fig,comparison_dir,[output_prefix '_stress_distribution']);
-export_figure_set(fig,fullfile(this_dir,'figures_paper',figure_category),[output_prefix '_stress_distribution']);
+export_figure_set(fig,fullfile(project_root,'figures_paper','fea',figure_category),[output_prefix '_stress_distribution']);
 close(fig);
 
 mode_number = (1:min(numel(left.modal.frequencies_hz),numel(right.modal.frequencies_hz)))';
@@ -205,7 +211,7 @@ grid on; xlabel('Mode number [-]'); ylabel('Frequency [Hz]');
 legend(cleanComparisonLabel(left_label),cleanComparisonLabel(right_label),'Location','best');
 title(sprintf('%s Natural Frequencies',title_text));
 export_figure_set(fig,comparison_dir,[output_prefix '_modal_frequency']);
-export_figure_set(fig,fullfile(this_dir,'figures_paper',figure_category),[output_prefix '_modal_frequency']);
+export_figure_set(fig,fullfile(project_root,'figures_paper','fea',figure_category),[output_prefix '_modal_frequency']);
 close(fig);
 
 fprintf('\n%s complete.\n',title_text);

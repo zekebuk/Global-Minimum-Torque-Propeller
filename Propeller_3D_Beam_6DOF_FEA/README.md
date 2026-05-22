@@ -191,21 +191,21 @@ Station probing accepts a station number, an element string like `e3`, an `r/R` 
 Plots and CSV files are written under:
 
 ```text
-Propeller_3D_Beam_6DOF_FEA/results
+../../results/fea
 ```
 
 The main solver writes one clean, stable folder:
 
 ```text
-Propeller_3D_Beam_6DOF_FEA/results/geometry/reference/reference_gmt
+../../results/fea/geometry/reference/reference_gmt
 ```
 
 That folder is cleared at the start of each run, then rewritten with the
 latest CSVs and plots. The MIL/GMT comparison script rewrites two folders:
 
 ```text
-Propeller_3D_Beam_6DOF_FEA/results/geometry/reference
-Propeller_3D_Beam_6DOF_FEA/results/geometry/optimized
+../../results/fea/geometry/reference
+../../results/fea/geometry/optimized
 ```
 
 The station results CSV includes:
@@ -258,8 +258,8 @@ The main driver now writes:
 - `*_modal_frequencies.csv`
 - `*_mode_shapes.csv`
 - `*_mode_##_shape_3d.png`
-- `results/campbell_diagram.csv` when `run_campbell_diagram_enabled = true`
-- `figures_paper/<category>/*_campbell_diagram.*` for paper-ready Campbell diagram output
+- `../../results/fea/campbell_diagram.csv` when `run_campbell_diagram_enabled = true`
+- `../../figures_paper/fea/<category>/*_campbell_diagram.*` for paper-ready Campbell diagram output
 
 The native viewer can read these files next to a results CSV and show natural frequency tables plus 3D/span-flap/span-edge mode shapes. `run_mil_gmt_comparison.m` also writes modal comparison CSVs in each comparison folder.
 

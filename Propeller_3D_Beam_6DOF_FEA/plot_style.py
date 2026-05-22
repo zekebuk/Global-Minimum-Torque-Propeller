@@ -11,7 +11,9 @@ if str(CODE_DIR) not in sys.path:
 from common_plot_style import apply_matplotlib_style, save_matplotlib_figure  # noqa: E402
 
 
-FIGURES_DIR = Path(__file__).resolve().parent / "figures_paper"
+FEA_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = FEA_DIR.parents[1] if FEA_DIR.parent.name.lower() == "code" else FEA_DIR.parent
+FIGURES_DIR = PROJECT_ROOT / "figures_paper" / "fea"
 
 
 def set_paper_style() -> None:
@@ -25,7 +27,7 @@ def save_figure(fig, name: str, category: str) -> Path:
     if category not in valid_categories:
         raise ValueError(f"Unknown figure category: {category}")
 
-    out_dir = Path("figures_paper") / category
+    out_dir = FIGURES_DIR / category
     return save_matplotlib_figure(fig, out_dir, name)
 
 

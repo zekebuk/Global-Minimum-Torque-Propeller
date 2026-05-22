@@ -13,8 +13,9 @@ from plot_style import case_style, save_figure, set_paper_style, style_axes
 
 
 ROOT = Path(__file__).resolve().parent
-RESULTS_DIR = ROOT / "results" / "geometry"
-FIGURES_DIR = ROOT / "figures_paper"
+PROJECT_ROOT = ROOT.parents[1] if ROOT.parent.name.lower() == "code" else ROOT.parent
+RESULTS_DIR = PROJECT_ROOT / "results" / "fea" / "geometry"
+FIGURES_DIR = PROJECT_ROOT / "figures_paper" / "fea"
 
 
 @dataclass(frozen=True)

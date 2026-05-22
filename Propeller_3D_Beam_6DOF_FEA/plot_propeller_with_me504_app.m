@@ -140,10 +140,16 @@ end
 function results_csv = latest_results_csv()
 
 this_dir = fileparts(mfilename('fullpath'));
-files = dir(fullfile(this_dir,'results','**','*_results.csv'));
+code_dir = fileparts(this_dir);
+[project_root,code_folder] = fileparts(code_dir);
+if ~strcmpi(code_folder,'Code')
+    project_root = code_dir;
+end
+results_root = fullfile(project_root,'results','fea');
+files = dir(fullfile(results_root,'**','*_results.csv'));
 if isempty(files)
     error('No *_results.csv files found under %s. Run main_propeller_3d_beam_fea first.', ...
-        fullfile(this_dir,'results'));
+        results_root);
 end
 
 [~,idx] = max([files.datenum]);

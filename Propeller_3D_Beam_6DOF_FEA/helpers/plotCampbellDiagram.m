@@ -67,7 +67,8 @@ campbell.plot_path = fullfile(results_dir,[output_name '_campbell_diagram.png'])
 saveFigureFormats(fig,campbell.plot_path);
 
 figure_category = figureCategoryForCase(output_name);
-figures_dir = fullfile(fileparts(results_root),'figures_paper',figure_category);
+project_root = projectRootFromResultsRoot(results_root);
+figures_dir = fullfile(project_root,'figures_paper','fea',figure_category);
 if ~exist(figures_dir,'dir')
     mkdir(figures_dir);
 end
@@ -345,6 +346,11 @@ results_root = results_dir;
 current = results_dir;
 while true
     [parent,name] = fileparts(current);
+    [grandparent,parent_name] = fileparts(parent);
+    if strcmpi(name,'fea') && strcmpi(parent_name,'results')
+        results_root = current;
+        return
+    end
     if strcmpi(name,'results')
         results_root = current;
         return
@@ -354,6 +360,19 @@ while true
     end
     current = parent;
 end
+
+end
+
+function project_root = projectRootFromResultsRoot(results_root)
+
+[parent,name] = fileparts(results_root);
+if strcmpi(name,'fea')
+    [project_root,parent_name] = fileparts(parent);
+    if strcmpi(parent_name,'results')
+        return
+    end
+end
+project_root = fileparts(results_root);
 
 end
 

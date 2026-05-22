@@ -435,7 +435,7 @@ app.controls = struct('view',view_dropdown,'type',type_dropdown, ...
         old_node_labels = node_labels_checkbox.Value;
         old_element_labels = element_labels_checkbox.Value;
 
-        out_dir = fullfile(this_dir,'figures_paper');
+        out_dir = fullfile(projectRootFromFeaDir(this_dir),'figures_paper','fea');
         if ~isfolder(out_dir)
             mkdir(out_dir);
         end
@@ -1684,6 +1684,11 @@ results_root = start_dir;
 current = start_dir;
 while true
     [parent,name] = fileparts(current);
+    [~,parent_name] = fileparts(parent);
+    if strcmpi(name,'fea') && strcmpi(parent_name,'results')
+        results_root = current;
+        return
+    end
     if strcmpi(name,'results')
         results_root = current;
         return
@@ -2210,12 +2215,23 @@ end
 function results_csv = latest_results_csv()
 
 this_dir = fileparts(mfilename('fullpath'));
-files = dir(fullfile(this_dir,'results','**','*_results.csv'));
+results_root = fullfile(projectRootFromFeaDir(this_dir),'results','fea');
+files = dir(fullfile(results_root,'**','*_results.csv'));
 if isempty(files)
     error('No *_results.csv files found under %s. Run main_propeller_3d_beam_fea first.', ...
-        fullfile(this_dir,'results'));
+        results_root);
 end
 [~,idx] = max([files.datenum]);
 results_csv = fullfile(files(idx).folder,files(idx).name);
+
+end
+
+function project_root = projectRootFromFeaDir(this_dir)
+
+code_dir = fileparts(this_dir);
+[project_root,code_folder] = fileparts(code_dir);
+if ~strcmpi(code_folder,'Code')
+    project_root = code_dir;
+end
 
 end

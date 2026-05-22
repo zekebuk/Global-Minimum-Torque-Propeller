@@ -5,7 +5,13 @@ if nargin < 3 || isempty(clean_existing)
     clean_existing = true;
 end
 
-results_root = fullfile(this_dir,'results');
+code_dir = fileparts(this_dir);
+[project_root,code_folder] = fileparts(code_dir);
+if ~strcmpi(code_folder,'Code')
+    project_root = code_dir;
+end
+
+results_root = fullfile(project_root,'results','fea');
 if ~exist(results_root,'dir')
     mkdir(results_root);
 end
