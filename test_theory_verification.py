@@ -12,10 +12,15 @@ if str(CODE_DIR) not in sys.path:
     sys.path.insert(0, str(CODE_DIR))
 
 from Geometry_optimization import (
+    DesignInputs,
+    DesignResult,
     NASA_SCITECH_ORIGINAL_OPERATING_POINT,
+    ObjectiveWeights,
     ORIGINAL_REFERENCE_DIAMETER_IN,
+    OptimizationParameters,
     SCALED_REFERENCE_DIAMETER_IN,
     SCALED_REFERENCE_SCALE_FACTOR,
+    StationResult,
     THESIS_22_STATIC_OPERATING_POINT,
     add_arguments,
     apply_defaults,
@@ -25,7 +30,9 @@ from Geometry_optimization import (
     meters_to_inches,
     read_geometry_xlsx,
     reference_workbook_scale_rows,
+    result_summary_dict,
     scaled_reference_no_double_scaling_warnings,
+    twist_manufacturability_metrics,
     validate_scaled_reference_pair,
     validate_scaled_reference_rows,
     write_scaled_reference_geometry_audit,
@@ -55,7 +62,7 @@ def test_units_rpm_to_rad_s():
 
 
 def test_power_equals_torque_times_omega():
-    omega = rpm_to_rad_s(4000.0)
+    omega = rpm_to_rad_s(4500.0)
     assert abs(shaft_power_w(1.25, omega) - 1.25 * omega) < 1.0e-12
 
 
@@ -244,6 +251,118 @@ def test_thesis_static_preset_uses_22_inch_defaults():
     assert args.optimize_twist_only
 
 
+def test_manufacturable_preset_uses_thesis_safe_defaults():
+    parser = ArgumentParser()
+    add_arguments(parser)
+    args = apply_defaults(parser.parse_args(["--preset", "thesis_gmt_22_manufacturable"]))
+
+    assert args.manufacturable_twist
+    assert args.optimizer == "coordinate_search"
+    assert args.max_positive_twist_bump == pytest.approx(0.5)
+    assert args.max_twist_gradient == pytest.approx(100.0)
+    assert args.max_twist_curvature == pytest.approx(1500.0)
+    assert args.max_cl_limit_fraction_pct == pytest.approx(10.0)
+    assert args.max_alpha_limit_fraction_pct == pytest.approx(10.0)
+    assert args.lock_airfoil
+    assert not args.optimize_twist_only
+
+
+def test_twist_manufacturability_rejects_positive_bump_after_transition():
+    metrics = twist_manufacturability_metrics(
+        [0.30, 0.40, 0.55, 0.70],
+        [25.0, 22.0, 22.8, 18.0],
+        max_positive_bump_deg=0.5,
+        start_mu=0.35,
+        max_abs_gradient_deg_per_mu_limit=100.0,
+        max_curvature_limit=1500.0,
+    )
+
+    assert metrics["max_positive_twist_bump_deg"] == pytest.approx(0.8)
+    assert metrics["positive_twist_bump_count"] == 1
+    assert not metrics["manufacturable_twist_pass"]
+
+
+def _summary_station(index: int, mu: float, twist_deg: float, hit_cl_limit: bool = False) -> StationResult:
+    return StationResult(
+        station_index=index,
+        mu=mu,
+        radius_m=mu * THESIS_22_STATIC_OPERATING_POINT["radius_m"],
+        radius_in=0.0,
+        dr_m=0.01,
+        chord_m=0.05,
+        chord_in=0.0,
+        chord_fraction=0.18,
+        twist_deg=twist_deg,
+        cad_plane_angle_deg=90.0 - twist_deg,
+        phi_deg=10.0,
+        alpha_deg=5.0,
+        unclipped_cl_demand=0.7,
+        cl=0.7,
+        cl_max=1.35,
+        cl_margin=0.65,
+        cd=0.02,
+        dthrust_n=1.0,
+        dtorque_nm=0.03,
+        airfoil="MH115",
+        target_spanload_weight=0.1,
+        actual_spanload_weight=0.1,
+        reference_chord_fraction=0.18,
+        reference_twist_deg=twist_deg,
+        hit_chord_min=False,
+        hit_chord_max=False,
+        hit_alpha_min=False,
+        hit_alpha_max=False,
+        hit_cl_limit=hit_cl_limit,
+        is_clipped=hit_cl_limit,
+        negative_force=False,
+        impossible_force=False,
+    )
+
+
+def test_summary_marks_clipped_thesis_export_invalid():
+    stations = [
+        _summary_station(index, 0.20 + 0.08 * (index - 1), 26.0 - index, hit_cl_limit=index <= 2)
+        for index in range(1, 11)
+    ]
+    result = DesignResult(
+        config=DesignInputs(manufacturable_twist=True),
+        target_alpha_deg=0.0,
+        objective=1.0,
+        thrust_n=35.0,
+        torque_nm=1.0,
+        power_w=400.0,
+        eta_ideal=0.5,
+        eta_dynamic=0.0,
+        eta_static=0.5,
+        induced_velocity_mps=7.0,
+        j_advance=0.0,
+        ct=0.1,
+        cq=0.01,
+        cp=0.02,
+        spanload_error=0.0,
+        reference_twist_rms_deg=0.0,
+        reference_twist_max_deg=0.0,
+        reference_chord_rms_percent=0.0,
+        smoothness_penalty=0.0,
+        bounds_penalty=0.0,
+        normalized_thrust_error=0.0,
+        normalized_torque=1.0,
+        aero_calibration_scale=1.0,
+        objective_breakdown={},
+        weights=ObjectiveWeights(1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0),
+        parameters=OptimizationParameters(),
+        stations=stations,
+        warnings=[],
+        convergence_history=[],
+        reference_source="synthetic",
+        optimizer_name="unit_test",
+    )
+    summary = result_summary_dict(result)
+
+    assert summary["aero_validity"]["cl_limit_station_fraction_pct"] == pytest.approx(20.0)
+    assert not summary["valid_for_thesis_export"]
+
+
 def test_reference_aliases_share_chord_distribution():
     gmt_stations, _, _ = load_reference_geometry(None, WORKBOOK, "reference_gmt")
     mil_stations, _, _ = load_reference_geometry(None, WORKBOOK, "reference_mil")
@@ -268,9 +387,9 @@ def same_geometry_verification(tmp_path):
             "--skip-plots",
             "--write-reference-cases",
             "--results-dir",
-            str(tmp_path / "results" / "geometry" / "comparison"),
+            str(tmp_path / "results" / "verification" / "comparison"),
             "--figures-dir",
-            str(tmp_path / "figures_paper" / "comparison"),
+            str(tmp_path / "figures_paper" / "verification" / "comparison"),
         ]
     )
     return run_verification(apply_verification_preset(args))
@@ -298,7 +417,7 @@ def test_22_inch_verification_has_deterministic_outcome(same_geometry_verificati
 
 
 def test_optional_reference_case_outputs_are_written(same_geometry_verification):
-    reference_root = same_geometry_verification.results_dir.parent / "reference"
+    reference_root = same_geometry_verification.results_dir / "reference_cases"
 
-    assert (reference_root / "reference_mil" / "reference_mil.csv").exists()
-    assert (reference_root / "reference_gmt" / "reference_gmt.csv").exists()
+    assert (reference_root / "reference_mil" / "reference_mil_optimizer_geometry.csv").exists()
+    assert (reference_root / "reference_gmt" / "reference_gmt_optimizer_geometry.csv").exists()

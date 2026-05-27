@@ -7,7 +7,7 @@ end
 
 applyPlotStyle();
 
-out_dir = fullfile(project_root_from_fea_dir(this_dir),'figures_paper','fea_loads');
+out_dir = fullfile(project_root_from_fea_dir(this_dir),'figures_paper','fea','beam_solver',sanitize_stem(case_name));
 if ~exist(out_dir,'dir')
     mkdir(out_dir);
 end
@@ -78,11 +78,9 @@ function path = save_figure_set(fig,out_dir,stem)
 
 path = fullfile(out_dir,[stem '.png']);
 if exist('exportgraphics','file')
-    exportgraphics(fig,fullfile(out_dir,[stem '.pdf']),'ContentType','vector');
     exportgraphics(fig,fullfile(out_dir,[stem '.svg']),'ContentType','vector');
     exportgraphics(fig,path,'Resolution',300);
 else
-    saveas(fig,fullfile(out_dir,[stem '.pdf']));
     try
         saveas(fig,fullfile(out_dir,[stem '.svg']));
     catch

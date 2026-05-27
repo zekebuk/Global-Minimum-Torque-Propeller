@@ -191,21 +191,24 @@ Station probing accepts a station number, an element string like `e3`, an `r/R` 
 Plots and CSV files are written under:
 
 ```text
-../../results/fea
+../../results/fea/
+../../figures_paper/fea/
 ```
 
 The main solver writes one clean, stable folder:
 
 ```text
-../../results/fea/geometry/reference/reference_gmt
+../../results/fea/beam_solver/reference_gmt
+../../figures_paper/fea/beam_solver/reference_gmt
 ```
 
 That folder is cleared at the start of each run, then rewritten with the
 latest CSVs and plots. The MIL/GMT comparison script rewrites two folders:
 
 ```text
-../../results/fea/geometry/reference
-../../results/fea/geometry/optimized
+../../results/fea/comparisons/reference_mil_vs_gmt
+../../results/fea/comparisons/optimized_mil_vs_gmt
+../../figures_paper/fea/comparisons
 ```
 
 The station results CSV includes:
@@ -258,8 +261,8 @@ The main driver now writes:
 - `*_modal_frequencies.csv`
 - `*_mode_shapes.csv`
 - `*_mode_##_shape_3d.png`
-- `../../results/fea/campbell_diagram.csv` when `run_campbell_diagram_enabled = true`
-- `../../figures_paper/fea/<category>/*_campbell_diagram.*` for paper-ready Campbell diagram output
+- `*_campbell.csv` next to the case results when `run_campbell_diagram_enabled = true`
+- `../../figures_paper/fea/comparisons/*_campbell_diagram.png/.svg` for paper-ready Campbell diagram output
 
 The native viewer can read these files next to a results CSV and show natural frequency tables plus 3D/span-flap/span-edge mode shapes. `run_mil_gmt_comparison.m` also writes modal comparison CSVs in each comparison folder.
 

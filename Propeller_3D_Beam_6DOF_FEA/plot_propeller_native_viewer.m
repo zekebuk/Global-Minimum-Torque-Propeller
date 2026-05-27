@@ -540,7 +540,7 @@ app.controls = struct('view',view_dropdown,'type',type_dropdown, ...
         old_node_labels = node_labels_checkbox.Value;
         old_element_labels = element_labels_checkbox.Value;
 
-        out_dir = fullfile(projectRootFromFeaDir(this_dir),'figures_paper','fea');
+        out_dir = fullfile(projectRootFromFeaDir(this_dir),'figures_paper','fea','beam_solver');
         if ~isfolder(out_dir)
             mkdir(out_dir);
         end
@@ -556,7 +556,6 @@ app.controls = struct('view',view_dropdown,'type',type_dropdown, ...
             element_labels_checkbox.Value = false;
             drawPlot();
 
-            exportgraphics(ax,fullfile(out_dir,[stem '.pdf']),'ContentType','vector');
             exportgraphics(ax,fullfile(out_dir,[stem '.svg']),'ContentType','vector');
             exportgraphics(ax,fullfile(out_dir,[stem '.png']),'Resolution',300);
             exported = true;
@@ -570,7 +569,7 @@ app.controls = struct('view',view_dropdown,'type',type_dropdown, ...
         if exported
             summary_text.Value = [summary_text.Value; { ...
                 sprintf('Thesis figure exported to: %s',out_dir), ...
-                sprintf('Files: %s.pdf/.svg/.png',stem)}];
+                sprintf('Files: %s.svg/.png',stem)}];
         end
     end
 

@@ -90,14 +90,11 @@ if ~exist(results_dir,'dir')
 end
 [~,stem] = fileparts(file_name);
 path = fullfile(results_dir,[stem '.png']);
-pdf_path = fullfile(results_dir,[stem '.pdf']);
 svg_path = fullfile(results_dir,[stem '.svg']);
 if exist('exportgraphics','file')
-    exportgraphics(fig,pdf_path,'ContentType','vector');
     exportgraphics(fig,svg_path,'ContentType','vector');
     exportgraphics(fig,path,'Resolution',300);
 else
-    saveas(fig,pdf_path);
     try
         saveas(fig,svg_path);
     catch

@@ -14,7 +14,7 @@ from plot_style import case_style, save_figure, set_paper_style, style_axes
 
 ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = ROOT.parents[1] if ROOT.parent.name.lower() == "code" else ROOT.parent
-RESULTS_DIR = PROJECT_ROOT / "results" / "fea" / "geometry"
+RESULTS_DIR = PROJECT_ROOT / "results" / "fea" / "beam_solver"
 FIGURES_DIR = PROJECT_ROOT / "figures_paper" / "fea"
 
 
@@ -50,29 +50,29 @@ def load_cases() -> list[CaseData]:
             "reference_mil",
             "reference",
             "MIL",
-            RESULTS_DIR / "reference" / "reference_mil" / "reference_mil_results.csv",
-            RESULTS_DIR / "reference" / "reference_mil" / "reference_mil_modal_frequencies.csv",
+            RESULTS_DIR / "reference_mil" / "reference_mil_results.csv",
+            RESULTS_DIR / "reference_mil" / "reference_mil_modal_frequencies.csv",
         ),
         (
             "reference_gmt",
             "reference",
             "GMT",
-            RESULTS_DIR / "reference" / "reference_gmt" / "reference_gmt_results.csv",
-            RESULTS_DIR / "reference" / "reference_gmt" / "reference_gmt_modal_frequencies.csv",
+            RESULTS_DIR / "reference_gmt" / "reference_gmt_results.csv",
+            RESULTS_DIR / "reference_gmt" / "reference_gmt_modal_frequencies.csv",
         ),
         (
             "optimized_mil",
             "optimized",
             "MIL",
-            RESULTS_DIR / "optimized" / "optimized_mil" / "optimized_mil_results.csv",
-            RESULTS_DIR / "optimized" / "optimized_mil" / "optimized_mil_modal_frequencies.csv",
+            RESULTS_DIR / "optimized_mil" / "optimized_mil_results.csv",
+            RESULTS_DIR / "optimized_mil" / "optimized_mil_modal_frequencies.csv",
         ),
         (
             "optimized_gmt",
             "optimized",
             "GMT",
-            RESULTS_DIR / "optimized" / "optimized_gmt" / "optimized_gmt_results.csv",
-            RESULTS_DIR / "optimized" / "optimized_gmt" / "optimized_gmt_modal_frequencies.csv",
+            RESULTS_DIR / "optimized_gmt" / "optimized_gmt_results.csv",
+            RESULTS_DIR / "optimized_gmt" / "optimized_gmt_modal_frequencies.csv",
         ),
     ]
     cases: list[CaseData] = []
@@ -762,13 +762,13 @@ def save_and_close(fig: plt.Figure, name: str, category: str) -> None:
 
 def clear_figures_dir() -> None:
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    for category in ("reference", "optimized", "comparison"):
+    for category in ("beam_solver", "abaqus", "comparisons"):
         out_dir = FIGURES_DIR / category
         out_dir.mkdir(parents=True, exist_ok=True)
-        for pattern in ("*.pdf", "*.svg", "*.png"):
+        for pattern in ("*.svg", "*.png"):
             for path in out_dir.glob(pattern):
                 path.unlink()
-    for pattern in ("*.pdf", "*.svg", "*.png"):
+    for pattern in ("*.svg", "*.png"):
         for path in FIGURES_DIR.glob(pattern):
             path.unlink()
 
@@ -884,7 +884,7 @@ def _legacy_per_group_main() -> None:
 
     print(f"Wrote {len(outputs)} paper figure set(s) to {FIGURES_DIR}")
     for name in outputs:
-        print(f"  - {name}.pdf / .svg / .png")
+        print(f"  - {name}.svg / .png")
 
 
 def main() -> None:
@@ -895,7 +895,7 @@ def main() -> None:
 
     for group in ("reference", "optimized"):
         selected = group_cases(cases, group)
-        category = group
+        category = "comparisons"
 
         for case in selected:
             fig, _ = plot_campbell_diagram(case)
@@ -970,26 +970,26 @@ def main() -> None:
             absolute_delta_ylabel_text=fallback_label,
             delta_note_label=note_label,
         )
-        outputs.append((name, "comparison"))
+        outputs.append((name, "comparisons"))
         save_and_close(fig, outputs[-1][0], outputs[-1][1])
 
     fig, _ = plot_grouped_modal_frequency_comparison(cases)
-    outputs.append(("reference_vs_optimized_mil_gmt_modal_frequency", "comparison"))
+    outputs.append(("reference_vs_optimized_mil_gmt_modal_frequency", "comparisons"))
     save_and_close(fig, outputs[-1][0], outputs[-1][1])
 
     fig, _ = plot_grouped_chord(cases)
-    outputs.append(("reference_vs_optimized_mil_gmt_chord", "comparison"))
+    outputs.append(("reference_vs_optimized_mil_gmt_chord", "comparisons"))
     save_and_close(fig, outputs[-1][0], outputs[-1][1])
 
     convergence = plot_convergence_from_csv(RESULTS_DIR / "convergence_study.csv")
     if convergence is not None:
         fig, _ = convergence
-        outputs.append(("convergence_study", "comparison"))
+        outputs.append(("convergence_study", "comparisons"))
         save_and_close(fig, outputs[-1][0], outputs[-1][1])
 
     print(f"Wrote {len(outputs)} paper figure set(s) to {FIGURES_DIR}")
     for name, category in outputs:
-        print(f"  - {category}/{name}.pdf / .svg / .png")
+        print(f"  - {category}/{name}.svg / .png")
 
 
 if __name__ == "__main__":

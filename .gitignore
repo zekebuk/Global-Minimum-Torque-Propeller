@@ -1,3 +1,15 @@
 ﻿__pycache__/
 *.pyc
 .pytest_cache/
+pytest_tmp*/
+.venv/
+*.log
+outputs/pipeline_validation/
+results/geometry_optimizer/
+results/aero_postprocess/
+results/verification/
+results/fea/beam_solver/
+figures_paper/geometry_optimizer/
+figures_paper/aero_postprocess/
+figures_paper/verification/
+figures_paper/fea/

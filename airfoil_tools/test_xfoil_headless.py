@@ -5,6 +5,11 @@ import subprocess
 from pathlib import Path
 
 try:
+    import pytest
+except ImportError:  # pragma: no cover - CLI smoke test can run without pytest installed.
+    pytest = None
+
+try:
     from .generate_xfoil_polars import DEFAULT_XFOIL_ROOT, find_xfoil_executable
 except ImportError:
     from generate_xfoil_polars import DEFAULT_XFOIL_ROOT, find_xfoil_executable
@@ -52,6 +57,15 @@ def main() -> int:
         print("XFOIL executable not found. Cannot generate thesis-quality polar data.")
         return 1
     return run_xfoil_quit_smoke_test(xfoil_exe, args.timeout_s)
+
+
+def test_xfoil_quit_smoke_test_skips_when_executable_missing() -> None:
+    if pytest is None:
+        return
+    xfoil_exe = find_xfoil_executable(xfoil_root=DEFAULT_XFOIL_ROOT)
+    if xfoil_exe is None:
+        pytest.skip("XFOIL executable is optional and was not found.")
+    assert run_xfoil_quit_smoke_test(xfoil_exe, timeout_s=30.0) == 0
 
 
 if __name__ == "__main__":

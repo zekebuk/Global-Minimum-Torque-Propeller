@@ -49,7 +49,6 @@ def style_matplotlib_axes(ax, legend: bool = True) -> None:
 
 def save_matplotlib_figure(fig, out_dir: Path, stem: str) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_dir / f"{stem}.pdf")
     fig.savefig(out_dir / f"{stem}.svg")
     fig.savefig(out_dir / f"{stem}.png", dpi=300)
     return out_dir / f"{stem}.png"

@@ -217,6 +217,10 @@ The load columns intended for later FEA import are:
 
 The summary JSON/TXT also reports:
 
+- `model_source`
+- `valid_for_optimizer_summary`
+- `valid_for_bemt_summary`
+- `valid_for_thesis_export`
 - `target_matched`
 - `collective_twist_offset_deg`
 - `xfoil_polars_used`
@@ -239,6 +243,38 @@ The summary JSON/TXT also reports:
 - `airfoils_used`
 - `generated_polars_used`
 - `failed_polar_cases`
+
+## Model Sources
+
+Every summary JSON and station CSV carries `model_source`:
+
+- `optimizer_reduced_order`: geometry and station aero values generated directly by `Geometry_optimization.py`.
+- `optimizer_station_data`: `aero_solver.py` loaded optimizer station columns such as `alpha_deg`, `cl`, `cd`, `dthrust_n`, and `dtorque_nm` and used them as the source of truth.
+- `bemt_xfoil`: `aero_solver.py` recomputed station aerodynamics from geometry plus real/generated XFOIL polar data.
+
+In imported CSV mode, station aero values are not silently mixed with BEMT recomputation. The solver still reports kinematic estimates for plotting:
+
+```text
+omega = rpm*2*pi/60
+Vt = omega*r
+Vi = sqrt(target_thrust/(2*rho*pi*R^2)) for static hover
+Va = V_inf + Vi
+Vrel = sqrt(Vt^2 + Va^2)
+phi = atan2(Va,Vt)
+Re = rho*Vrel*chord/mu
+```
+
+For imported optimizer CSVs, Reynolds and inflow fields are kinematic estimates. They are useful for inspecting operating scale, but they are not proof that a BEMT/XFOIL station solve was rerun.
+
+The legacy `valid_for_thesis` flag is retained for compatibility and mirrors `valid_for_thesis_export`. Prefer the explicit flags:
+
+- `valid_for_optimizer_summary`: valid for optimizer-source summary/figure use.
+- `valid_for_bemt_summary`: valid as a BEMT/XFOIL recomputation.
+- `valid_for_thesis_export`: valid for thesis export in the context of the reported `model_source`.
+
+Debug placeholder polars always make `valid_for_thesis_export = false`.
+
+Optimizer-imported thesis exports also enforce manufacturability checks. A case is marked diagnostic if twist has a positive bump greater than `0.5 deg` after `r/R > 0.35`, if more than `10%` of stations hit the optimizer Cl cap, if more than `10%` hit alpha limits, if target thrust misses the selected tolerance, if torque is nonpositive, or if any station load is nonfinite.
 
 `plot_results(results, output_dir)` writes PDF, SVG, and 300 dpi PNG figures for:
 
@@ -267,6 +303,63 @@ Each evaluation records sanity checks for:
 - thrust target error is reported
 - SI units are used internally
 
+Before exported comparison figures are plotted, station CSV geometry is checked against the recorded source geometry CSV for `r/R`, `r_m`, `chord_m`, `twist_input_deg`, and `airfoil`. A mismatch refuses to plot so stale station outputs cannot accidentally become thesis figures.
+
+Each generated plot has a `filename.metadata.json` sidecar recording `generating_script`, `model_source`, `geometry_source_csv`, `station_source_csv`, `twist_column_used`, and Git provenance when available. Figures are exported as PNG and SVG only; PDF export is intentionally disabled.
+
+## Output Structure
+
+- `results/geometry_optimizer/<case>/` and `figures_paper/geometry_optimizer/<case>/`: direct outputs from `Geometry_optimization.py`.
+- `results/aero_postprocess/optimizer_station_data/<case>/` and `figures_paper/aero_postprocess/optimizer_station_data/<case>/`: `aero_solver.py` reading optimizer CSV station values directly, without recomputing alpha, Cl, Cd, dT, or dQ.
+- `results/aero_postprocess/bemt_xfoil/<case>/` and `figures_paper/aero_postprocess/bemt_xfoil/<case>/`: `aero_solver.py` recomputing aerodynamic quantities with BEMT and XFOIL/generated polar data.
+- `results/aero_postprocess/comparisons/<comparison_name>/` and `figures_paper/aero_postprocess/comparisons/<comparison_name>/`: MIL vs GMT overlays and comparison summaries.
+- `results/verification/theory/` and `figures_paper/verification/theory/`: `theory_verification.py` comparison outputs.
+- `results/fea/beam_solver/<case>/`, `results/fea/abaqus_exports/`, `results/fea/comparisons/`, and matching `figures_paper/fea/...`: downstream structural outputs.
+
+Model source names used in metadata:
+
+- `optimizer_reduced_order`: geometry generated directly by `Geometry_optimization.py`.
+- `optimizer_station_data`: aero postprocessing that imports optimizer station alpha, Cl, Cd, dT, and dQ.
+- `bemt_xfoil`: aero postprocessing that recomputes station aero with BEMT and XFOIL/generated polars.
+- `xrotor_optional`: optional validation data only.
+
+## Recommended Thesis Commands
+
+Generate optimizer geometry:
+
+```powershell
+python Geometry_optimization.py --preset thesis_mil_22_manufacturable --make-plots
+python Geometry_optimization.py --preset thesis_gmt_22_manufacturable --make-plots
+```
+
+Run aero postprocessing using optimizer station data:
+
+```powershell
+python aero_solver.py --geometry results\geometry_optimizer\optimized_mil\optimized_mil_optimizer_geometry.csv --case-name optimized_mil_22 --prefer-imported-station-aero
+python aero_solver.py --geometry results\geometry_optimizer\optimized_gmt\optimized_gmt_optimizer_geometry.csv --case-name optimized_gmt_22 --prefer-imported-station-aero
+```
+
+Run BEMT/XFOIL recomputation:
+
+```powershell
+python aero_solver.py --geometry results\geometry_optimizer\optimized_mil\optimized_mil_optimizer_geometry.csv --case-name optimized_mil_22
+python aero_solver.py --geometry results\geometry_optimizer\optimized_gmt\optimized_gmt_optimizer_geometry.csv --case-name optimized_gmt_22
+```
+
+Run theory verification:
+
+```powershell
+python theory_verification.py
+```
+
+Generate MIL vs GMT comparison plots:
+
+```powershell
+python aero_solver.py --compare-mil-station-csv results\aero_postprocess\optimizer_station_data\optimized_mil\optimized_mil_22_optimizer_station_data_stations.csv --compare-gmt-station-csv results\aero_postprocess\optimizer_station_data\optimized_gmt\optimized_gmt_22_optimizer_station_data_stations.csv --compare-label optimized_mil_vs_gmt
+```
+
+XROTOR remains optional validation/comparison. It is not the primary solver and a missing XROTOR executable should not block BEMT/XFOIL results.
+
 ## Example CLI
 
 Run the default thesis case with real/generated polar CSV data:
@@ -287,15 +380,15 @@ Run with an explicit geometry and polar file:
 
 ```powershell
 & 'C:\Users\Zekeb\anaconda3\python.exe' aero_solver.py `
-  --geometry results\geometry\optimized\optimized_mil\optimized_mil.csv `
+  --geometry results\geometry_optimizer\optimized_mil\optimized_mil_optimizer_geometry.csv `
   --polar path\to\airfoil_polar.csv `
   --match-target
 ```
 
 Default output locations:
 
-- `results/aero/`
-- `figures_paper/aero/`
+- optimizer station mode: `results/aero_postprocess/optimizer_station_data/<case>/` and `figures_paper/aero_postprocess/optimizer_station_data/<case>/`
+- BEMT/XFOIL mode: `results/aero_postprocess/bemt_xfoil/<case>/` and `figures_paper/aero_postprocess/bemt_xfoil/<case>/`
 
 Optional XROTOR validation path:
 
@@ -318,14 +411,14 @@ Run optional XROTOR comparison:
 XROTOR is optional validation only. The CLI runs it only when `--run-xrotor` is passed. It runs after the BEMT result is complete and thesis-valid, uses a generated XROTOR `.prop` file and headless `OPER/RPM/DISP` commands, and writes raw logs under:
 
 ```text
-results/aero/xrotor/
+results/aero_postprocess/xrotor/
 ```
 
 If XROTOR succeeds, comparison files are written:
 
 ```text
-results/aero/xrotor_comparison_summary.csv
-results/aero/xrotor_comparison_summary.md
+results/aero_postprocess/xrotor/xrotor_comparison_summary.csv
+results/aero_postprocess/xrotor/xrotor_comparison_summary.md
 ```
 
 For static hover cases, the XROTOR comparison uses a small `0.1 m/s` analysis velocity to avoid XROTOR zero-freestream divide-by-zero behavior. This does not affect the BEMT thesis result. If XROTOR fails or times out, the solver prints a warning, saves failure logs, and leaves `valid_for_thesis` controlled by the BEMT/XFOIL result only.

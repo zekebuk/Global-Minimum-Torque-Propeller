@@ -41,16 +41,16 @@ reference_gmt_geometry = require_geometry({
     },'22-inch NASA/SciTech reference GMT geometry');
 
 optimized_mil_geometry = require_geometry({
-    fullfile(project_root,'results','geometry','optimized','optimized_mil.csv')
-    fullfile(repo_root,'results','geometry','optimized','optimized_mil.csv')
+    fullfile(project_root,'results','geometry_optimizer','optimized_mil','optimized_mil_optimizer_geometry.csv')
+    fullfile(project_root,'results','geometry_optimizer','optimized_mil','optimized_mil.csv')
     fullfile(repo_root,'outputs','optimized_mil','optimized_mil.csv')
     fullfile(repo_root,'optimized_mil.csv')
     fullfile(repo_root,'outputs','test_mil','optimized_mil.csv')
     },'optimized MIL geometry');
 
 optimized_gmt_geometry = require_geometry({
-    fullfile(project_root,'results','geometry','optimized','optimized_gmt.csv')
-    fullfile(repo_root,'results','geometry','optimized','optimized_gmt.csv')
+    fullfile(project_root,'results','geometry_optimizer','optimized_gmt','optimized_gmt_optimizer_geometry.csv')
+    fullfile(project_root,'results','geometry_optimizer','optimized_gmt','optimized_gmt.csv')
     fullfile(repo_root,'outputs','optimized_gmt','optimized_gmt.csv')
     fullfile(repo_root,'optimized_gmt.csv')
     fullfile(repo_root,'outputs','test_thesis_cal','optimized_gmt.csv')
@@ -104,15 +104,15 @@ params.thrust_distribution_csv_path = '';
 %% ------------------------- Run comparisons ----------------------------
 
 reference_summary = compare_pair('Reference Geometry', ...
-    fullfile('geometry','reference'), ...
-    'reference_mil_vs_gmt','reference', ...
+    fullfile('comparisons','reference_mil_vs_gmt'), ...
+    'reference_mil_vs_gmt',fullfile('comparisons','reference_mil_vs_gmt'), ...
     'Reference MIL',reference_mil_geometry,'mil_22', ...
     'Reference GMT',reference_gmt_geometry,'gmt_22', ...
     material,params,this_dir,project_root);
 
 optimized_summary = compare_pair('Optimized Geometry', ...
-    fullfile('geometry','optimized'), ...
-    'optimized_mil_vs_gmt','optimized', ...
+    fullfile('comparisons','optimized_mil_vs_gmt'), ...
+    'optimized_mil_vs_gmt',fullfile('comparisons','optimized_mil_vs_gmt'), ...
     'Optimized MIL',optimized_mil_geometry,'', ...
     'Optimized GMT',optimized_gmt_geometry,'', ...
     material,params,this_dir,project_root);
@@ -347,7 +347,6 @@ if ~exist(out_dir,'dir')
     mkdir(out_dir);
 end
 
-exportgraphics(fig,fullfile(out_dir,[stem '.pdf']),'ContentType','vector');
 exportgraphics(fig,fullfile(out_dir,[stem '.svg']),'ContentType','vector');
 exportgraphics(fig,fullfile(out_dir,[stem '.png']),'Resolution',300);
 

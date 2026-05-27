@@ -36,15 +36,15 @@ if ~isfile(default_geometry)
 end
 
 geometry_csv_path = default_geometry;
-output_folder = fullfile('geometry','reference','reference_gmt');
+output_folder = fullfile('beam_solver','reference_gmt');
 output_name = 'reference_gmt';
 
 diameter_in = 22;
 radius_m = (diameter_in/2)*0.0254;
 RPM = 4000;
 aero_case_name = 'thesis_22_static_35N';
-aero_station_csv_path = fullfile(project_root,'results','aero',[aero_case_name '_stations.csv']);
-aero_summary_json_path = fullfile(project_root,'results','aero',[aero_case_name '_summary.json']);
+aero_station_csv_path = fullfile(project_root,'results','aero_postprocess','bemt_xfoil','optimized_gmt',[aero_case_name '_bemt_xfoil_stations.csv']);
+aero_summary_json_path = fullfile(project_root,'results','aero_postprocess','bemt_xfoil','optimized_gmt',[aero_case_name '_summary.json']);
 omega_override_rad_s = [];
 
 total_thrust_per_propeller_N = 48;
@@ -158,10 +158,11 @@ stress = recover_beam_stresses(mesh,props,forces);
 
 modal = [];
 modal_paths = [];
+modal_audit_paths = [];
 if run_modal_analysis_enabled
     mass_options = struct('mass_matrix_type',modal_mass_matrix_type, ...
         'include_rotary_inertia',true);
-    [M,element_mass_data] = assembleGlobalMassMatrix(mesh,props,element_data,dof,mass_options); %#ok<NASGU>
+    [M,element_mass_data] = assembleGlobalMassMatrix(mesh,props,element_data,dof,mass_options);
     K_modal = K;
     Kg = zeros(size(K));
     if include_centrifugal_stiffening
@@ -175,6 +176,8 @@ if run_modal_analysis_enabled
     modal.centrifugal_stiffening_note = 'Geometric stiffness from centrifugal axial force only; gyroscopic effects neglected.';
     modal.excitation = computeRotorExcitationFrequencies(RPM,number_of_blades,modal.frequencies_hz,0.10);
     modal.warnings = [modal.warnings(:); modal.excitation.warnings(:)];
+    modal_audit_paths = writeModalMatrixAudit(K_modal,M,bc,modal,mesh,props, ...
+        element_mass_data,dof,params,fullfile(project_root,'results','fea','beam_solver'),K,Kg);
     modal_paths = exportModalResultsCSV(modal,mesh,dof,results_dir,output_name);
     for mode_id = 1:min(number_of_modes,numel(modal.frequencies_hz))
         fig = plotModeShape3D(mesh,modal,mode_id,mode_shape_scale_factor,'3D',results_dir,output_name);
@@ -205,6 +208,7 @@ if ~isempty(modal)
     end
     fprintf('Modal frequencies CSV: %s\n',modal_paths.frequency_csv);
     fprintf('Mode shapes CSV: %s\n',modal_paths.mode_shapes_csv);
+    fprintf('Modal matrix audit: %s\n',modal_audit_paths.text);
     for i = 1:numel(modal.excitation.warnings)
         fprintf('%s\n',modal.excitation.warnings{i});
     end

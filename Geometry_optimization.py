@@ -7,11 +7,20 @@ import math
 import zipfile
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, replace
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, List, Sequence
 from xml.sax.saxutils import escape
 
 from common_plot_style import apply_matplotlib_style, save_matplotlib_figure
+from output_paths import (
+    canonical_case_dir_name,
+    get_figures_dir,
+    get_results_dir,
+    assert_geometry_output_path,
+    assert_verification_output_path,
+    write_metadata_sidecar,
+)
 
 
 SCALED_REFERENCE_STATEMENT = (
@@ -22,6 +31,9 @@ SCALED_REFERENCE_STATEMENT = (
 ORIGINAL_REFERENCE_DIAMETER_IN = 18.0
 SCALED_REFERENCE_DIAMETER_IN = 22.0
 SCALED_REFERENCE_SCALE_FACTOR = SCALED_REFERENCE_DIAMETER_IN / ORIGINAL_REFERENCE_DIAMETER_IN
+MODEL_SOURCE_OPTIMIZER = "optimizer_reduced_order"
+GENERATING_SCRIPT = "Geometry_optimization.py"
+OPTIMIZER_GEOMETRY_SUFFIX = "optimizer_geometry"
 THESIS_22_STATIC_OPERATING_POINT = {
     "diameter_in": 22.0,
     "radius_m": 0.2794,
@@ -96,7 +108,12 @@ SPANLOAD_CHOICES = [
 ]
 MODE_CHOICES = ["free_optimize", "reference_regularized", "reproduce_reference"]
 OPTIMIZER_CHOICES = ["auto", "coordinate_search", "scipy"]
-PRESET_CHOICES = ["thesis_gmt_22", "thesis_gmt_22_static"]
+PRESET_CHOICES = [
+    "thesis_gmt_22",
+    "thesis_gmt_22_static",
+    "thesis_gmt_22_manufacturable",
+    "thesis_mil_22_manufacturable",
+]
 REFERENCE_MIL_CASE = "reference_mil"
 REFERENCE_GMT_CASE = "reference_gmt"
 OPTIMIZED_MIL_CASE = "optimized_mil"
@@ -128,6 +145,12 @@ REFERENCE_VARIANT_CHOICES = [
 
 def diameter_in_to_radius_m(diameter_in: float) -> float:
     return 0.5 * diameter_in * INCH_TO_METER
+
+
+def chord_in_to_fraction(chord_in: float | None, diameter_in: float) -> float:
+    if chord_in is None or chord_in <= 0.0 or diameter_in <= 0.0:
+        return math.inf
+    return chord_in / max(0.5 * diameter_in, 1.0e-12)
 
 
 def meters_to_inches(value_m: float) -> float:
@@ -226,6 +249,12 @@ class ObjectiveWeights:
     w_reference_chord: float
     w_smooth: float
     w_bounds: float
+    w_positive_loading: float
+    w_tip_positive_unload: float
+    w_twist_bump: float = 0.0
+    w_twist_gradient: float = 0.0
+    w_twist_curvature: float = 0.0
+    w_aero_limits: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -243,7 +272,10 @@ class OptimizationParameters:
 class SectionAero:
     phi_deg: float
     alpha_deg: float
+    unclipped_cl_demand: float
     cl: float
+    cl_max: float
+    cl_margin: float
     cd: float
     dthrust_n: float
     dtorque_nm: float
@@ -256,33 +288,42 @@ class SectionAero:
 
 @dataclass(frozen=True)
 class DesignInputs:
-    blades: int
-    radius_m: float
-    hub_radius_fraction: float
-    rpm: float
-    freestream_mps: float
-    thrust_target_n: float
-    rho: float
-    spanload_type: str
-    mode: str
-    chord_min_in: float
-    chord_max_in: float
-    chord_blend: float
-    twist_blend: float
-    smooth_passes: int
-    alpha_search_min_deg: float
-    alpha_search_max_deg: float
-    alpha_search_step_deg: float
-    reference_csv_path: Path
-    reference_geometry_csv: Path | None
-    output_directory: Path
-    lock_chord: bool
-    lock_airfoil: bool
-    optimize_twist_only: bool
-    make_plots: bool
-    optimizer: str
-    max_iterations: int
-    tolerance: float
+    blades: int = 2
+    radius_m: float = diameter_in_to_radius_m(22.0)
+    hub_radius_fraction: float = 0.20
+    rpm: float = 4000.0
+    freestream_mps: float = 0.0
+    thrust_target_n: float = 35.0
+    rho: float = 1.225
+    spanload_type: str = "gmt_bell"
+    mode: str = "reference_regularized"
+    chord_min_in: float = 0.50
+    chord_max_in: float = 2.45
+    chord_blend: float = 0.58
+    twist_blend: float = 0.20
+    smooth_passes: int = 2
+    alpha_search_min_deg: float = -2.0
+    alpha_search_max_deg: float = 18.0
+    alpha_search_step_deg: float = 0.5
+    reference_csv_path: Path = Path(__file__).resolve().parent / "Reference_Propeller_Geometry.xlsx"
+    reference_geometry_csv: Path | None = None
+    output_directory: Path = (
+        Path(__file__).resolve().parent.parent / "results" / "geometry_optimizer" / OPTIMIZED_GMT_CASE
+    )
+    lock_chord: bool = False
+    lock_airfoil: bool = False
+    optimize_twist_only: bool = False
+    make_plots: bool = False
+    optimizer: str = "auto"
+    max_iterations: int = 35
+    tolerance: float = 1.0e-4
+    manufacturable_twist: bool = False
+    max_positive_twist_bump_deg: float = 0.5
+    twist_constraint_start_mu: float = 0.35
+    max_abs_twist_gradient_deg_per_mu_limit: float = 100.0
+    max_twist_curvature_limit: float = 1500.0
+    max_cl_limit_fraction_pct: float = 10.0
+    max_alpha_limit_fraction_pct: float = 10.0
 
     @property
     def chord_min_m(self) -> float:
@@ -307,7 +348,10 @@ class StationResult:
     cad_plane_angle_deg: float
     phi_deg: float
     alpha_deg: float
+    unclipped_cl_demand: float
     cl: float
+    cl_max: float
+    cl_margin: float
     cd: float
     dthrust_n: float
     dtorque_nm: float
@@ -321,6 +365,7 @@ class StationResult:
     hit_alpha_min: bool
     hit_alpha_max: bool
     hit_cl_limit: bool
+    is_clipped: bool
     negative_force: bool
     impossible_force: bool
 
@@ -472,6 +517,16 @@ def validate_user_inputs(config: DesignInputs) -> None:
         raise ValueError("max_iterations must be non-negative")
     if config.tolerance <= 0.0:
         raise ValueError("tolerance must be positive")
+    if config.max_positive_twist_bump_deg < 0.0:
+        raise ValueError("max positive twist bump must be non-negative")
+    if config.max_abs_twist_gradient_deg_per_mu_limit <= 0.0:
+        raise ValueError("max twist gradient must be positive")
+    if config.max_twist_curvature_limit <= 0.0:
+        raise ValueError("max twist curvature must be positive")
+    if not 0.0 <= config.max_cl_limit_fraction_pct <= 100.0:
+        raise ValueError("max Cl limit fraction percent must be between 0 and 100")
+    if not 0.0 <= config.max_alpha_limit_fraction_pct <= 100.0:
+        raise ValueError("max alpha limit fraction percent must be between 0 and 100")
 
 
 def default_reference_csv_path() -> Path:
@@ -878,6 +933,47 @@ def geometry_csv_metadata(config: DesignInputs) -> dict[str, object]:
     }
 
 
+def active_operating_point_dict(config: DesignInputs) -> dict[str, object]:
+    return {
+        "diameter_in": meters_to_inches(2.0 * config.radius_m),
+        "radius_m": config.radius_m,
+        "rpm": config.rpm,
+        "freestream_mps": config.freestream_mps,
+        "target_thrust_n": config.thrust_target_n,
+        "rho_kg_m3": config.rho,
+        "hover_mode": abs(config.freestream_mps) <= 1.0e-9,
+        "operating_point": THESIS_22_STATIC_OPERATING_POINT["operating_point"]
+        if is_thesis_22_static_operating_point(config)
+        else "custom",
+    }
+
+
+def methodology_statement_for_config(config: DesignInputs) -> str:
+    diameter_in = meters_to_inches(2.0 * config.radius_m)
+    return (
+        f"{SCALED_REFERENCE_STATEMENT} The scaled reference and optimized cases are evaluated at the active "
+        f"operating point: {diameter_in:.6g} in diameter, {config.rpm:.6g} rpm, "
+        f"V_inf = {config.freestream_mps:.6g} m/s, rho = {config.rho:.6g} kg/m^3, "
+        f"and {config.thrust_target_n:.6g} N target thrust. This is not the NASA/SciTech original "
+        "18-inch operating point."
+    )
+
+
+def induced_velocity_formula_inputs(result: DesignResult) -> dict[str, object]:
+    disk_area = actuator_disk_area(result.config.radius_m)
+    return {
+        "formula": "vi = -0.5*V_inf + sqrt(0.25*V_inf^2 + T/(2*rho*A))",
+        "thrust_n": result.config.thrust_target_n,
+        "rho_kg_m3": result.config.rho,
+        "radius_m": result.config.radius_m,
+        "diameter_m": 2.0 * result.config.radius_m,
+        "disk_area_m2": disk_area,
+        "disk_area_definition": "full propeller disk area pi*R^2",
+        "hub_radius_fraction_not_subtracted": result.config.hub_radius_fraction,
+        "freestream_mps": result.config.freestream_mps,
+    }
+
+
 def optimized_rows_by_mu(candidates: Sequence[Path]) -> dict[float, dict[str, str]]:
     path = next((candidate for candidate in candidates if candidate.exists()), None)
     if path is None:
@@ -898,12 +994,16 @@ def scaled_reference_audit_rows(
     optimized_by_family = {
         "MIL": optimized_rows_by_mu(
             [
+                optimized_root / "optimized_mil" / optimizer_geometry_csv_name("optimized_mil"),
+                optimized_root / optimizer_geometry_csv_name("optimized_mil"),
                 optimized_root / "optimized_mil" / "optimized_mil.csv",
                 optimized_root / "optimized_mil.csv",
             ]
         ),
         "GMT": optimized_rows_by_mu(
             [
+                optimized_root / "optimized_gmt" / optimizer_geometry_csv_name("optimized_gmt"),
+                optimized_root / optimizer_geometry_csv_name("optimized_gmt"),
                 optimized_root / "optimized_gmt" / "optimized_gmt.csv",
                 optimized_root / "optimized_gmt.csv",
             ]
@@ -938,7 +1038,8 @@ def scaled_reference_audit_rows(
     return rows, failures
 
 
-def write_markdown_table(rows: Sequence[dict[str, object]], output_path: Path) -> None:
+def write_markdown_table(rows: Sequence[dict[str, object]], output_path: Path, *, output_domain: str = "geometry") -> None:
+    _assert_output_path(output_path, output_domain)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     if not rows:
         output_path.write_text("No rows.\n", encoding="utf-8")
@@ -960,10 +1061,12 @@ def format_markdown_value(value: object) -> str:
     return text.replace("|", "\\|")
 
 
-def write_dict_rows_csv(rows: Sequence[dict[str, object]], output_path: Path) -> None:
+def write_dict_rows_csv(rows: Sequence[dict[str, object]], output_path: Path, *, output_domain: str = "geometry") -> None:
+    _assert_output_path(output_path, output_domain)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     if not rows:
         output_path.write_text("", encoding="utf-8")
+        write_metadata_sidecar(output_path, _base_output_metadata(case_name=output_path.stem))
         return
     headers = list(rows[0].keys())
     with output_path.open("w", newline="", encoding="utf-8") as handle:
@@ -971,6 +1074,7 @@ def write_dict_rows_csv(rows: Sequence[dict[str, object]], output_path: Path) ->
         writer.writeheader()
         for row in rows:
             writer.writerow({header: row.get(header, "") for header in headers})
+    write_metadata_sidecar(output_path, _base_output_metadata(case_name=output_path.stem))
 
 
 def write_scaled_reference_geometry_audit(
@@ -980,6 +1084,7 @@ def write_scaled_reference_geometry_audit(
 ) -> tuple[Path, Path, Path]:
     workbook_path = workbook_path or default_reference_csv_path()
     optimized_root = optimized_root or output_dir.parent / "optimized"
+    assert_geometry_output_path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     rows, failures = scaled_reference_audit_rows(workbook_path, optimized_root)
     scaling_failures = validate_scaled_reference_rows(
@@ -1058,7 +1163,10 @@ def write_scaled_reference_geometry_audit(
     return csv_path, md_path, report_path
 
 
-def annulus_widths(mu_values: Sequence[float], hub_mu: float, radius_m: float) -> List[float]:
+def annulus_widths(mu_values: Sequence[float], hub_mu: float, radius_m: float | None = None) -> List[float]:
+    if radius_m is None:
+        radius_m = hub_mu
+        hub_mu = 0.0
     dr_values: List[float] = []
     count = len(mu_values)
     for idx, mu in enumerate(mu_values):
@@ -1105,10 +1213,23 @@ def normalized_section_weights(
     return [value / total for value in raw]
 
 
+def normalized_spanload(mu_values: Sequence[float], kind: str, hub_mu: float) -> List[float]:
+    dr_values = annulus_widths(mu_values, hub_mu, 1.0)
+    return normalized_section_weights(mu_values, dr_values, kind, hub_mu)
+
+
+def actuator_disk_area(radius_m: float) -> float:
+    return math.pi * max(radius_m * radius_m, 1.0e-8)
+
+
 def disk_induced_velocity(thrust_n: float, rho: float, radius_m: float, hub_mu: float, v_inf: float) -> float:
-    hub_radius_m = hub_mu * radius_m
-    disk_area = math.pi * max(radius_m * radius_m - hub_radius_m * hub_radius_m, 1.0e-8)
+    del hub_mu
+    disk_area = actuator_disk_area(radius_m)
     return -0.5 * v_inf + math.sqrt(max(0.25 * v_inf * v_inf + thrust_n / max(2.0 * rho * disk_area, 1.0e-12), 0.0))
+
+
+def thrust_to_induced_velocity(thrust_n: float, rho: float, radius_m: float, hub_mu: float, v_inf: float) -> float:
+    return disk_induced_velocity(thrust_n, rho, radius_m, hub_mu, v_inf)
 
 
 def smooth_series(values: Sequence[float], passes: int) -> List[float]:
@@ -1129,6 +1250,11 @@ def local_alpha_target(base_alpha_deg: float, mu: float, hub_mu: float, spanload
     return clamp(base_alpha_deg + bell_bias, 2.0, 16.0)
 
 
+def assign_target_alpha(airfoil: AirfoilModel, base_alpha_deg: float, mu: float, spanload_type: str) -> float:
+    del airfoil
+    return local_alpha_target(base_alpha_deg, mu, 0.20, spanload_type)
+
+
 def reference_loading_proxy(station: ReferenceStation) -> float:
     return station.chord_fraction * max(station.mu, 0.05) ** 1.25 * max(math.sin(math.radians(station.twist_deg)), 0.15)
 
@@ -1139,6 +1265,182 @@ def normalized_reference_loading(stations: Sequence[ReferenceStation], dr_values
     if total <= 0.0:
         return [1.0 / max(len(stations), 1)] * len(stations)
     return [value / total for value in raw]
+
+
+def smoothness_penalty(chords_m: Sequence[float], twists_deg: Sequence[float], radius_m: float) -> float:
+    del radius_m
+    if len(chords_m) < 3 or len(twists_deg) < 3:
+        return 0.0
+    penalty = 0.0
+    count = min(len(chords_m), len(twists_deg))
+    for idx in range(1, count - 1):
+        penalty += abs(chords_m[idx + 1] - 2.0 * chords_m[idx] + chords_m[idx - 1])
+        penalty += abs(twists_deg[idx + 1] - 2.0 * twists_deg[idx] + twists_deg[idx - 1]) / 100.0
+    return penalty / max(count - 2, 1)
+
+
+def station_twist_derivatives(
+    mu_values: Sequence[float],
+    twist_values_deg: Sequence[float],
+) -> tuple[List[float], List[float]]:
+    count = min(len(mu_values), len(twist_values_deg))
+    if count <= 1:
+        return [0.0] * count, [0.0] * count
+
+    interval_slopes: List[float] = []
+    for left_mu, right_mu, left_twist, right_twist in zip(
+        mu_values[: count - 1],
+        mu_values[1:count],
+        twist_values_deg[: count - 1],
+        twist_values_deg[1:count],
+    ):
+        dmu = right_mu - left_mu
+        interval_slopes.append((right_twist - left_twist) / dmu if abs(dmu) > 1.0e-12 else 0.0)
+
+    station_slopes: List[float] = []
+    for idx in range(count):
+        if idx == 0:
+            station_slopes.append(interval_slopes[0])
+        elif idx == count - 1:
+            station_slopes.append(interval_slopes[-1])
+        else:
+            station_slopes.append(0.5 * (interval_slopes[idx - 1] + interval_slopes[idx]))
+
+    station_curvatures = [0.0] * count
+    for idx in range(1, count - 1):
+        left_step = mu_values[idx] - mu_values[idx - 1]
+        right_step = mu_values[idx + 1] - mu_values[idx]
+        span = mu_values[idx + 1] - mu_values[idx - 1]
+        if min(abs(left_step), abs(right_step), abs(span)) <= 1.0e-12:
+            continue
+        left_slope = (twist_values_deg[idx] - twist_values_deg[idx - 1]) / left_step
+        right_slope = (twist_values_deg[idx + 1] - twist_values_deg[idx]) / right_step
+        station_curvatures[idx] = 2.0 * (right_slope - left_slope) / span
+
+    if count > 2:
+        station_curvatures[0] = station_curvatures[1]
+        station_curvatures[-1] = station_curvatures[-2]
+    return station_slopes, station_curvatures
+
+
+def twist_manufacturability_metrics(
+    mu_values: Sequence[float],
+    twist_values_deg: Sequence[float],
+    max_positive_bump_deg: float = 0.5,
+    start_mu: float = 0.35,
+    max_abs_gradient_deg_per_mu_limit: float = 100.0,
+    max_curvature_limit: float = 1500.0,
+) -> dict[str, Any]:
+    count = min(len(mu_values), len(twist_values_deg))
+    mu = list(mu_values[:count])
+    twist = list(twist_values_deg[:count])
+    positive_bumps: List[float] = []
+    for left_mu, right_mu, left_twist, right_twist in zip(mu[:-1], mu[1:], twist[:-1], twist[1:]):
+        if right_mu > start_mu:
+            positive_bumps.append(max(0.0, right_twist - left_twist))
+
+    slopes, curvatures = station_twist_derivatives(mu, twist)
+    interval_gradients: List[float] = []
+    for left_mu, right_mu, left_twist, right_twist in zip(mu[:-1], mu[1:], twist[:-1], twist[1:]):
+        if right_mu <= start_mu:
+            continue
+        dmu = right_mu - left_mu
+        if abs(dmu) > 1.0e-12:
+            interval_gradients.append((right_twist - left_twist) / dmu)
+    if not interval_gradients:
+        interval_gradients = slopes
+    curvatures_after_start = [value for station_mu, value in zip(mu, curvatures) if station_mu > start_mu]
+    if not curvatures_after_start:
+        curvatures_after_start = curvatures
+
+    max_positive_bump = max(positive_bumps, default=0.0)
+    positive_bump_count = sum(value > max_positive_bump_deg + 1.0e-9 for value in positive_bumps)
+    max_abs_gradient = max((abs(value) for value in interval_gradients), default=0.0)
+    max_curvature = max((abs(value) for value in curvatures_after_start), default=0.0)
+    manufacturable_pass = (
+        max_positive_bump <= max_positive_bump_deg + 1.0e-9
+        and max_abs_gradient <= max_abs_gradient_deg_per_mu_limit + 1.0e-9
+        and max_curvature <= max_curvature_limit + 1.0e-9
+    )
+
+    return {
+        "max_positive_twist_bump_deg": max_positive_bump,
+        "positive_twist_bump_count": positive_bump_count,
+        "positive_twist_bumps_deg": positive_bumps,
+        "max_abs_twist_gradient_deg_per_mu": max_abs_gradient,
+        "max_twist_curvature": max_curvature,
+        "manufacturable_twist_pass": manufacturable_pass,
+        "max_positive_twist_bump_limit_deg": max_positive_bump_deg,
+        "twist_constraint_start_mu": start_mu,
+        "max_abs_twist_gradient_limit_deg_per_mu": max_abs_gradient_deg_per_mu_limit,
+        "max_twist_curvature_limit": max_curvature_limit,
+    }
+
+
+def design_twist_metrics(config: DesignInputs, stations: Sequence[StationResult]) -> dict[str, Any]:
+    return twist_manufacturability_metrics(
+        [station.mu for station in stations],
+        [station.twist_deg for station in stations],
+        config.max_positive_twist_bump_deg,
+        config.twist_constraint_start_mu,
+        config.max_abs_twist_gradient_deg_per_mu_limit,
+        config.max_twist_curvature_limit,
+    )
+
+
+def enforce_manufacturable_twist_profile(
+    mu_values: Sequence[float],
+    twist_values_deg: Sequence[float],
+    config: DesignInputs,
+) -> List[float]:
+    twists = [clamp(value, 0.0, 65.0) for value in twist_values_deg]
+    if len(twists) < 3:
+        return twists
+
+    twists = smooth_series(twists, max(config.smooth_passes, 6))
+    start_mu = config.twist_constraint_start_mu
+    max_positive = max(config.max_positive_twist_bump_deg, 0.0)
+    max_gradient = max(config.max_abs_twist_gradient_deg_per_mu_limit, 1.0e-6)
+    max_curvature = max(config.max_twist_curvature_limit, 1.0e-6)
+
+    for _ in range(8):
+        for idx in range(1, len(twists)):
+            dmu = max(mu_values[idx] - mu_values[idx - 1], 1.0e-9)
+            if mu_values[idx] > start_mu:
+                twists[idx] = min(twists[idx], twists[idx - 1] + max_positive)
+            twists[idx] = max(twists[idx], twists[idx - 1] - max_gradient * dmu)
+            twists[idx] = min(twists[idx], twists[idx - 1] + max_gradient * dmu)
+
+        updated = list(twists)
+        for idx in range(1, len(twists) - 1):
+            if mu_values[idx] <= start_mu:
+                continue
+            left_step = max(mu_values[idx] - mu_values[idx - 1], 1.0e-9)
+            right_step = max(mu_values[idx + 1] - mu_values[idx], 1.0e-9)
+            span = max(mu_values[idx + 1] - mu_values[idx - 1], 1.0e-9)
+            left_slope = (twists[idx] - twists[idx - 1]) / left_step
+            right_slope = (twists[idx + 1] - twists[idx]) / right_step
+            curvature = 2.0 * (right_slope - left_slope) / span
+            if abs(curvature) > max_curvature:
+                updated[idx] = 0.25 * twists[idx - 1] + 0.5 * twists[idx] + 0.25 * twists[idx + 1]
+        twists = [clamp(value, 0.0, 65.0) for value in updated]
+
+    for idx in range(1, len(twists)):
+        dmu = max(mu_values[idx] - mu_values[idx - 1], 1.0e-9)
+        if mu_values[idx] > start_mu:
+            twists[idx] = min(twists[idx], twists[idx - 1] + max_positive)
+        twists[idx] = max(twists[idx], twists[idx - 1] - max_gradient * dmu)
+        twists[idx] = min(twists[idx], twists[idx - 1] + max_gradient * dmu)
+    return [clamp(value, 0.0, 65.0) for value in twists]
+
+
+def reference_chord_penalty(chords_m: Sequence[float], radius_m: float) -> float:
+    if not chords_m:
+        return 0.0
+    reference_chords_m = [fraction * radius_m for fraction in REFERENCE_CHORD_FRACTION[: len(chords_m)]]
+    if len(reference_chords_m) < len(chords_m):
+        reference_chords_m.extend([reference_chords_m[-1]] * (len(chords_m) - len(reference_chords_m)))
+    return rms([chord - reference for chord, reference in zip(chords_m, reference_chords_m)])
 
 
 def tip_unload_shape(mu: float, hub_mu: float) -> float:
@@ -1178,6 +1480,7 @@ def compute_section_forces(
     alpha_deg = twist_deg - phi_deg
     raw_cl = airfoil.raw_cl(alpha_deg)
     cl_value = airfoil.cl(alpha_deg)
+    cl_margin = airfoil.cl_max - cl_value
     cd_value = airfoil.cd(cl_value)
     phi_rad = math.radians(phi_deg)
     force_factor = cl_value * math.cos(phi_rad) - cd_value * math.sin(phi_rad)
@@ -1193,7 +1496,10 @@ def compute_section_forces(
     return SectionAero(
         phi_deg=phi_deg,
         alpha_deg=alpha_deg,
+        unclipped_cl_demand=raw_cl,
         cl=cl_value,
+        cl_max=airfoil.cl_max,
+        cl_margin=cl_margin,
         cd=cd_value,
         dthrust_n=dthrust_n,
         dtorque_nm=dtorque_nm,
@@ -1215,6 +1521,8 @@ def weights_for_mode(mode: str) -> ObjectiveWeights:
             w_reference_chord=0.02,
             w_smooth=0.22,
             w_bounds=5.0,
+            w_positive_loading=40.0,
+            w_tip_positive_unload=28.0,
         )
     if mode == "reproduce_reference":
         return ObjectiveWeights(
@@ -1225,6 +1533,8 @@ def weights_for_mode(mode: str) -> ObjectiveWeights:
             w_reference_chord=18.0,
             w_smooth=0.10,
             w_bounds=3.0,
+            w_positive_loading=12.0,
+            w_tip_positive_unload=4.0,
         )
     return ObjectiveWeights(
         w_thrust=24.0,
@@ -1234,6 +1544,8 @@ def weights_for_mode(mode: str) -> ObjectiveWeights:
         w_reference_chord=0.35,
         w_smooth=0.28,
         w_bounds=5.0,
+        w_positive_loading=48.0,
+        w_tip_positive_unload=35.0,
     )
 
 
@@ -1292,7 +1604,7 @@ def build_candidate_result(
     reference_weights = normalized_reference_loading(reference_stations, dr_values)
     loading_scale = max(parameters.loading_scale, 0.05)
     induced_velocity = disk_induced_velocity(
-        config.thrust_target_n * loading_scale,
+        config.thrust_target_n,
         config.rho,
         config.radius_m,
         config.hub_radius_fraction,
@@ -1329,6 +1641,52 @@ def build_candidate_result(
             clamp(value, 0.0, 65.0)
             for value in smooth_series(raw_twists, config.smooth_passes)
         ]
+    if config.manufacturable_twist and config.mode != "reproduce_reference":
+        smoothed_twists = enforce_manufacturable_twist_profile(mu_values, smoothed_twists, config)
+        capped_twists: List[float] = []
+        for station, target_weight, twist_deg, airfoil_name in zip(
+            reference_stations,
+            target_weights,
+            smoothed_twists,
+            raw_airfoils,
+        ):
+            local_vi_multiplier = 0.82 + 0.50 * target_weight / max(average_target_weight, 1.0e-9)
+            local_vi = induced_velocity * local_vi_multiplier
+            radius_m = station.mu * config.radius_m
+            v_axial, v_tan, _, _ = compute_section_velocities(config.freestream_mps, omega, radius_m, local_vi)
+            phi_deg = math.degrees(math.atan2(v_axial, max(v_tan, 1.0e-6)))
+            airfoil = AIRFOIL_LIBRARY[airfoil_name]
+            alpha_for_cl_cap = math.degrees(0.99 * airfoil.cl_max / max(airfoil.cl_alpha_per_rad, 1.0e-9)) + airfoil.alpha_l0_deg
+            alpha_ceiling = min(config.alpha_search_max_deg - 1.0, alpha_for_cl_cap)
+            alpha_floor = (
+                -0.5
+                if config.spanload_type in {"gmt_bell", "paper_inspired", "reference_calibrated_gmt"} and station.mu >= 0.80
+                else 0.25 if station.mu >= 0.85 else config.alpha_search_min_deg + 0.5
+            )
+            capped_twists.append(clamp(twist_deg, phi_deg + alpha_floor, phi_deg + alpha_ceiling))
+        smoothed_twists = enforce_manufacturable_twist_profile(mu_values, capped_twists, config)
+        capped_twists = []
+        for station, target_weight, twist_deg, airfoil_name in zip(
+            reference_stations,
+            target_weights,
+            smoothed_twists,
+            raw_airfoils,
+        ):
+            local_vi_multiplier = 0.82 + 0.50 * target_weight / max(average_target_weight, 1.0e-9)
+            local_vi = induced_velocity * local_vi_multiplier
+            radius_m = station.mu * config.radius_m
+            v_axial, v_tan, _, _ = compute_section_velocities(config.freestream_mps, omega, radius_m, local_vi)
+            phi_deg = math.degrees(math.atan2(v_axial, max(v_tan, 1.0e-6)))
+            airfoil = AIRFOIL_LIBRARY[airfoil_name]
+            alpha_for_cl_cap = math.degrees(0.99 * airfoil.cl_max / max(airfoil.cl_alpha_per_rad, 1.0e-9)) + airfoil.alpha_l0_deg
+            alpha_ceiling = min(config.alpha_search_max_deg - 1.0, alpha_for_cl_cap)
+            alpha_floor = (
+                -0.5
+                if config.spanload_type in {"gmt_bell", "paper_inspired", "reference_calibrated_gmt"} and station.mu >= 0.80
+                else 0.25 if station.mu >= 0.85 else config.alpha_search_min_deg + 0.5
+            )
+            capped_twists.append(clamp(twist_deg, phi_deg + alpha_floor, phi_deg + alpha_ceiling))
+        smoothed_twists = capped_twists
 
     stations: List[StationResult] = []
     thrust_n = 0.0
@@ -1375,7 +1733,10 @@ def build_candidate_result(
                 cad_plane_angle_deg=90.0 - twist_deg,
                 phi_deg=aero.phi_deg,
                 alpha_deg=aero.alpha_deg,
+                unclipped_cl_demand=aero.unclipped_cl_demand,
                 cl=aero.cl,
+                cl_max=aero.cl_max,
+                cl_margin=aero.cl_margin,
                 cd=aero.cd,
                 dthrust_n=dthrust_n,
                 dtorque_nm=dtorque_nm,
@@ -1389,6 +1750,7 @@ def build_candidate_result(
                 hit_alpha_min=aero.hit_alpha_min,
                 hit_alpha_max=aero.hit_alpha_max,
                 hit_cl_limit=aero.hit_cl_limit,
+                is_clipped=aero.hit_cl_limit,
                 negative_force=aero.negative_force,
                 impossible_force=aero.impossible_force,
             )
@@ -1404,7 +1766,7 @@ def build_candidate_result(
     j_advance = advance_ratio(config.freestream_mps, n_rev_per_sec, diameter_m)
     ct, cq, cp = compute_coefficients(thrust_n, torque_nm, config.rho, n_rev_per_sec, diameter_m)
     eta_dynamic = safe_div(j_advance * ct, cp) if j_advance > 1.0e-9 and cp > 0.0 else 0.0
-    disk_area = math.pi * max(config.radius_m**2 - (config.hub_radius_fraction * config.radius_m) ** 2, 1.0e-9)
+    disk_area = actuator_disk_area(config.radius_m)
     eta_static = 0.0
     if config.freestream_mps <= 1.0e-6 and power_w > 0.0 and thrust_n > 0.0:
         eta_static = thrust_n**1.5 / (power_w * math.sqrt(2.0 * config.rho * disk_area))
@@ -1439,26 +1801,104 @@ def build_candidate_result(
     cl_limit_fraction = sum(station.hit_cl_limit for station in stations) / count
     negative_force_fraction = sum(station.negative_force for station in stations) / count
     impossible_force_fraction = sum(station.impossible_force for station in stations) / count
+    high_alpha_threshold = config.alpha_search_max_deg - 1.0
+    high_alpha_fraction = sum(station.alpha_deg >= high_alpha_threshold for station in stations) / count
+    polar_range_fraction = sum(
+        station.hit_alpha_min or station.hit_alpha_max or station.hit_cl_limit
+        for station in stations
+    ) / count
     bounds_penalty = (
         1.5 * chord_limit_fraction
-        + 2.0 * alpha_limit_fraction
-        + 1.5 * cl_limit_fraction
+        + 5.0 * alpha_limit_fraction
+        + 7.5 * cl_limit_fraction
+        + 4.0 * high_alpha_fraction
         + 3.0 * negative_force_fraction
         + 8.0 * impossible_force_fraction
     )
     if torque_nm <= 0.0:
         bounds_penalty += 10.0
 
+    positive_loading_penalty = 0.0
+    if stations:
+        thrust_scale = max(abs(config.thrust_target_n) / len(stations), 1.0e-6)
+        torque_scale = max(abs(q_reference) / len(stations), 1.0e-6)
+        for station in stations:
+            positive_loading_penalty += (max(0.0, -station.cl) / 0.02) ** 2
+            positive_loading_penalty += (max(0.0, -station.dthrust_n) / thrust_scale) ** 2
+            positive_loading_penalty += (max(0.0, -station.dtorque_nm) / torque_scale) ** 2
+        running_thrust = 0.0
+        running_torque = 0.0
+        for station in stations[:-1]:
+            running_thrust += station.dthrust_n
+            running_torque += station.dtorque_nm
+            positive_loading_penalty += (max(0.0, safe_div(running_thrust, thrust_n) - 1.001) / 0.01) ** 2
+            positive_loading_penalty += (max(0.0, safe_div(running_torque, torque_nm) - 1.001) / 0.01) ** 2
+        positive_loading_penalty /= len(stations)
+
+    tip_positive_unload_penalty = 0.0
+    tip_stations = [station for station in stations if station.mu > 0.85]
+    if tip_stations:
+        average_dthrust = max(abs(config.thrust_target_n) / len(stations), 1.0e-6)
+        average_dtorque = max(abs(q_reference) / len(stations), 1.0e-6)
+        for station in tip_stations:
+            normalized_tip = clamp((station.mu - 0.85) / 0.15, 0.0, 1.0)
+            cl_upper_target = 0.08 + 0.30 * (1.0 - normalized_tip) ** 1.5
+            alpha_floor_deg = 0.25 + 0.75 * normalized_tip
+            tip_positive_unload_penalty += (max(0.0, 0.02 - station.cl) / 0.02) ** 2
+            tip_positive_unload_penalty += (max(0.0, station.cl - cl_upper_target) / max(cl_upper_target, 1.0e-6)) ** 2
+            tip_positive_unload_penalty += (max(0.0, -station.dthrust_n) / average_dthrust) ** 2
+            tip_positive_unload_penalty += (max(0.0, -station.dtorque_nm) / average_dtorque) ** 2
+            tip_positive_unload_penalty += (max(0.0, alpha_floor_deg - station.alpha_deg) / 1.0) ** 2
+        tip_positive_unload_penalty /= len(tip_stations)
+
+    twist_metrics = design_twist_metrics(config, stations)
+    twist_bump_penalty = 0.0
+    for bump_deg in twist_metrics["positive_twist_bumps_deg"]:
+        twist_bump_penalty += (bump_deg / max(config.max_positive_twist_bump_deg, 1.0e-6)) ** 2
+    twist_bump_penalty /= max(len(twist_metrics["positive_twist_bumps_deg"]), 1)
+    twist_gradient_penalty = (
+        max(
+            0.0,
+            twist_metrics["max_abs_twist_gradient_deg_per_mu"]
+            / max(config.max_abs_twist_gradient_deg_per_mu_limit, 1.0e-6)
+            - 1.0,
+        )
+        ** 2
+    )
+    twist_curvature_penalty = (
+        max(0.0, twist_metrics["max_twist_curvature"] / max(config.max_twist_curvature_limit, 1.0e-6) - 1.0)
+        ** 2
+    )
+    aero_limit_penalty = (
+        (cl_limit_fraction / max(config.max_cl_limit_fraction_pct / 100.0, 1.0e-6)) ** 2
+        + (alpha_limit_fraction / max(config.max_alpha_limit_fraction_pct / 100.0, 1.0e-6)) ** 2
+        + (high_alpha_fraction / max(config.max_alpha_limit_fraction_pct / 100.0, 1.0e-6)) ** 2
+        + 4.0 * polar_range_fraction
+    )
+    twist_bump_weight = weights.w_twist_bump or (90.0 if config.manufacturable_twist else 0.0)
+    twist_gradient_weight = weights.w_twist_gradient or (35.0 if config.manufacturable_twist else 0.0)
+    twist_curvature_weight = weights.w_twist_curvature or (22.0 if config.manufacturable_twist else 0.0)
+    aero_limit_weight = weights.w_aero_limits or (75.0 if config.manufacturable_twist else 18.0)
+    torque_weight = weights.w_torque
+    if config.manufacturable_twist and config.spanload_type != "minimum_induced_loss":
+        torque_weight = max(torque_weight, 4.0)
+
     reference_twist_error = reference_twist_rms_deg / 10.0
     reference_chord_error = reference_chord_rms_fraction / 0.05
     objective_terms = {
         "normalized_thrust_error": weights.w_thrust * normalized_thrust_error,
-        "normalized_torque": weights.w_torque * normalized_torque,
+        "normalized_torque": torque_weight * normalized_torque,
         "spanload_shape_error": weights.w_spanload * spanload_error,
         "reference_twist_error": weights.w_reference_twist * reference_twist_error,
         "reference_chord_error": weights.w_reference_chord * reference_chord_error,
         "smoothness_penalty": weights.w_smooth * smoothness_penalty,
         "bounds_penalty": weights.w_bounds * bounds_penalty,
+        "positive_loading_penalty": weights.w_positive_loading * positive_loading_penalty,
+        "tip_positive_unload_penalty": weights.w_tip_positive_unload * tip_positive_unload_penalty,
+        "twist_bump_penalty": twist_bump_weight * twist_bump_penalty,
+        "twist_gradient_penalty": twist_gradient_weight * twist_gradient_penalty,
+        "twist_curvature_penalty": twist_curvature_weight * twist_curvature_penalty,
+        "aero_limit_penalty": aero_limit_weight * aero_limit_penalty,
     }
     objective = sum(objective_terms.values())
 
@@ -1467,10 +1907,17 @@ def build_candidate_result(
         warnings.append(f"target thrust mismatch is {100.0 * normalized_thrust_error:.1f}%")
     if chord_limit_fraction > 0.0:
         warnings.append(f"{100.0 * chord_limit_fraction:.1f}% of stations hit chord limits")
-    if alpha_limit_fraction > 0.20:
+    if alpha_limit_fraction > config.max_alpha_limit_fraction_pct / 100.0:
         warnings.append(f"{100.0 * alpha_limit_fraction:.1f}% of stations hit alpha limits")
-    if cl_limit_fraction > 0.20:
+    if cl_limit_fraction > config.max_cl_limit_fraction_pct / 100.0:
         warnings.append(f"{100.0 * cl_limit_fraction:.1f}% of stations are clipped at reduced-order Cl limits")
+    if not twist_metrics["manufacturable_twist_pass"]:
+        warnings.append(
+            "twist manufacturability check failed "
+            f"(max bump {twist_metrics['max_positive_twist_bump_deg']:.3f} deg, "
+            f"max |d beta/dmu| {twist_metrics['max_abs_twist_gradient_deg_per_mu']:.1f}, "
+            f"max curvature {twist_metrics['max_twist_curvature']:.1f})"
+        )
     if negative_force_fraction > 0.0:
         warnings.append(f"{100.0 * negative_force_fraction:.1f}% of stations produced negative thrust or torque contributions")
     if torque_nm <= 0.0:
@@ -1530,6 +1977,16 @@ def convergence_record(iteration: int, result: DesignResult) -> dict[str, float]
 
 
 def parameter_bounds(config: DesignInputs) -> dict[str, tuple[float, float]]:
+    if config.manufacturable_twist:
+        return {
+            "base_alpha_deg": (-18.0, 10.0),
+            "twist_bias_inner": (-6.0, 6.0),
+            "twist_bias_outer": (-12.0, 12.0),
+            "twist_curvature": (-8.0, 8.0),
+            "tip_unload_strength": (0.0, 12.0),
+            "loading_scale": (0.75, 1.35),
+            "chord_scale": (1.0, 1.0) if config.lock_chord or config.optimize_twist_only else (0.90, 1.65),
+        }
     return {
         "base_alpha_deg": (-28.0, 14.0),
         "twist_bias_inner": (-10.0, 10.0),
@@ -1610,6 +2067,16 @@ def match_thrust_with_base_alpha(
 
 
 def initial_parameters(config: DesignInputs) -> OptimizationParameters:
+    if config.manufacturable_twist:
+        return OptimizationParameters(
+            base_alpha_deg=0.0,
+            twist_bias_inner=0.0,
+            twist_bias_outer=-2.0,
+            twist_curvature=0.0,
+            tip_unload_strength=1.0,
+            loading_scale=1.0,
+            chord_scale=1.20,
+        )
     if config.mode == "free_optimize":
         return OptimizationParameters(
             base_alpha_deg=0.0,
@@ -1702,6 +2169,17 @@ def optimize_with_coordinate_search(
         "loading_scale": 0.12,
         "chord_scale": 0.06,
     }
+    if config.manufacturable_twist:
+        steps.update(
+            {
+                "twist_bias_inner": 1.0,
+                "twist_bias_outer": 2.0,
+                "twist_curvature": 2.0,
+                "tip_unload_strength": 1.5,
+                "loading_scale": 0.08,
+                "chord_scale": 0.12,
+            }
+        )
     if config.lock_chord or config.optimize_twist_only:
         steps.pop("chord_scale", None)
 
@@ -1825,6 +2303,87 @@ def optimize_with_scipy(
     return best_result, history
 
 
+def clipped_station_ranges(stations: Sequence[StationResult]) -> list[dict[str, object]]:
+    ranges: list[dict[str, object]] = []
+    current: list[StationResult] = []
+    for station in stations:
+        if station.is_clipped:
+            current.append(station)
+        elif current:
+            ranges.append(
+                {
+                    "mu_start": current[0].mu,
+                    "mu_end": current[-1].mu,
+                    "station_count": len(current),
+                }
+            )
+            current = []
+    if current:
+        ranges.append(
+            {
+                "mu_start": current[0].mu,
+                "mu_end": current[-1].mu,
+                "station_count": len(current),
+            }
+        )
+    return ranges
+
+
+def cl_clipping_diagnostics(result: DesignResult) -> dict[str, object]:
+    clipped = [station for station in result.stations if station.is_clipped]
+    count = len(clipped)
+    total = len(result.stations)
+    return {
+        "clipped_station_count": count,
+        "clipped_fraction": safe_div(count, total),
+        "clipped_mu_min": min((station.mu for station in clipped), default=None),
+        "clipped_mu_max": max((station.mu for station in clipped), default=None),
+        "clipped_mu_ranges": clipped_station_ranges(result.stations),
+    }
+
+
+def tip_loading_diagnostics(result: DesignResult, threshold_mu: float = 0.85) -> dict[str, float]:
+    target_tip = sum(station.target_spanload_weight for station in result.stations if station.mu >= threshold_mu)
+    actual_tip = sum(station.actual_spanload_weight for station in result.stations if station.mu >= threshold_mu)
+    return {
+        "threshold_mu": threshold_mu,
+        "target_tip_loading_fraction": target_tip,
+        "actual_tip_loading_fraction": actual_tip,
+        "actual_minus_target": actual_tip - target_tip,
+        "actual_to_target_ratio": safe_div(actual_tip, target_tip, fallback=1.0e99 if actual_tip > 0.0 else 0.0),
+    }
+
+
+def convergence_diagnostics(result: DesignResult) -> dict[str, object]:
+    history = list(result.convergence_history)
+    if not history:
+        return {
+            "best_iteration": None,
+            "last_iteration": None,
+            "best_objective": result.objective,
+            "last_objective": None,
+            "reported_solution_source": "result_without_history",
+        }
+    best_record = min(history, key=lambda record: record.get("objective", math.inf))
+    last_record = history[-1]
+    best_objective = best_record.get("objective", result.objective)
+    last_objective = last_record.get("objective")
+    objective_tolerance = max(1.0e-10, 1.0e-8 * max(abs(result.objective), 1.0))
+    if abs(result.objective - best_objective) <= objective_tolerance:
+        source = "best_seen"
+    elif last_objective is not None and abs(result.objective - last_objective) <= objective_tolerance:
+        source = "last_iteration"
+    else:
+        source = "reported_result_not_in_history"
+    return {
+        "best_iteration": int(best_record.get("iteration", 0)),
+        "last_iteration": int(last_record.get("iteration", 0)),
+        "best_objective": best_objective,
+        "last_objective": last_objective,
+        "reported_solution_source": source,
+    }
+
+
 def validate_geometry_result(result: DesignResult) -> List[str]:
     warnings: List[str] = []
     stations = list(result.stations)
@@ -1838,9 +2397,54 @@ def validate_geometry_result(result: DesignResult) -> List[str]:
         warnings.append("one or more stations have twist outside the 0 to 65 deg physical check range")
     if any(station.alpha_deg < -5.0 or station.alpha_deg > 25.0 for station in stations):
         warnings.append("one or more stations have alpha outside the -5 to 25 deg sanity check range")
+    if any(station.cl < -0.02 for station in stations):
+        warnings.append("one or more stations have Cl < -0.02; tip unloading must approach zero from positive lift")
+    if any(station.dthrust_n < -1.0e-6 for station in stations):
+        warnings.append("one or more stations have negative thrust contribution")
+    if any(station.dtorque_nm < -1.0e-6 for station in stations):
+        warnings.append("one or more stations have negative torque contribution")
+    tip_alpha_negative = [station for station in stations if station.mu > 0.85 and station.alpha_deg < -1.0]
+    if tip_alpha_negative:
+        warnings.append("one or more tip stations have alpha < -1 deg")
+    cumulative_thrust = 0.0
+    cumulative_torque = 0.0
+    for station in stations[:-1]:
+        cumulative_thrust += station.dthrust_n
+        cumulative_torque += station.dtorque_nm
+        if safe_div(cumulative_thrust, result.thrust_n) > 1.02:
+            warnings.append("cumulative thrust fraction exceeds 1.02 before the final station")
+            break
+    cumulative_torque = 0.0
+    for station in stations[:-1]:
+        cumulative_torque += station.dtorque_nm
+        if safe_div(cumulative_torque, result.torque_nm) > 1.02:
+            warnings.append("cumulative torque fraction exceeds 1.02 before the final station")
+            break
     cl_clip_fraction = sum(station.hit_cl_limit for station in stations) / max(len(stations), 1)
-    if cl_clip_fraction > 0.20:
+    if cl_clip_fraction > result.config.max_cl_limit_fraction_pct / 100.0:
         warnings.append(f"{100.0 * cl_clip_fraction:.1f}% of stations are at the reduced-order Cl limit")
+    alpha_clip_fraction = sum(station.hit_alpha_min or station.hit_alpha_max for station in stations) / max(len(stations), 1)
+    if alpha_clip_fraction > result.config.max_alpha_limit_fraction_pct / 100.0:
+        warnings.append(f"{100.0 * alpha_clip_fraction:.1f}% of stations are outside the alpha search range")
+    twist_metrics = design_twist_metrics(result.config, stations)
+    if not twist_metrics["manufacturable_twist_pass"]:
+        warnings.append(
+            "twist profile is diagnostic only: "
+            f"max positive bump {twist_metrics['max_positive_twist_bump_deg']:.3f} deg, "
+            f"max |d beta/dmu| {twist_metrics['max_abs_twist_gradient_deg_per_mu']:.1f}, "
+            f"max curvature {twist_metrics['max_twist_curvature']:.1f}"
+        )
+    tip_diagnostics = tip_loading_diagnostics(result)
+    if (
+        tip_diagnostics["actual_minus_target"] > 0.05
+        and tip_diagnostics["actual_to_target_ratio"] > 1.5
+    ):
+        warnings.append(
+            "actual integrated tip loading from r/R >= "
+            f"{tip_diagnostics['threshold_mu']:.2f} is {tip_diagnostics['actual_tip_loading_fraction']:.3f} "
+            f"of thrust vs target {tip_diagnostics['target_tip_loading_fraction']:.3f}; "
+            "do not claim ideal GMT tip unloading for this run"
+        )
     if result.normalized_thrust_error > 0.05:
         warnings.append("actual thrust is outside the 5% target-thrust acceptance band")
     elif result.normalized_thrust_error > 0.03:
@@ -1889,10 +2493,13 @@ def dedupe_warnings(warnings: Sequence[str]) -> List[str]:
 
 def optimize_geometry(
     config: DesignInputs,
-    reference_stations: Sequence[ReferenceStation],
+    reference_stations: Sequence[ReferenceStation] | None = None,
     initial_warnings: Sequence[str] = (),
     reference_source: str = "unknown reference",
 ) -> DesignResult:
+    if reference_stations is None:
+        reference_stations = builtin_reference_stations()
+        reference_source = "built-in reference geometry"
     weights = weights_for_mode(config.mode)
     reference_params = OptimizationParameters()
     reference_config = replace(
@@ -2002,6 +2609,27 @@ def build_geometry(
     )
 
 
+def solve_geometry_for_loading(
+    config: DesignInputs,
+    loading_scale: float,
+    reference_stations: Sequence[ReferenceStation] | None = None,
+) -> DesignResult:
+    validate_user_inputs(config)
+    if reference_stations is None:
+        reference_stations = builtin_reference_stations()
+    return build_geometry(config, reference_stations, base_alpha_deg=0.0, loading_scale=loading_scale)
+
+
+def solve_geometry(
+    config: DesignInputs,
+    reference_stations: Sequence[ReferenceStation] | None = None,
+) -> DesignResult:
+    validate_user_inputs(config)
+    if reference_stations is None:
+        reference_stations = builtin_reference_stations()
+    return optimize_geometry(config, reference_stations, reference_source="built-in reference geometry")
+
+
 def solve_geometry_for_alpha(config: DesignInputs, reference_stations: Sequence[ReferenceStation], base_alpha_deg: float) -> DesignResult:
     lower = 0.05
     upper = 1.00
@@ -2041,7 +2669,46 @@ def frange(start: float, stop: float, step: float) -> Iterable[float]:
         value += step
 
 
-def write_csv(result: DesignResult, output_path: Path) -> None:
+def _assert_output_path(output_path: Path, output_domain: str) -> None:
+    if output_domain == "geometry":
+        assert_geometry_output_path(output_path)
+    elif output_domain == "verification":
+        assert_verification_output_path(output_path)
+    else:
+        raise ValueError(f"unknown output domain: {output_domain}")
+
+
+def _output_case_name(result: DesignResult) -> str:
+    return optimized_case_name(result.config.spanload_type, result.config.manufacturable_twist)
+
+
+def _base_output_metadata(
+    *,
+    case_name: str,
+    geometry_source_csv: str | Path | None = None,
+    station_source_csv: str | Path | None = None,
+    input_config_path: str | Path | None = None,
+    twist_column_used: str | None = None,
+    aero_source: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "generating_script": GENERATING_SCRIPT,
+        "model_source": MODEL_SOURCE_OPTIMIZER,
+        "case_name": case_name,
+        "geometry_source_csv": "" if geometry_source_csv is None else str(geometry_source_csv),
+        "station_source_csv": "" if station_source_csv is None else str(station_source_csv),
+        "input_config_path": "" if input_config_path is None else str(input_config_path),
+        "twist_column_used": "" if twist_column_used is None else twist_column_used,
+        "aero_source": "" if aero_source is None else aero_source,
+    }
+
+
+def optimizer_geometry_csv_name(case_name: str) -> str:
+    return f"{case_name}_{OPTIMIZER_GEOMETRY_SUFFIX}.csv"
+
+
+def write_csv(result: DesignResult, output_path: Path, *, output_domain: str = "geometry") -> None:
+    _assert_output_path(output_path, output_domain)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     metadata = geometry_csv_metadata(result.config)
     with output_path.open("w", newline="", encoding="utf-8") as handle:
@@ -2049,6 +2716,8 @@ def write_csv(result: DesignResult, output_path: Path) -> None:
         writer.writerow(
             [
                 "station",
+                "model_source",
+                "generating_script",
                 "mu",
                 "radius_m",
                 "radius_in",
@@ -2081,12 +2750,18 @@ def write_csv(result: DesignResult, output_path: Path) -> None:
                 "scale_factor",
                 "operating_point",
                 "not_a_native_nasa_22in_geometry",
+                "unclipped_cl_demand",
+                "cl_max",
+                "cl_margin",
+                "is_clipped",
             ]
         )
         for station in result.stations:
             writer.writerow(
                 [
                     station.station_index,
+                    MODEL_SOURCE_OPTIMIZER,
+                    GENERATING_SCRIPT,
                     f"{station.mu:.4f}",
                     f"{station.radius_m:.6f}",
                     f"{station.radius_in:.4f}",
@@ -2100,8 +2775,8 @@ def write_csv(result: DesignResult, output_path: Path) -> None:
                     f"{station.alpha_deg:.4f}",
                     f"{station.cl:.5f}",
                     f"{station.cd:.5f}",
-                    f"{station.dthrust_n:.5f}",
-                    f"{station.dtorque_nm:.5f}",
+                    f"{station.dthrust_n:.10f}",
+                    f"{station.dtorque_nm:.10f}",
                     station.airfoil,
                     f"{station.target_spanload_weight:.6f}",
                     f"{station.actual_spanload_weight:.6f}",
@@ -2119,11 +2794,97 @@ def write_csv(result: DesignResult, output_path: Path) -> None:
                     f"{float(metadata['scale_factor']):.10f}",
                     metadata["operating_point"],
                     str(metadata["not_a_native_nasa_22in_geometry"]).lower(),
+                    f"{station.unclipped_cl_demand:.5f}",
+                    f"{station.cl_max:.5f}",
+                    f"{station.cl_margin:.5f}",
+                    str(station.is_clipped),
                 ]
             )
+    write_metadata_sidecar(
+        output_path,
+        _base_output_metadata(
+            case_name=_output_case_name(result),
+            geometry_source_csv=output_path,
+            station_source_csv=output_path,
+            twist_column_used="twist_deg",
+            aero_source=MODEL_SOURCE_OPTIMIZER,
+        ),
+    )
 
 
-def write_reference_csv(reference_stations: Sequence[ReferenceStation], radius_m: float, output_path: Path) -> None:
+def write_diagnostic_csv(result: DesignResult, output_path: Path, *, output_domain: str = "geometry") -> None:
+    _assert_output_path(output_path, output_domain)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    slopes, curvatures = station_twist_derivatives(
+        [station.mu for station in result.stations],
+        [station.twist_deg for station in result.stations],
+    )
+    objective_fields = [f"objective_{name}" for name in result.objective_breakdown]
+    fields = [
+        "station",
+        "model_source",
+        "generating_script",
+        "r/R",
+        "chord",
+        "twist",
+        "alpha",
+        "Cl",
+        "Cd",
+        "dT",
+        "dQ",
+        "hit_cl_limit",
+        "hit_alpha_limit",
+        "twist_slope",
+        "twist_curvature",
+        "total_objective",
+        *objective_fields,
+    ]
+    with output_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for station, slope, curvature in zip(result.stations, slopes, curvatures):
+            row: dict[str, object] = {
+                "station": station.station_index,
+                "model_source": MODEL_SOURCE_OPTIMIZER,
+                "generating_script": GENERATING_SCRIPT,
+                "r/R": f"{station.mu:.4f}",
+                "chord": f"{station.chord_m:.8f}",
+                "twist": f"{station.twist_deg:.6f}",
+                "alpha": f"{station.alpha_deg:.6f}",
+                "Cl": f"{station.cl:.6f}",
+                "Cd": f"{station.cd:.6f}",
+                "dT": f"{station.dthrust_n:.10f}",
+                "dQ": f"{station.dtorque_nm:.10f}",
+                "hit_cl_limit": station.hit_cl_limit,
+                "hit_alpha_limit": station.hit_alpha_min or station.hit_alpha_max,
+                "twist_slope": f"{slope:.6f}",
+                "twist_curvature": f"{curvature:.6f}",
+                "total_objective": f"{result.objective:.10f}",
+            }
+            for name, value in result.objective_breakdown.items():
+                row[f"objective_{name}"] = f"{value:.10f}"
+            writer.writerow(row)
+    write_metadata_sidecar(
+        output_path,
+        _base_output_metadata(
+            case_name=_output_case_name(result),
+            geometry_source_csv=result.config.output_directory
+            / optimizer_geometry_csv_name(_output_case_name(result)),
+            station_source_csv=output_path,
+            twist_column_used="twist_deg",
+            aero_source=MODEL_SOURCE_OPTIMIZER,
+        ),
+    )
+
+
+def write_reference_csv(
+    reference_stations: Sequence[ReferenceStation],
+    radius_m: float,
+    output_path: Path,
+    *,
+    output_domain: str = "geometry",
+) -> None:
+    _assert_output_path(output_path, output_domain)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     scaled_to_diameter_in = meters_to_inches(2.0 * radius_m)
     operating_point = (
@@ -2136,6 +2897,7 @@ def write_reference_csv(reference_stations: Sequence[ReferenceStation], radius_m
         writer.writerow(
             [
                 "mu",
+                "generating_script",
                 "chord_over_R",
                 "chord_m",
                 "twist_deg",
@@ -2146,14 +2908,20 @@ def write_reference_csv(reference_stations: Sequence[ReferenceStation], radius_m
                 "scale_factor",
                 "operating_point",
                 "not_a_native_nasa_22in_geometry",
+                "radius_m",
+                "radius_in",
+                "chord_in",
             ]
         )
         for station in reference_stations:
+            radius_station_m = station.mu * radius_m
+            chord_m = station.chord_fraction * radius_m
             writer.writerow(
                 [
                     f"{station.mu:.4f}",
+                    GENERATING_SCRIPT,
                     f"{station.chord_fraction:.6f}",
-                    f"{station.chord_fraction * radius_m:.6f}",
+                    f"{chord_m:.6f}",
                     f"{station.twist_deg:.4f}",
                     f"{90.0 - station.twist_deg:.4f}",
                     station.airfoil,
@@ -2162,11 +2930,30 @@ def write_reference_csv(reference_stations: Sequence[ReferenceStation], radius_m
                     f"{scaled_to_diameter_in / ORIGINAL_REFERENCE_DIAMETER_IN:.10f}",
                     operating_point,
                     "true",
+                    f"{radius_station_m:.6f}",
+                    f"{meters_to_inches(radius_station_m):.4f}",
+                    f"{meters_to_inches(chord_m):.4f}",
                 ]
             )
+    write_metadata_sidecar(
+        output_path,
+        _base_output_metadata(
+            case_name=output_path.stem,
+            geometry_source_csv=output_path,
+            station_source_csv=output_path,
+            twist_column_used="twist_deg",
+            aero_source=MODEL_SOURCE_OPTIMIZER,
+        ),
+    )
 
 
-def write_convergence_history_csv(history: Sequence[dict[str, float]], output_path: Path) -> None:
+def write_convergence_history_csv(
+    history: Sequence[dict[str, float]],
+    output_path: Path,
+    *,
+    output_domain: str = "geometry",
+) -> None:
+    _assert_output_path(output_path, output_domain)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fields = [
         "iteration",
@@ -2188,11 +2975,20 @@ def write_convergence_history_csv(history: Sequence[dict[str, float]], output_pa
         writer.writeheader()
         for record in history:
             writer.writerow({field: record.get(field, "") for field in fields})
+    write_metadata_sidecar(
+        output_path,
+        _base_output_metadata(
+            case_name=output_path.stem.replace("_convergence_history", ""),
+            geometry_source_csv="",
+            station_source_csv=output_path,
+        ),
+    )
 
 
-def write_methodology_statement(output_path: Path) -> None:
+def write_methodology_statement(output_path: Path, config: DesignInputs, *, output_domain: str = "geometry") -> None:
+    _assert_output_path(output_path, output_domain)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(METHODOLOGY_STATEMENT + "\n", encoding="utf-8")
+    output_path.write_text(methodology_statement_for_config(config) + "\n", encoding="utf-8")
 
 
 def excel_column_name(index: int) -> str:
@@ -2325,6 +3121,7 @@ def build_workbook_sheets(result: DesignResult, reference_stations: Sequence[Ref
         ["Radius", result.config.radius_m, "m", ""],
         ["Diameter", diameter_m, "m", f"{diameter_in:.3f} in"],
         ["RPM", result.config.rpm, "rpm", ""],
+        ["Air density", result.config.rho, "kg/m^3", ""],
         ["Freestream", result.config.freestream_mps, "m/s", "Velocity normal to the propeller plane"],
         ["Advance ratio J", result.j_advance, "", ""],
         ["Target thrust", result.config.thrust_target_n, "N", ""],
@@ -2337,7 +3134,7 @@ def build_workbook_sheets(result: DesignResult, reference_stations: Sequence[Ref
         ["CP", result.cp, "", ""],
         ["Dynamic efficiency", result.eta_dynamic, "", "J*CT/CP for non-static runs"],
         ["Static ideal efficiency", result.eta_static, "", "Actuator-disk static figure of merit proxy"],
-        ["Disk induced velocity", result.induced_velocity_mps, "m/s", ""],
+        ["Disk induced velocity", result.induced_velocity_mps, "m/s", "Full-disk actuator formula using target thrust"],
         ["Objective", result.objective, "", "Weighted reduced-order objective"],
         ["Spanload error", result.spanload_error, "", ""],
         ["Reference twist RMS", result.reference_twist_rms_deg, "deg", ""],
@@ -2351,6 +3148,20 @@ def build_workbook_sheets(result: DesignResult, reference_stations: Sequence[Ref
         ["Lock airfoil", result.config.lock_airfoil, "", ""],
         ["Optimize twist only", result.config.optimize_twist_only, "", ""],
     ]
+    cl_diag = cl_clipping_diagnostics(result)
+    conv_diag = convergence_diagnostics(result)
+    tip_diag = tip_loading_diagnostics(result)
+    summary_rows.extend(
+        [
+            ["Cl clipped station count", cl_diag["clipped_station_count"], "stations", ""],
+            ["Cl clipped fraction", cl_diag["clipped_fraction"], "", ""],
+            ["Best iteration", conv_diag["best_iteration"], "", ""],
+            ["Last iteration", conv_diag["last_iteration"], "", ""],
+            ["Reported solution source", conv_diag["reported_solution_source"], "", ""],
+            ["Target tip loading fraction", tip_diag["target_tip_loading_fraction"], "", "r/R >= 0.85"],
+            ["Actual tip loading fraction", tip_diag["actual_tip_loading_fraction"], "", "r/R >= 0.85"],
+        ]
+    )
     if result.warnings:
         summary_rows.append([])
         summary_rows.append(["Warnings", "", "", ""])
@@ -2380,16 +3191,18 @@ def build_workbook_sheets(result: DesignResult, reference_stations: Sequence[Ref
         )
 
     optimized_rows: List[List[object]] = [[
-        "Station", "mu", "radius_m", "radius_in", "dr_m", "chord_m", "chord_in", "chord_over_R",
+        "Station", "model_source", "mu", "radius_m", "radius_in", "dr_m", "chord_m", "chord_in", "chord_over_R",
         "twist_deg", "cad_plane_angle_deg", "phi_deg", "alpha_deg", "cl", "cd",
         "dthrust_n", "dtorque_nm", "airfoil", "target_spanload_weight", "actual_spanload_weight",
         "reference_chord_over_R", "reference_twist_deg", "hit_chord_min", "hit_chord_max",
-        "hit_alpha_min", "hit_alpha_max", "hit_cl_limit", "negative_force", "impossible_force"
+        "hit_alpha_min", "hit_alpha_max", "hit_cl_limit", "negative_force", "impossible_force",
+        "unclipped_cl_demand", "cl_max", "cl_margin", "is_clipped"
     ]]
     for station in result.stations:
         optimized_rows.append(
             [
                 station.station_index,
+                MODEL_SOURCE_OPTIMIZER,
                 station.mu,
                 station.radius_m,
                 station.radius_in,
@@ -2417,6 +3230,10 @@ def build_workbook_sheets(result: DesignResult, reference_stations: Sequence[Ref
                 station.hit_cl_limit,
                 station.negative_force,
                 station.impossible_force,
+                station.unclipped_cl_demand,
+                station.cl_max,
+                station.cl_margin,
+                station.is_clipped,
             ]
         )
 
@@ -2476,6 +3293,7 @@ def build_workbook_sheets(result: DesignResult, reference_stations: Sequence[Ref
 
 
 def write_xlsx(result: DesignResult, reference_stations: Sequence[ReferenceStation], output_path: Path) -> None:
+    assert_geometry_output_path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     sheets = build_workbook_sheets(result, reference_stations)
     with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as workbook:
@@ -2494,7 +3312,52 @@ def result_summary_dict(result: DesignResult) -> dict[str, Any]:
         "reference_regularized": "reference-regularized optimization",
         "reproduce_reference": "reference reproduction",
     }[result.config.mode]
+    cl_diag = cl_clipping_diagnostics(result)
+    tip_diag = tip_loading_diagnostics(result)
+    conv_diag = convergence_diagnostics(result)
+    twist_diag = design_twist_metrics(result.config, result.stations)
+    station_count = max(len(result.stations), 1)
+    alpha_limit_station_count = sum(
+        station.hit_alpha_min or station.hit_alpha_max
+        for station in result.stations
+    )
+    alpha_limit_fraction_pct = 100.0 * alpha_limit_station_count / station_count
+    cl_limit_fraction_pct = 100.0 * cl_diag["clipped_station_count"] / station_count
+    max_alpha_deg = max((station.alpha_deg for station in result.stations), default=0.0)
+    min_alpha_deg = min((station.alpha_deg for station in result.stations), default=0.0)
+    max_cl = max((station.cl for station in result.stations), default=0.0)
+    valid_for_optimizer_summary = (
+        result.normalized_thrust_error <= 0.05
+        and math.isfinite(result.thrust_n)
+        and math.isfinite(result.torque_nm)
+        and result.torque_nm > 0.0
+        and not any(station.impossible_force for station in result.stations)
+    )
+    thesis_aero_pass = (
+        cl_limit_fraction_pct <= result.config.max_cl_limit_fraction_pct
+        and alpha_limit_fraction_pct <= result.config.max_alpha_limit_fraction_pct
+        and not any(station.impossible_force or station.negative_force for station in result.stations)
+    )
+    valid_for_thesis_export = (
+        valid_for_optimizer_summary
+        and twist_diag["manufacturable_twist_pass"]
+        and thesis_aero_pass
+    )
+    optimized_geometry_csv = result.config.output_directory / optimizer_geometry_csv_name(
+        optimized_case_name(result.config.spanload_type, result.config.manufacturable_twist)
+    )
     return {
+        "model_source": MODEL_SOURCE_OPTIMIZER,
+        "generating_script": GENERATING_SCRIPT,
+        "geometry_source_csv": str(optimized_geometry_csv),
+        "station_source_csv": str(optimized_geometry_csv),
+        "twist_column_used": "twist_deg",
+        "source_csv_modified_time": source_modified_time(optimized_geometry_csv),
+        "geometry_source_csv_modified_time": source_modified_time(optimized_geometry_csv),
+        "valid_for_optimizer_summary": valid_for_optimizer_summary,
+        "valid_for_bemt_summary": False,
+        "valid_for_thesis_export": valid_for_thesis_export,
+        "validity_status": "thesis_valid" if valid_for_thesis_export else "diagnostic_only_not_thesis_valid",
         "solver_mode": result.config.mode,
         "solver_mode_label": mode_label,
         "optimizer": result.optimizer_name,
@@ -2509,12 +3372,12 @@ def result_summary_dict(result: DesignResult) -> dict[str, Any]:
             "not_a_native_nasa_22in_geometry": True,
         },
         "operating_point_distinction": {
-            "thesis_case": THESIS_22_STATIC_OPERATING_POINT,
+            "thesis_case": active_operating_point_dict(result.config),
             "nasa_scitech_original_context": NASA_SCITECH_ORIGINAL_OPERATING_POINT,
             "statement": "35 N is only the thesis 22-inch static target, not the NASA/SciTech original operating point.",
         },
         "optimized_geometry_source": "Generated by the present Geometry_optimization.py run.",
-        "case_name": optimized_case_name(result.config.spanload_type),
+        "case_name": optimized_case_name(result.config.spanload_type, result.config.manufacturable_twist),
         "reference_case_name": reference_case_name(result.config.spanload_type),
         "reference_regularization": {
             "twist_weight": result.weights.w_reference_twist,
@@ -2532,13 +3395,25 @@ def result_summary_dict(result: DesignResult) -> dict[str, Any]:
             "airfoil_locked": result.config.lock_airfoil or result.config.optimize_twist_only,
             "optimize_twist_only": result.config.optimize_twist_only,
             "rpm": result.config.rpm,
+            "rho_kg_m3": result.config.rho,
             "v_inf_mps": result.config.freestream_mps,
             "advance_ratio": result.j_advance,
             "target_thrust_n": result.config.thrust_target_n,
+            "hub_radius_fraction": result.config.hub_radius_fraction,
+        },
+        "induced_velocity_mps": result.induced_velocity_mps,
+        "induced_velocity_formula_inputs": induced_velocity_formula_inputs(result),
+        "static_efficiency_formula_inputs": {
+            "formula": "eta_static = T^(3/2)/(P*sqrt(2*rho*A))",
+            "thrust_n": result.thrust_n,
+            "power_w": result.power_w,
+            "rho_kg_m3": result.config.rho,
+            "disk_area_m2": actuator_disk_area(result.config.radius_m),
+            "disk_area_definition": "full propeller disk area pi*R^2",
         },
         "gmt_tip_unloading_verification": {
             "status": "not_evaluated_in_single_case_summary",
-            "statement": "Run theory_verification.py or the reference-vs-optimized comparison workflow to verify same thrust, lower torque, reduced tip loading, inboard-shifted cumulative loading, and acceptable Cl clipping fraction.",
+            "statement": "Run theory_verification.py or the reference-vs-optimized comparison workflow to verify same thrust, lower torque, reduced tip loading, inboard-shifted cumulative loading, and acceptable Cl clipping fraction. Do not treat a single-case GMT target spanload as verified tip unloading when spanload error and Cl clipping are large.",
         },
         "final_metrics": {
             "objective": result.objective,
@@ -2551,28 +3426,113 @@ def result_summary_dict(result: DesignResult) -> dict[str, Any]:
             "CP": result.cp,
             "eta_dynamic": result.eta_dynamic,
             "eta_static": result.eta_static,
+            "induced_velocity_mps": result.induced_velocity_mps,
             "spanload_error": result.spanload_error,
             "reference_twist_rms_deg": result.reference_twist_rms_deg,
             "reference_twist_max_deg": result.reference_twist_max_deg,
             "reference_chord_rms_percent": result.reference_chord_rms_percent,
             "smoothness_penalty": result.smoothness_penalty,
             "bounds_penalty": result.bounds_penalty,
+            "max_positive_twist_bump_deg": twist_diag["max_positive_twist_bump_deg"],
+            "positive_twist_bump_count": twist_diag["positive_twist_bump_count"],
+            "max_abs_twist_gradient_deg_per_mu": twist_diag["max_abs_twist_gradient_deg_per_mu"],
+            "max_twist_curvature": twist_diag["max_twist_curvature"],
+            "manufacturable_twist_pass": twist_diag["manufacturable_twist_pass"],
+            "cl_limit_station_fraction_pct": cl_limit_fraction_pct,
+            "alpha_limit_station_fraction_pct": alpha_limit_fraction_pct,
+            "max_alpha_deg": max_alpha_deg,
+            "min_alpha_deg": min_alpha_deg,
+            "max_Cl": max_cl,
+            "clipped_station_count": cl_diag["clipped_station_count"],
         },
+        "twist_manufacturability": twist_diag,
+        "aero_validity": {
+            "cl_limit_station_fraction_pct": cl_limit_fraction_pct,
+            "alpha_limit_station_fraction_pct": alpha_limit_fraction_pct,
+            "max_alpha_deg": max_alpha_deg,
+            "min_alpha_deg": min_alpha_deg,
+            "max_Cl": max_cl,
+            "clipped_station_count": cl_diag["clipped_station_count"],
+            "cl_limit_threshold_pct": result.config.max_cl_limit_fraction_pct,
+            "alpha_limit_threshold_pct": result.config.max_alpha_limit_fraction_pct,
+            "outside_polar_range_station_count": sum(
+                station.hit_alpha_min or station.hit_alpha_max or station.hit_cl_limit
+                for station in result.stations
+            ),
+            "thesis_aero_pass": thesis_aero_pass,
+        },
+        "convergence_diagnostics": conv_diag,
+        "clipping_diagnostics": cl_diag,
+        "tip_loading_diagnostics": tip_diag,
         "objective_breakdown": result.objective_breakdown,
         "parameters": parameter_dict(result.parameters),
         "warnings": list(result.warnings),
-        "methodology_statement": METHODOLOGY_STATEMENT,
+        "methodology_statement": methodology_statement_for_config(result.config),
     }
 
 
-def write_summary_json(result: DesignResult, output_path: Path) -> None:
+def write_summary_json(result: DesignResult, output_path: Path, *, output_domain: str = "geometry") -> None:
+    _assert_output_path(output_path, output_domain)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as handle:
-        json.dump(result_summary_dict(result), handle, indent=2)
+        json.dump(result_summary_dict(result), handle, indent=2, default=_json_default)
         handle.write("\n")
+    geometry_csv = result.config.output_directory / optimizer_geometry_csv_name(_output_case_name(result))
+    write_metadata_sidecar(
+        output_path,
+        _base_output_metadata(
+            case_name=_output_case_name(result),
+            geometry_source_csv=geometry_csv,
+            station_source_csv=geometry_csv,
+            twist_column_used="twist_deg",
+            aero_source=MODEL_SOURCE_OPTIMIZER,
+        ),
+    )
 
 
-def plot_thesis_outputs(result: DesignResult, reference_stations: Sequence[ReferenceStation], output_dir: Path) -> List[str]:
+def _json_default(value: Any) -> Any:
+    if hasattr(value, "item"):
+        return value.item()
+    return str(value)
+
+
+def source_modified_time(path: Path) -> str:
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec="seconds")
+    except OSError:
+        return ""
+
+
+def write_optimizer_plot_metadata(
+    result: DesignResult,
+    output_dir: Path,
+    stem: str,
+    geometry_csv_path: Path | None = None,
+) -> None:
+    assert_geometry_output_path(output_dir)
+    geometry_csv = geometry_csv_path or (
+        result.config.output_directory / optimizer_geometry_csv_name(_output_case_name(result))
+    )
+    metadata = {
+        "geometry_source_csv": str(geometry_csv),
+        "station_source_csv": str(geometry_csv),
+        "twist_column_used": "twist_deg",
+        "model_source": MODEL_SOURCE_OPTIMIZER,
+        "generating_script": GENERATING_SCRIPT,
+        "source_csv_modified_time": source_modified_time(geometry_csv),
+        "geometry_source_csv_modified_time": source_modified_time(geometry_csv),
+        "valid_for_thesis_export": result_summary_dict(result)["valid_for_thesis_export"],
+    }
+    write_metadata_sidecar(output_dir / f"{stem}.png", metadata)
+
+
+def plot_thesis_outputs(
+    result: DesignResult,
+    reference_stations: Sequence[ReferenceStation],
+    output_dir: Path,
+    geometry_csv_path: Path | None = None,
+) -> List[str]:
+    assert_geometry_output_path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     try:
         import matplotlib.pyplot as plt
@@ -2607,6 +3567,7 @@ def plot_thesis_outputs(result: DesignResult, reference_stations: Sequence[Refer
     plt.legend()
     fig.tight_layout()
     save_matplotlib_figure(fig, output_dir, "twist_comparison")
+    write_optimizer_plot_metadata(result, output_dir, "twist_comparison", geometry_csv_path)
     plt.close(fig)
 
     fig = plt.figure()
@@ -2617,6 +3578,7 @@ def plot_thesis_outputs(result: DesignResult, reference_stations: Sequence[Refer
     plt.legend()
     fig.tight_layout()
     save_matplotlib_figure(fig, output_dir, "chord_comparison")
+    write_optimizer_plot_metadata(result, output_dir, "chord_comparison", geometry_csv_path)
     plt.close(fig)
 
     fig = plt.figure()
@@ -2628,6 +3590,7 @@ def plot_thesis_outputs(result: DesignResult, reference_stations: Sequence[Refer
     plt.legend()
     fig.tight_layout()
     save_matplotlib_figure(fig, output_dir, "spanload_comparison")
+    write_optimizer_plot_metadata(result, output_dir, "spanload_comparison", geometry_csv_path)
     plt.close(fig)
 
     fig, ax_alpha = plt.subplots()
@@ -2642,6 +3605,7 @@ def plot_thesis_outputs(result: DesignResult, reference_stations: Sequence[Refer
     ax_alpha.legend(lines_a + lines_b, labels_a + labels_b)
     fig.tight_layout()
     save_matplotlib_figure(fig, output_dir, "alpha_cl_distribution")
+    write_optimizer_plot_metadata(result, output_dir, "alpha_cl_distribution", geometry_csv_path)
     plt.close(fig)
 
     if result.convergence_history:
@@ -2654,6 +3618,7 @@ def plot_thesis_outputs(result: DesignResult, reference_stations: Sequence[Refer
         plt.ylabel("objective")
         fig.tight_layout()
         save_matplotlib_figure(fig, output_dir, "convergence_objective")
+        write_optimizer_plot_metadata(result, output_dir, "convergence_objective", geometry_csv_path)
         plt.close(fig)
 
     return []
@@ -2691,10 +3656,16 @@ def print_summary(result: DesignResult) -> None:
     print(f"  ref chord RMS        : {result.reference_chord_rms_percent:.3f}% c/R")
     chord_limit_fraction = sum(station.hit_chord_min or station.hit_chord_max for station in result.stations) / max(len(result.stations), 1)
     alpha_limit_fraction = sum(station.hit_alpha_min or station.hit_alpha_max for station in result.stations) / max(len(result.stations), 1)
+    cl_diag = cl_clipping_diagnostics(result)
     if chord_limit_fraction > 0.20 or alpha_limit_fraction > 0.20:
         print(
             "  limit warning        : "
             f"{100.0 * chord_limit_fraction:.1f}% chord, {100.0 * alpha_limit_fraction:.1f}% alpha stations at limits"
+        )
+    if cl_diag["clipped_station_count"]:
+        print(
+            "  Cl clipping          : "
+            f"{cl_diag['clipped_station_count']} stations ({100.0 * cl_diag['clipped_fraction']:.1f}%)"
         )
     if result.warnings:
         print()
@@ -2747,6 +3718,12 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--optimizer", choices=OPTIMIZER_CHOICES, default=None)
     parser.add_argument("--max-iterations", type=int, default=None)
     parser.add_argument("--tolerance", type=float, default=None)
+    parser.add_argument("--manufacturable-twist", action="store_true", help="Apply thesis manufacturable twist shaping and validity checks.")
+    parser.add_argument("--max-positive-twist-bump", type=float, default=None, help="Maximum allowed positive station twist increase after the root transition in degrees.")
+    parser.add_argument("--max-twist-gradient", type=float, default=None, help="Maximum allowed absolute twist gradient in deg per r/R after the root transition.")
+    parser.add_argument("--max-twist-curvature", type=float, default=None, help="Maximum allowed absolute twist curvature in deg per (r/R)^2 after the root transition.")
+    parser.add_argument("--max-cl-limit-fraction-pct", type=float, default=None, help="Maximum percent of stations allowed to hit the reduced-order Cl cap for thesis export.")
+    parser.add_argument("--max-alpha-limit-fraction-pct", type=float, default=None, help="Maximum percent of stations allowed outside the alpha range for thesis export.")
 
 
 def apply_defaults(args: argparse.Namespace) -> argparse.Namespace:
@@ -2775,12 +3752,46 @@ def apply_defaults(args: argparse.Namespace) -> argparse.Namespace:
         if args.preset == "thesis_gmt_22_static" and args.blades is None:
             args.blades = 2
 
+    if args.preset in {"thesis_gmt_22_manufacturable", "thesis_mil_22_manufacturable"}:
+        args.manufacturable_twist = True
+        if args.diameter_in is None:
+            args.diameter_in = 22.0
+        if args.spanload is None:
+            args.spanload = (
+                "minimum_induced_loss"
+                if args.preset == "thesis_mil_22_manufacturable"
+                else "gmt_bell"
+            )
+        if args.mode is None:
+            args.mode = "reference_regularized"
+        args.lock_airfoil = True
+        if args.smooth_passes is None:
+            args.smooth_passes = 8
+        if args.rpm is None:
+            args.rpm = 4000.0
+        if args.v_inf is None:
+            args.v_inf = 0.0
+        if args.thrust is None:
+            args.thrust = 35.0
+        if args.chord_blend is None:
+            args.chord_blend = 0.35
+        if args.twist_blend is None:
+            args.twist_blend = 0.10
+        if args.alpha_max is None:
+            args.alpha_max = 15.0
+        if args.chord_max_in is None:
+            args.chord_max_in = 3.0
+        if args.max_iterations is None:
+            args.max_iterations = 70
+        if args.optimizer is None:
+            args.optimizer = "coordinate_search"
+
     if args.spanload is None:
         args.spanload = "gmt_bell"
     if args.mode is None:
         args.mode = "reference_regularized"
     if args.rpm is None:
-        args.rpm = 4500.0
+        args.rpm = 4000.0
     if args.thrust is None:
         args.thrust = 35.0
     if args.v_inf is None:
@@ -2813,13 +3824,28 @@ def apply_defaults(args: argparse.Namespace) -> argparse.Namespace:
     if args.reference_csv is None:
         args.reference_csv = reference_path
     if args.output_dir is None:
-        args.output_dir = Path(__file__).resolve().parent.parent / "results" / "geometry" / "optimized"
+        args.output_dir = (
+            Path(__file__).resolve().parent.parent
+            / "results"
+            / "geometry_optimizer"
+            / str(canonical_case_dir_name(optimized_case_name(args.spanload, args.manufacturable_twist)))
+        )
     if args.optimizer is None:
         args.optimizer = "auto"
     if args.max_iterations is None:
         args.max_iterations = 35
     if args.tolerance is None:
         args.tolerance = 1.0e-4
+    if args.max_positive_twist_bump is None:
+        args.max_positive_twist_bump = 0.5
+    if args.max_twist_gradient is None:
+        args.max_twist_gradient = 100.0
+    if args.max_twist_curvature is None:
+        args.max_twist_curvature = 1500.0
+    if args.max_cl_limit_fraction_pct is None:
+        args.max_cl_limit_fraction_pct = 10.0
+    if args.max_alpha_limit_fraction_pct is None:
+        args.max_alpha_limit_fraction_pct = 10.0
     return args
 
 
@@ -2837,7 +3863,10 @@ def case_family_for_spanload(spanload_type: str) -> str:
     return "mil" if spanload_type == "minimum_induced_loss" else "gmt"
 
 
-def optimized_case_name(spanload_type: str) -> str:
+def optimized_case_name(spanload_type: str, manufacturable: bool = False) -> str:
+    family = case_family_for_spanload(spanload_type)
+    if manufacturable:
+        return f"optimized_{family}_22_manufacturable"
     return OPTIMIZED_MIL_CASE if spanload_type == "minimum_induced_loss" else OPTIMIZED_GMT_CASE
 
 
@@ -2879,6 +3908,12 @@ def main() -> None:
         optimizer=args.optimizer,
         max_iterations=args.max_iterations,
         tolerance=args.tolerance,
+        manufacturable_twist=args.manufacturable_twist,
+        max_positive_twist_bump_deg=args.max_positive_twist_bump,
+        max_abs_twist_gradient_deg_per_mu_limit=args.max_twist_gradient,
+        max_twist_curvature_limit=args.max_twist_curvature,
+        max_cl_limit_fraction_pct=args.max_cl_limit_fraction_pct,
+        max_alpha_limit_fraction_pct=args.max_alpha_limit_fraction_pct,
     )
     validate_user_inputs(config)
 
@@ -2891,43 +3926,87 @@ def main() -> None:
     )
     result = optimize_geometry(config, reference_stations, input_warnings, reference_source)
 
-    output_dir = config.output_directory
-    optimized_name = optimized_case_name(config.spanload_type)
+    optimized_name = optimized_case_name(config.spanload_type, config.manufacturable_twist)
     reference_name = reference_case_name(config.spanload_type)
-    optimized_csv = output_dir / f"{optimized_name}.csv"
+    output_dir = config.output_directory
+    assert_geometry_output_path(output_dir)
+    figure_dir = get_figures_dir(
+        "geometry_optimizer",
+        model_source=MODEL_SOURCE_OPTIMIZER,
+        case_name=optimized_name,
+    )
+    reference_dir = get_results_dir(
+        "geometry_optimizer",
+        model_source=MODEL_SOURCE_OPTIMIZER,
+        case_name=reference_name,
+    )
+    audits_dir = get_results_dir(
+        "geometry_optimizer",
+        model_source=MODEL_SOURCE_OPTIMIZER,
+        case_name="audits",
+    )
+    geometry_root = get_results_dir(
+        "geometry_optimizer",
+        model_source=MODEL_SOURCE_OPTIMIZER,
+    )
+    optimized_csv = output_dir / optimizer_geometry_csv_name(optimized_name)
     optimized_xlsx = output_dir / f"{optimized_name}.xlsx"
-    reference_csv = output_dir.parent / "reference" / f"{reference_name}.csv"
-    history_csv = output_dir / "convergence_history.csv"
-    summary_json = output_dir / "solver_summary.json"
+    diagnostic_csv = output_dir / f"{optimized_name}_diagnostics.csv"
+    reference_csv = reference_dir / optimizer_geometry_csv_name(reference_name)
+    history_csv = output_dir / f"{optimized_name}_convergence_history.csv"
+    summary_json = output_dir / f"{optimized_name}_summary.json"
+    case_history_csv = output_dir / "convergence_history.csv"
+    case_summary_json = output_dir / "solver_summary.json"
     methodology_txt = output_dir / "methodology_statement.txt"
 
     write_csv(result, optimized_csv)
+    write_diagnostic_csv(result, diagnostic_csv)
     write_reference_csv(reference_stations, config.radius_m, reference_csv)
     write_convergence_history_csv(result.convergence_history, history_csv)
+    write_convergence_history_csv(result.convergence_history, case_history_csv)
     plot_warnings: List[str] = []
     if config.make_plots:
-        plot_warnings = plot_thesis_outputs(result, reference_stations, output_dir)
+        plot_warnings = plot_thesis_outputs(result, reference_stations, figure_dir, optimized_csv)
         if plot_warnings:
             result = replace(result, warnings=dedupe_warnings(list(result.warnings) + plot_warnings))
     write_summary_json(result, summary_json)
-    write_methodology_statement(methodology_txt)
+    write_summary_json(result, case_summary_json)
+    write_methodology_statement(methodology_txt, config)
     audit_reference_path = config.reference_csv_path
     if audit_reference_path.suffix.lower() not in {".xlsx", ".xlsm"}:
         audit_reference_path = default_reference_csv_path()
     if audit_reference_path.exists() and audit_reference_path.suffix.lower() in {".xlsx", ".xlsm"}:
-        write_scaled_reference_geometry_audit(output_dir.parent / "reference", audit_reference_path, output_dir.parent / "optimized")
-    write_xlsx(result, reference_stations, optimized_xlsx)
+        write_scaled_reference_geometry_audit(audits_dir, audit_reference_path, geometry_root)
+    try:
+        write_xlsx(result, reference_stations, optimized_xlsx)
+        xlsx_written = True
+    except PermissionError as exc:
+        xlsx_written = False
+        result = replace(
+            result,
+            warnings=dedupe_warnings(
+                list(result.warnings)
+                + [f"could not write Excel workbook because the file is locked or not writable: {exc}"]
+            ),
+        )
+        write_summary_json(result, summary_json)
+        write_summary_json(result, case_summary_json)
 
     print_summary(result)
     print()
     print(f"Wrote optimized geometry CSV to: {optimized_csv}")
-    print(f"Wrote optimized geometry Excel workbook to: {optimized_xlsx}")
+    print(f"Wrote diagnostic station CSV to: {diagnostic_csv}")
+    if xlsx_written:
+        print(f"Wrote optimized geometry Excel workbook to: {optimized_xlsx}")
+    else:
+        print(f"Skipped optimized geometry Excel workbook because it is locked: {optimized_xlsx}")
     print(f"Wrote reference geometry CSV to: {reference_csv}")
     print(f"Wrote convergence history CSV to: {history_csv}")
     print(f"Wrote solver summary JSON to: {summary_json}")
+    print(f"Wrote case solver summary JSON to: {case_summary_json}")
     print(f"Wrote methodology statement to: {methodology_txt}")
     if config.make_plots and not plot_warnings:
-        print(f"Wrote thesis plots to: {output_dir}")
+        print(f"Wrote thesis plots to: {figure_dir}")
 
 
 if __name__ == "__main__":

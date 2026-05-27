@@ -20,6 +20,7 @@ from aero_solver import (
     iterate_to_target_thrust,
     load_geometry,
     load_polar,
+    plot_case_comparison,
     parse_xrotor_output,
     rpm_to_omega,
     run_xrotor_comparison,
@@ -55,6 +56,42 @@ def _write_alias_geometry(path: Path) -> Path:
     rows = [
         {"mu": 0.20, "radius_m": 0.05588, "chord_m": 0.045, "twist_deg": 25.0, "airfoil": "TEST"},
         {"mu": 0.40, "radius_m": 0.11176, "chord_m": 0.050, "twist_deg": 20.0, "airfoil": "TEST"},
+    ]
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+    return path
+
+
+def _write_imported_aero_geometry(path: Path) -> Path:
+    rows = [
+        {
+            "mu": 0.50,
+            "radius_m": 0.13970,
+            "dr_m": 0.05,
+            "chord_m": 0.040,
+            "twist_deg": 18.0,
+            "airfoil": "TEST",
+            "alpha_deg": 4.0,
+            "cl": 0.40,
+            "cd": 0.012,
+            "dthrust_n": 1.25,
+            "dtorque_nm": 0.020,
+        },
+        {
+            "mu": 1.00,
+            "radius_m": 0.27940,
+            "dr_m": 0.05,
+            "chord_m": 0.020,
+            "twist_deg": 2.5,
+            "airfoil": "TEST",
+            "alpha_deg": 0.1,
+            "cl": 0.05,
+            "cd": 0.010,
+            "dthrust_n": 0.10,
+            "dtorque_nm": 0.002,
+        },
     ]
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
@@ -358,6 +395,158 @@ def test_aero_config_validation_catches_missing_geometry_missing_polars_and_inva
     assert any("RPM must be >= 0" in error for error in errors)
 
 
+def test_geometry_source_case_type_ignores_csv_for_builtin(tmp_path):
+    user_geometry = _write_imported_aero_geometry(tmp_path / "optimized_gmt.csv")
+    config = get_default_aero_config()
+    config.update(
+        {
+            "case_type": "scaled_reference_gmt_22",
+            "geometry_csv_path": str(user_geometry),
+        }
+    )
+
+    path, source_mode, warnings = aero_solver.resolve_geometry_source_from_config(config)
+
+    assert path == aero_solver.CASE_GEOMETRY_PATHS["scaled_reference_gmt_22"]
+    assert source_mode == "built_in:scaled_reference_gmt_22"
+    assert any("ignored because case type is set to scaled_reference_gmt_22" in warning for warning in warnings)
+
+
+def test_builtin_geometry_uses_legacy_fallback_when_canonical_missing(tmp_path, monkeypatch):
+    canonical = tmp_path / "results/geometry_optimizer/optimized_gmt/optimized_gmt_optimizer_geometry.csv"
+    legacy = tmp_path / "results/geometry/optimized/optimized_gmt_optimizer_geometry.csv"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("r_R,chord_m,twist_deg\n0.5,0.02,20.0\n", encoding="utf-8")
+    monkeypatch.setitem(aero_solver.CASE_GEOMETRY_PATHS, "optimized_gmt_22", canonical)
+    monkeypatch.setitem(aero_solver.LEGACY_CASE_GEOMETRY_PATHS, "optimized_gmt_22", legacy)
+
+    path, source_mode, warnings = aero_solver.resolve_geometry_source_from_config(
+        {"case_type": "optimized_gmt_22", "geometry_csv_path": str(legacy)}
+    )
+
+    assert path == legacy
+    assert source_mode == "built_in:optimized_gmt_22"
+    assert any("using legacy geometry CSV" in warning for warning in warnings)
+    assert not any("ignored because case type" in warning for warning in warnings)
+
+
+def test_builtin_geometry_prefers_canonical_when_available(tmp_path, monkeypatch):
+    canonical = tmp_path / "results/geometry_optimizer/optimized_gmt/optimized_gmt_optimizer_geometry.csv"
+    legacy = tmp_path / "results/geometry/optimized/optimized_gmt_optimizer_geometry.csv"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_text("r_R,chord_m,twist_deg\n0.5,0.02,20.0\n", encoding="utf-8")
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("r_R,chord_m,twist_deg\n0.5,0.03,21.0\n", encoding="utf-8")
+    monkeypatch.setitem(aero_solver.CASE_GEOMETRY_PATHS, "optimized_gmt_22", canonical)
+    monkeypatch.setitem(aero_solver.LEGACY_CASE_GEOMETRY_PATHS, "optimized_gmt_22", legacy)
+
+    path, source_mode, warnings = aero_solver.resolve_geometry_source_from_config({"case_type": "optimized_gmt_22"})
+
+    assert path == canonical
+    assert source_mode == "built_in:optimized_gmt_22"
+    assert not any("legacy geometry CSV" in warning for warning in warnings)
+
+
+def test_load_from_geometry_csv_exports_imported_station_values(tmp_path):
+    geometry_path = _write_imported_aero_geometry(tmp_path / "optimized_gmt.csv")
+    output_dir = tmp_path / "out"
+    config = get_default_aero_config()
+    config.update(
+        {
+            "case_name": "imported_case",
+            "case_type": aero_solver.GEOMETRY_CSV_CASE_TYPE,
+            "geometry_csv_path": str(geometry_path),
+            "output_dir": str(output_dir),
+            "figure_output_dir": str(tmp_path / "figures"),
+            "target_thrust_N": 1.35,
+            "match_target": False,
+            "prefer_imported_station_aero": True,
+            "generate_plots": False,
+        }
+    )
+
+    results = aero_solver.run_aero_from_config(config)
+    stations = results["stations"]
+
+    assert results["summary"]["geometry_source_mode"] == aero_solver.GEOMETRY_CSV_CASE_TYPE
+    assert results["summary"]["aero_source"] == "optimizer_station_data"
+    assert results["summary"]["model_source"] == aero_solver.MODEL_SOURCE_IMPORTED_CSV
+    assert results["summary"]["station_aero_values_imported"] is True
+    assert results["summary"]["kinematic_fields_estimated"] is True
+    assert results["summary"]["station_source_csv"].endswith("imported_case_optimizer_station_data_stations.csv")
+    assert results["summary"]["twist_column_used"] == "twist_deg"
+    assert results["summary"]["geometry_source_csv_modified_time"]
+    assert results["summary"]["thrust_N"] == pytest.approx(1.35)
+    assert results["summary"]["torque_Nm"] == pytest.approx(0.022)
+    assert results["summary"]["Re_min"] > 0.0
+    assert results["summary"]["valid_for_optimizer_summary"] is True
+    assert results["summary"]["valid_for_bemt_summary"] is False
+    assert results["summary"]["valid_for_thesis_export"] is True
+    assert stations[-1]["r_R"] == pytest.approx(1.0)
+    assert stations[-1]["model_source"] == aero_solver.MODEL_SOURCE_IMPORTED_CSV
+    assert stations[-1]["chord_m"] == pytest.approx(0.020)
+    assert stations[-1]["twist_deg"] == pytest.approx(2.5)
+    assert stations[-1]["alpha_deg"] == pytest.approx(0.1)
+    assert stations[-1]["Cl"] == pytest.approx(0.05)
+    assert stations[-1]["dT_N"] == pytest.approx(0.10)
+    assert stations[-1]["dQ_Nm"] == pytest.approx(0.002)
+    assert stations[-1]["alpha_recomputed_deg"] == ""
+    assert stations[-1]["dthrust_recomputed_n"] == ""
+    assert stations[-1]["Re"] > 0.0
+    assert stations[-1]["Vrel_m_s"] > 0.0
+    assert "kinematic estimates" in stations[-1]["kinematic_estimate_note"]
+    assert aero_solver.validate_result_geometry_matches_source(results) == []
+
+    mismatched = dict(results)
+    mismatched["stations"] = [dict(row) for row in results["stations"]]
+    mismatched["stations"][-1]["twist_input_deg"] = 99.0
+    errors = aero_solver.validate_result_geometry_matches_source(mismatched)
+    assert any("twist_input_deg mismatch" in error for error in errors)
+
+    with (output_dir / "imported_case_optimizer_station_data_stations.csv").open(newline="", encoding="utf-8") as handle:
+        exported_rows = list(csv.DictReader(handle))
+    assert exported_rows[-1]["r_R"] == "1.0"
+    assert exported_rows[-1]["model_source"] == aero_solver.MODEL_SOURCE_IMPORTED_CSV
+    assert exported_rows[-1]["station_source_csv"].endswith("imported_case_optimizer_station_data_stations.csv")
+    assert exported_rows[-1]["twist_column_used"] == "twist_deg"
+    assert exported_rows[-1]["twist_deg"] == "2.5"
+    assert exported_rows[-1]["dT_N"] == "0.1"
+    assert float(exported_rows[-1]["Re"]) > 0.0
+
+    with (output_dir / "imported_case_optimizer_station_data_audit.csv").open(newline="", encoding="utf-8") as handle:
+        audit_rows = list(csv.DictReader(handle))
+    assert audit_rows[-1]["model_source"] == aero_solver.MODEL_SOURCE_IMPORTED_CSV
+    assert audit_rows[-1]["aero_source"] == "optimizer_station_data"
+    assert audit_rows[-1]["alpha_recomputed_deg"] == ""
+    assert audit_rows[-1]["dthrust_recomputed_n"] == ""
+
+
+def test_target_match_validity_uses_selected_tolerance_for_imported_csv(tmp_path):
+    geometry_path = _write_imported_aero_geometry(tmp_path / "optimized_gmt.csv")
+    config = get_default_aero_config()
+    config.update(
+        {
+            "case_name": "strict_imported_case",
+            "case_type": aero_solver.GEOMETRY_CSV_CASE_TYPE,
+            "geometry_csv_path": str(geometry_path),
+            "output_dir": str(tmp_path / "out"),
+            "figure_output_dir": str(tmp_path / "figures"),
+            "target_thrust_N": 1.36,
+            "tolerance_pct": 0.1,
+            "match_target": False,
+            "prefer_imported_station_aero": True,
+            "generate_plots": False,
+        }
+    )
+
+    results = aero_solver.run_aero_from_config(config)
+
+    assert results["summary"]["thrust_error_pct"] == pytest.approx((1.35 - 1.36) / 1.36 * 100.0)
+    assert results["summary"]["target_matched"] is False
+    assert results["summary"]["valid_for_optimizer_summary"] is False
+    assert "outside selected tolerance 0.100%" in results["summary"]["failure_reason"]
+
+
 def test_evaluate_propeller_integrates_loadings_and_coefficients(tmp_path):
     geometry = load_geometry(_write_geometry(tmp_path / "geometry.csv"))
     polar = AirfoilPolar(placeholder=True)
@@ -373,6 +562,8 @@ def test_evaluate_propeller_integrates_loadings_and_coefficients(tmp_path):
     assert stations[-1]["cumulative_thrust_fraction"] == pytest.approx(1.0)
     assert stations[-1]["cumulative_torque_fraction"] == pytest.approx(1.0)
     assert "target_matched" in summary
+    assert summary["model_source"] == aero_solver.MODEL_SOURCE_BEMT_XFOIL
+    assert stations[0]["model_source"] == aero_solver.MODEL_SOURCE_BEMT_XFOIL
     assert "valid_for_thesis" in summary
 
 
@@ -408,11 +599,15 @@ def test_export_results_writes_station_and_summary_files(tmp_path):
     assert "thrust_N" in written["summary_txt"].read_text(encoding="utf-8")
     payload = json.loads(written["summary_json"].read_text(encoding="utf-8"))
     required_summary_flags = (
+        "model_source",
         "xfoil_polars_used",
         "xfoil_success",
         "xrotor_ran",
         "xrotor_success",
         "polar_is_placeholder",
+        "valid_for_optimizer_summary",
+        "valid_for_bemt_summary",
+        "valid_for_thesis_export",
         "valid_for_thesis",
     )
     for key in required_summary_flags:
@@ -441,10 +636,13 @@ def test_main_xfoil_failure_writes_invalid_summary(tmp_path, monkeypatch):
     monkeypatch.setattr(aero_solver, "ensure_xfoil_polars_available", fail_xfoil)
 
     output_dir = tmp_path / "out"
+    geometry_path = _write_geometry(tmp_path / "geometry.csv")
     rc = aero_solver.main(
         [
             "--case-name",
             "xfoil_fail_case",
+            "--geometry",
+            str(geometry_path),
             "--airfoil-dir",
             str(tmp_path / "airfoils"),
             "--results-dir",
@@ -538,8 +736,67 @@ def test_compare_cases_returns_requested_metrics(tmp_path):
     assert math.isfinite(metrics["mil_max_Cl"])
 
 
+def test_plot_case_comparison_writes_overlays_and_refuses_stale_geometry(tmp_path):
+    mil_geometry = _write_imported_aero_geometry(tmp_path / "optimized_mil.csv")
+    gmt_geometry = _write_imported_aero_geometry(tmp_path / "optimized_gmt.csv")
+    station_paths = []
+    for case_name, geometry_path in (("mil_case", mil_geometry), ("gmt_case", gmt_geometry)):
+        output_dir = tmp_path / case_name
+        config = get_default_aero_config()
+        config.update(
+            {
+                "case_name": case_name,
+                "case_type": aero_solver.GEOMETRY_CSV_CASE_TYPE,
+                "geometry_csv_path": str(geometry_path),
+                "output_dir": str(output_dir),
+                "figure_output_dir": str(tmp_path / "figures"),
+                "target_thrust_N": 1.35,
+                "match_target": False,
+                "prefer_imported_station_aero": True,
+                "generate_plots": False,
+            }
+        )
+        aero_solver.run_aero_from_config(config)
+        station_paths.append(output_dir / f"{case_name}_optimizer_station_data_stations.csv")
+
+    written = plot_case_comparison(station_paths[0], station_paths[1], tmp_path / "comparison", "mil_vs_gmt")
+
+    assert "reynolds_distribution_compare" in written
+    assert len(written) == 9
+    for paths in written.values():
+        assert len(paths) == 2
+        assert all(path.exists() for path in paths)
+        assert not any(path.suffix == ".pdf" for path in paths)
+    metadata_path = tmp_path / "comparison" / "twist_distribution_compare.png.metadata.json"
+    summary_path = tmp_path / "comparison" / "comparison_summary.json"
+    summary_csv_path = tmp_path / "comparison" / "comparison_summary.csv"
+    comparison_metadata_path = tmp_path / "comparison" / "comparison_metadata.json"
+    assert metadata_path.exists()
+    assert summary_path.exists()
+    assert summary_csv_path.exists()
+    assert comparison_metadata_path.exists()
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert metadata["twist_column_used"] == "twist_deg"
+    assert metadata["station_source_csv"]["MIL"].endswith("mil_case_optimizer_station_data_stations.csv")
+
+    stale_path = tmp_path / "stale_stations.csv"
+    with station_paths[1].open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    rows[-1]["chord_m"] = "99.0"
+    with stale_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
+    with pytest.raises(ValueError, match="Refusing to plot"):
+        plot_case_comparison(station_paths[0], stale_path, tmp_path / "bad_comparison", "bad")
+
+
 def test_thesis_22_static_35n_regression_matches_target():
-    geometry_path = Path("results/geometry/optimized/optimized_mil/optimized_mil.csv")
+    geometry_path = Path("results/geometry_optimizer/optimized_mil/optimized_mil_optimizer_geometry.csv")
+    if not geometry_path.is_file():
+        geometry_path = Path("results/geometry_optimizer/optimized_mil/optimized_mil.csv")
+    if not geometry_path.is_file():
+        pytest.skip("optimized MIL geometry CSV has not been generated in the canonical output folder")
     geometry = load_geometry(geometry_path)
     polar = AirfoilPolar(placeholder=True, cl_max_debug=1.5)
 

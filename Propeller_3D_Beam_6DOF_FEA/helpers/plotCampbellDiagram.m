@@ -383,19 +383,17 @@ if ~exist(folder,'dir')
     mkdir(folder);
 end
 png_file = fullfile(folder,[name '.png']);
-pdf_file = fullfile(folder,[name '.pdf']);
 svg_file = fullfile(folder,[name '.svg']);
 
 if exist('exportgraphics','file')
     exportgraphics(fig,png_file,'Resolution',300);
-    exportgraphics(fig,pdf_file,'ContentType','vector');
+    exportgraphics(fig,svg_file,'ContentType','vector');
 else
     saveas(fig,png_file);
-    saveas(fig,pdf_file);
-end
-try
-    saveas(fig,svg_file);
-catch
+    try
+        saveas(fig,svg_file);
+    catch
+    end
 end
 
 end

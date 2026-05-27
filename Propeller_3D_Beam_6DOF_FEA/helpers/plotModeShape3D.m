@@ -75,11 +75,9 @@ end
 function saveModeFigure(fig,results_dir,stem)
 
 if exist('exportgraphics','file')
-    exportgraphics(fig,fullfile(results_dir,[stem '.pdf']),'ContentType','vector');
     exportgraphics(fig,fullfile(results_dir,[stem '.svg']),'ContentType','vector');
     exportgraphics(fig,fullfile(results_dir,[stem '.png']),'Resolution',300);
 else
-    saveas(fig,fullfile(results_dir,[stem '.pdf']));
     try
         saveas(fig,fullfile(results_dir,[stem '.svg']));
     catch

@@ -15,26 +15,52 @@ import streamlit as st
 import aero_solver
 from airfoil_tools.airfoil_polar_loader import load_airfoil_polars
 from airfoil_tools.generate_xfoil_polars import find_xfoil_executable, generate_xfoil_polars
+from output_paths import get_results_dir, get_figures_dir, assert_aero_output_path, resolve_project_output_path
 
 
 REQUIRED_AIRFOILS = aero_solver.REQUIRED_AIRFOILS
 REQUIRED_REYNOLDS = aero_solver.REQUIRED_POLAR_REYNOLDS_NUMBERS
-DEFAULT_CONFIG_PATH = aero_solver.PROJECT_ROOT / "configs/aero/thesis_22_static_35N_config.json"
+DEFAULT_CONFIG_PATH = (
+    get_results_dir("aero_postprocess", model_source="optimizer_station_data", case_name="optimized_gmt")
+    / "aero_solver_ui_config.json"
+)
 
 STATION_DISPLAY_COLUMNS = [
     "r_R",
+    "model_source",
     "r_m",
     "chord_m",
     "twist_deg",
+    "twist_input_deg",
+    "twist_offset_deg",
+    "twist_effective_deg",
     "airfoil",
+    "source_file",
+    "source_geometry_csv",
     "Re",
     "polar_Re_used",
     "phi_deg",
     "alpha_deg",
+    "alpha_imported_deg",
+    "alpha_recomputed_deg",
     "Cl",
+    "cl_imported",
+    "cl_recomputed",
     "Cd",
+    "cd_imported",
+    "cd_recomputed",
+    "omega_rad_s",
+    "Vi_m_s",
+    "Vt_m_s",
+    "Va_m_s",
+    "Vrel_m_s",
+    "kinematic_estimate_note",
     "dT_N",
+    "dthrust_imported_n",
+    "dthrust_recomputed_n",
     "dQ_Nm",
+    "dtorque_imported_nm",
+    "dtorque_recomputed_nm",
     "qz_N_per_m",
     "qy_tangential_N_per_m",
     "torque_loading_Nm_per_m",
@@ -54,6 +80,7 @@ PLOT_STEMS = [
 ]
 
 SUMMARY_METRICS = [
+    ("Model source", "model_source"),
     ("Thrust [N]", "thrust_N"),
     ("Target thrust [N]", "target_thrust_N"),
     ("Thrust error [%]", "thrust_error_pct"),
@@ -69,7 +96,9 @@ SUMMARY_METRICS = [
     ("Re min [-]", "Re_min"),
     ("Re max [-]", "Re_max"),
     ("Collective offset [deg]", "collective_twist_offset_deg"),
-    ("Valid for thesis", "valid_for_thesis"),
+    ("Valid optimizer summary", "valid_for_optimizer_summary"),
+    ("Valid BEMT summary", "valid_for_bemt_summary"),
+    ("Valid thesis export", "valid_for_thesis_export"),
 ]
 
 LOAD_PLOT_SPECS = [
@@ -114,11 +143,13 @@ def _sidebar_config(base_config: dict[str, Any]) -> dict[str, Any]:
     config = dict(base_config)
     st.sidebar.title("Aero Solver Inputs")
     case_type_options = [
+        aero_solver.GEOMETRY_CSV_CASE_TYPE,
         "scaled_reference_mil_22",
         "scaled_reference_gmt_22",
         "optimized_mil_22",
         "optimized_gmt_22",
-        "custom",
+        "optimized_mil_22_manufacturable",
+        "optimized_gmt_22_manufacturable",
     ]
 
     with st.sidebar.expander("Case Setup", expanded=True):
@@ -126,23 +157,52 @@ def _sidebar_config(base_config: dict[str, Any]) -> dict[str, Any]:
         case_type = st.selectbox(
             "Case type",
             case_type_options,
-            index=case_type_options.index(str(config.get("case_type", "optimized_mil_22")))
-            if str(config.get("case_type", "optimized_mil_22")) in case_type_options
-            else 2,
+            index=case_type_options.index(str(config.get("case_type", aero_solver.GEOMETRY_CSV_CASE_TYPE)))
+            if str(config.get("case_type", aero_solver.GEOMETRY_CSV_CASE_TYPE)) in case_type_options
+            else 0,
         )
-        default_geometry = aero_solver.CASE_GEOMETRY_PATHS.get(case_type, aero_solver.CASE_GEOMETRY_PATHS["optimized_mil_22"])
-        geometry_value = (
-            str(default_geometry) if case_type != "custom" else str(config.get("geometry_csv_path", default_geometry))
+        default_geometry = aero_solver.CASE_GEOMETRY_PATHS.get(case_type, aero_solver.CASE_GEOMETRY_PATHS["optimized_gmt_22"])
+        geometry_value = str(config.get("geometry_csv_path", aero_solver.CASE_GEOMETRY_PATHS["optimized_gmt_22"]))
+        geometry_csv_path = st.text_input(
+            "Geometry CSV path (only used when case type = load_from_geometry_csv)",
+            value=geometry_value,
         )
-        geometry_csv_path = st.text_input("Geometry CSV path", value=geometry_value)
-        _path_status(geometry_csv_path, "geometry CSV", must_exist=True, expect_dir=False)
+        resolved_geometry = default_geometry
+        geometry_resolution_warnings: list[str] = []
+        try:
+            resolved_geometry, _, geometry_resolution_warnings = aero_solver.resolve_geometry_source_from_config(
+                {"case_type": case_type, "geometry_csv_path": geometry_csv_path}
+            )
+        except ValueError as exc:
+            st.error(str(exc))
+        if case_type == aero_solver.GEOMETRY_CSV_CASE_TYPE:
+            _path_status(geometry_csv_path, "geometry CSV", must_exist=True, expect_dir=False)
+        else:
+            for warning in geometry_resolution_warnings:
+                st.warning(warning)
+            st.info(f"Using built-in {case_type} geometry.")
+            st.text_input("Resolved built-in geometry path", value=str(resolved_geometry), disabled=True)
+            _path_status(resolved_geometry, "built-in geometry CSV", must_exist=True, expect_dir=False)
 
-        output_dir = st.text_input("Output directory", value=str(config.get("output_dir", "results/aero")))
+        output_dir = st.text_input(
+            "Output directory",
+            value=str(
+                config.get(
+                    "output_dir",
+                    get_results_dir("aero_postprocess", model_source="optimizer_station_data", case_name="optimized_gmt"),
+                )
+            ),
+        )
         _path_status(output_dir, "output directory", must_exist=False, expect_dir=True)
 
         figure_output_dir = st.text_input(
             "Figure output directory",
-            value=str(config.get("figure_output_dir", "figures_paper/aero")),
+            value=str(
+                config.get(
+                    "figure_output_dir",
+                    get_figures_dir("aero_postprocess", model_source="optimizer_station_data", case_name="optimized_gmt"),
+                )
+            ),
         )
         _path_status(figure_output_dir, "figure directory", must_exist=False, expect_dir=True)
 
@@ -176,7 +236,18 @@ def _sidebar_config(base_config: dict[str, Any]) -> dict[str, Any]:
             st.info("Static hover: actuator-disk induced velocity is active in the backend.")
 
     with st.sidebar.expander("Solver Options", expanded=True):
-        match_target = st.checkbox("Match target thrust", value=bool(config.get("match_target", True)))
+        match_target = st.checkbox(
+            "Match target thrust by applying collective twist offset",
+            value=False if case_type == aero_solver.GEOMETRY_CSV_CASE_TYPE else bool(config.get("match_target", True)),
+        )
+        prefer_imported_station_aero = True
+        if case_type == aero_solver.GEOMETRY_CSV_CASE_TYPE:
+            prefer_imported_station_aero = st.checkbox(
+                "Use imported aero columns from geometry CSV when available",
+                value=bool(config.get("prefer_imported_station_aero", True)),
+            )
+            if prefer_imported_station_aero:
+                st.info("Station Data and exported station CSV use imported optimized CSV values; postprocessor recomputation is not mixed in.")
         tolerance_pct = st.number_input(
             "Target match tolerance [%]",
             min_value=0.001,
@@ -268,6 +339,7 @@ def _sidebar_config(base_config: dict[str, Any]) -> dict[str, Any]:
         "target_thrust_N": target_thrust,
         "hover_mode": hover_mode,
         "match_target": match_target,
+        "prefer_imported_station_aero": prefer_imported_station_aero,
         "tolerance_pct": tolerance_pct,
         "airfoil_dir": airfoil_dir,
         "xfoil_path": xfoil_path,
@@ -314,6 +386,47 @@ def _main_controls(config: dict[str, Any]) -> None:
             use_container_width=True,
         )
 
+    with st.expander("MIL vs GMT Comparison Plots", expanded=False):
+        default_output = str(
+            get_figures_dir("aero_postprocess", comparison_name=str(config.get("comparison_label", "optimized_mil_vs_gmt")))
+        )
+        compare_cols = st.columns(2)
+        with compare_cols[0]:
+            mil_station_csv = st.text_input(
+                "MIL station CSV",
+                value=str(
+                    config.get(
+                        "comparison_mil_station_csv",
+                        get_results_dir("aero_postprocess", model_source="optimizer_station_data", case_name="optimized_mil")
+                        / "optimized_mil_22_optimizer_station_data_stations.csv",
+                    )
+                ),
+            )
+        with compare_cols[1]:
+            gmt_station_csv = st.text_input(
+                "GMT station CSV",
+                value=str(
+                    config.get(
+                        "comparison_gmt_station_csv",
+                        get_results_dir("aero_postprocess", model_source="optimizer_station_data", case_name="optimized_gmt")
+                        / "optimized_gmt_22_optimizer_station_data_stations.csv",
+                    )
+                ),
+            )
+        compare_cols_2 = st.columns(2)
+        with compare_cols_2[0]:
+            comparison_output_dir = st.text_input(
+                "Comparison figure directory",
+                value=str(config.get("comparison_output_dir", default_output)),
+            )
+        with compare_cols_2[1]:
+            comparison_label = st.text_input(
+                "Comparison label",
+                value=str(config.get("comparison_label", "optimized_mil_vs_gmt")),
+            )
+        if st.button("Generate MIL vs GMT Comparison Plots", use_container_width=True):
+            _generate_comparison_plots(mil_station_csv, gmt_station_csv, comparison_output_dir, comparison_label)
+
     if validate_clicked:
         _show_validation(config)
     if run_clicked:
@@ -336,6 +449,14 @@ def _display_results(config: dict[str, Any]) -> None:
 
     summary = results.get("summary", {})
     station_frame = _station_frame_from_results_or_file(results, config)
+    _display_geometry_source_banner(results, config)
+    validation_errors = _station_geometry_source_mismatch_errors(station_frame, results, config)
+    if validation_errors:
+        st.error("Loaded station geometry does not match the selected geometry CSV. Refusing to plot.")
+        for error in validation_errors:
+            st.write(f"- {error}")
+        _display_geometry_debug_table(results)
+        return
     tabs = st.tabs(
         [
             "Summary",
@@ -372,7 +493,7 @@ def _display_results(config: dict[str, Any]) -> None:
         _display_data_subset(station_frame, ["r_R", "airfoil", "Cl", "Cd", "Cm", "alpha_deg", "polar_source"])
     with tabs[4]:
         _display_plot_tab(station_frame, RE_ALPHA_PLOT_SPECS, "Reynolds / Alpha")
-        _display_data_subset(station_frame, ["r_R", "airfoil", "Re", "polar_Re_used", "alpha_deg", "phi_deg"])
+        _display_data_subset(station_frame, ["r_R", "airfoil", "Re", "polar_Re_used", "alpha_deg", "phi_deg", "Vi_m_s", "Vt_m_s", "Va_m_s", "Vrel_m_s", "kinematic_estimate_note"])
     with tabs[5]:
         _display_xrotor_comparison(config, summary)
     with tabs[6]:
@@ -384,7 +505,7 @@ def _display_summary_tab(results: dict[str, Any], station_frame: pd.DataFrame, c
     st.subheader("Summary")
     status = _result_status(summary)
     if status == "green":
-        st.success("Target matched and valid for thesis.")
+        st.success("Target matched and valid for thesis export.")
     elif status == "yellow":
         st.warning("Result is conditional. Review warnings and comparison notes.")
     else:
@@ -400,11 +521,156 @@ def _display_summary_tab(results: dict[str, Any], station_frame: pd.DataFrame, c
                 st.warning(str(warning))
 
 
+def _display_geometry_source_banner(results: dict[str, Any], config: dict[str, Any]) -> None:
+    details = _geometry_source_details_from_results(results)
+    summary = results.get("summary", {})
+    source_mode = str(details.get("source_mode") or results.get("summary", {}).get("geometry_source_mode") or config.get("case_type", ""))
+    full_path = str(details.get("full_path") or results.get("geometry_source_csv") or "")
+    model_source = str(summary.get("model_source") or results.get("model_source") or "")
+    imported_display = model_source == aero_solver.MODEL_SOURCE_IMPORTED_CSV or bool(summary.get("station_aero_values_imported"))
+    if source_mode.startswith("built_in:"):
+        case_type = source_mode.split(":", 1)[1]
+        if case_type == "scaled_reference_gmt_22":
+            st.warning("Using built-in scaled reference GMT geometry, not optimized_gmt.csv.")
+        else:
+            st.info(f"Using built-in geometry case {case_type}, not the Geometry CSV path.")
+    elif source_mode == aero_solver.GEOMETRY_CSV_CASE_TYPE:
+        st.success("Using geometry loaded from the Geometry CSV path.")
+    else:
+        st.info(f"Geometry source mode: {source_mode or 'unknown'}")
+    if imported_display:
+        st.info("Station aero values are imported from optimizer output. Reynolds and inflow fields are kinematic estimates.")
+    else:
+        st.info("Station aero values are BEMT/XFOIL recomputed results.")
+
+    rows = [
+        {"field": "current case type", "value": config.get("case_type", "")},
+        {"field": "source mode", "value": source_mode},
+        {"field": "actual geometry CSV used", "value": full_path},
+        {"field": "station source CSV", "value": summary.get("station_source_csv", "")},
+        {"field": "twist column used", "value": summary.get("twist_column_used", "twist_deg")},
+        {"field": "model source", "value": _model_source_label(model_source)},
+        {"field": "displayed station aero", "value": "imported optimizer station data" if imported_display else "BEMT/XFOIL recomputation"},
+        {"field": "file modified time", "value": details.get("modified_time", "")},
+        {"field": "number of stations loaded", "value": details.get("station_count", "")},
+    ]
+    for label, station_key in (("first station", "first_station"), ("last station", "last_station")):
+        station = details.get(station_key, {}) if isinstance(details.get(station_key), dict) else {}
+        rows.append(
+            {
+                "field": label,
+                "value": (
+                    f"r/R={station.get('r_R')}, chord_m={station.get('chord_m')}, "
+                    f"twist_deg={station.get('twist_deg')}, airfoil={station.get('airfoil')}"
+                ),
+            }
+        )
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
+def _model_source_label(model_source: str) -> str:
+    labels = {
+        aero_solver.MODEL_SOURCE_OPTIMIZER: "optimizer_reduced_order",
+        aero_solver.MODEL_SOURCE_BEMT_XFOIL: "bemt_xfoil",
+        aero_solver.MODEL_SOURCE_IMPORTED_CSV: "optimizer_station_data",
+    }
+    return labels.get(model_source, model_source or "unknown")
+
+
+def _geometry_source_details_from_results(results: dict[str, Any]) -> dict[str, Any]:
+    summary = results.get("summary", {})
+    details = results.get("geometry_source_details") or summary.get("geometry_source_details") or {}
+    return details if isinstance(details, dict) else {}
+
+
+def _display_geometry_debug_table(results: dict[str, Any]) -> None:
+    details = _geometry_source_details_from_results(results)
+    rows = details.get("debug_rows", [])
+    if not rows:
+        return
+    st.subheader("Geometry Source Debug Rows")
+    st.caption("First 5 and last 5 rows from the geometry dataframe before aero calculations.")
+    frame = _coerce_numeric_frame(pd.DataFrame(rows))
+    visible = [column for column in ["r_R", "r_m", "chord_m", "twist_deg", "airfoil", "source_file"] if column in frame.columns]
+    st.dataframe(_format_station_frame(frame[visible]), use_container_width=True, hide_index=True)
+
+
+def _station_geometry_source_mismatch_errors(
+    station_frame: pd.DataFrame,
+    results: dict[str, Any],
+    config: dict[str, Any],
+) -> list[str]:
+    if station_frame.empty or str(config.get("case_type")) != aero_solver.GEOMETRY_CSV_CASE_TYPE:
+        return []
+    source_path = Path(
+        str(
+            results.get("geometry_source_csv")
+            or results.get("summary", {}).get("geometry_source_csv")
+            or config.get("geometry_csv_path", "")
+        )
+    )
+    if not source_path.is_file():
+        return [f"Geometry source CSV not found for validation: {source_path}"]
+    try:
+        source_frame = _normalized_geometry_frame_from_csv(source_path)
+    except Exception as exc:
+        return [f"Could not read source geometry CSV for validation: {exc}"]
+    loaded_frame = _normalized_geometry_frame_from_station_frame(station_frame)
+    if len(source_frame) != len(loaded_frame):
+        return [f"Station count mismatch: loaded {len(loaded_frame)} rows vs source CSV {len(source_frame)} rows."]
+
+    errors: list[str] = []
+    numeric_checks = [("r_R", 1.0e-8), ("r_m", 1.0e-8), ("chord_m", 1.0e-8), ("twist_input_deg", 1.0e-8)]
+    for column, tolerance in numeric_checks:
+        diff = (loaded_frame[column] - source_frame[column]).abs()
+        if bool((diff > tolerance).any()):
+            worst = float(diff.max())
+            errors.append(f"{column} mismatch between loaded station data and source CSV; max abs diff {worst:.6g}.")
+    if not loaded_frame["airfoil"].astype(str).str.strip().equals(source_frame["airfoil"].astype(str).str.strip()):
+        errors.append("airfoil schedule mismatch between loaded station data and source CSV.")
+    return errors
+
+
+def _normalized_geometry_frame_from_csv(path: Path) -> pd.DataFrame:
+    raw = pd.read_csv(path)
+    columns = {str(column).strip().lower(): column for column in raw.columns}
+
+    def require(*names: str) -> str:
+        for name in names:
+            if name.lower() in columns:
+                return columns[name.lower()]
+        raise ValueError(f"missing required column; expected one of {', '.join(names)}")
+
+    return pd.DataFrame(
+        {
+            "r_R": pd.to_numeric(raw[require("mu", "r_R", "r/r")], errors="raise"),
+            "r_m": pd.to_numeric(raw[require("radius_m", "r_m")], errors="raise"),
+            "chord_m": pd.to_numeric(raw[require("chord_m")], errors="raise"),
+            "twist_input_deg": pd.to_numeric(raw[require("twist_deg")], errors="raise"),
+            "airfoil": raw[require("airfoil")].astype(str).str.strip(),
+        }
+    )
+
+
+def _normalized_geometry_frame_from_station_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    twist_column = "twist_input_deg" if "twist_input_deg" in frame.columns else "twist_deg"
+    return pd.DataFrame(
+        {
+            "r_R": pd.to_numeric(frame["r_R"], errors="raise"),
+            "r_m": pd.to_numeric(frame["r_m"], errors="raise"),
+            "chord_m": pd.to_numeric(frame["chord_m"], errors="raise"),
+            "twist_input_deg": pd.to_numeric(frame[twist_column], errors="raise"),
+            "airfoil": frame["airfoil"].astype(str).str.strip(),
+        }
+    )
+
+
 def _display_station_data_tab(results: dict[str, Any], station_frame: pd.DataFrame, config: dict[str, Any]) -> None:
     st.subheader("Station Data")
     if station_frame.empty:
         st.info("Station data are not available.")
         return
+    _display_geometry_debug_table(results)
     visible_columns = [column for column in STATION_DISPLAY_COLUMNS if column in station_frame.columns]
     st.dataframe(_format_station_frame(station_frame[visible_columns]), use_container_width=True, hide_index=True)
     station_path = _station_csv_path(results, config)
@@ -457,6 +723,20 @@ def _generate_plots(config: dict[str, Any]) -> None:
         st.success("Plots generated.")
     except Exception:
         _show_exception("Plot generation failed")
+
+
+def _generate_comparison_plots(
+    mil_station_csv: str | Path,
+    gmt_station_csv: str | Path,
+    output_dir: str | Path,
+    case_label: str,
+) -> None:
+    try:
+        with st.spinner("Generating MIL vs GMT comparison plots..."):
+            written = aero_solver.plot_case_comparison(mil_station_csv, gmt_station_csv, output_dir, case_label)
+        st.success(f"Generated {sum(len(paths) for paths in written.values())} comparison plot files.")
+    except Exception:
+        _show_exception("Comparison plot generation failed")
 
 
 def _run_xrotor_only(config: dict[str, Any]) -> None:
@@ -532,8 +812,9 @@ def _display_files_tab(results: dict[str, Any], station_frame: pd.DataFrame, con
     clean_name = _clean_case_name(case_name)
     output_dir = Path(config["output_dir"])
     figure_dir = Path(config["figure_output_dir"])
+    station_path = _station_csv_path(results, config)
     file_rows = [
-        ("Station CSV", output_dir / f"{clean_name}_stations.csv"),
+        ("Station CSV", station_path),
         ("Summary JSON", output_dir / f"{clean_name}_summary.json"),
         ("Summary TXT", output_dir / f"{clean_name}_summary.txt"),
         ("XROTOR comparison CSV", output_dir / "xrotor_comparison_summary.csv"),
@@ -542,8 +823,8 @@ def _display_files_tab(results: dict[str, Any], station_frame: pd.DataFrame, con
     for stem, title in PLOT_STEMS:
         file_rows.extend(
             [
-                (f"{title} PDF", figure_dir / f"{clean_name}_{stem}.pdf"),
                 (f"{title} PNG", figure_dir / f"{clean_name}_{stem}.png"),
+                (f"{title} SVG", figure_dir / f"{clean_name}_{stem}.svg"),
             ]
         )
     files = pd.DataFrame(
@@ -554,7 +835,7 @@ def _display_files_tab(results: dict[str, Any], station_frame: pd.DataFrame, con
     )
     st.dataframe(files, use_container_width=True, hide_index=True)
 
-    station_path = output_dir / f"{clean_name}_stations.csv"
+    station_path = _station_csv_path(results, config)
     summary_path = output_dir / f"{clean_name}_summary.json"
     download_cols = st.columns(3)
     with download_cols[0]:
@@ -628,7 +909,17 @@ def _station_frame_from_results_or_file(results: dict[str, Any], config: dict[st
 def _coerce_numeric_frame(frame: pd.DataFrame) -> pd.DataFrame:
     coerced = frame.copy()
     for column in coerced.columns:
-        if column in {"case_name", "airfoil", "polar_source", "polar_Re_used"}:
+        if column in {
+            "case_name",
+            "model_source",
+            "generating_script",
+            "airfoil",
+            "polar_source",
+            "polar_Re_used",
+            "source_file",
+            "source_geometry_csv",
+            "kinematic_estimate_note",
+        }:
             continue
         converted = pd.to_numeric(coerced[column], errors="coerce")
         coerced[column] = converted
@@ -636,7 +927,17 @@ def _coerce_numeric_frame(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _station_csv_path(results: dict[str, Any], config: dict[str, Any]) -> Path:
-    return Path(config["output_dir"]) / f"{_clean_case_name(_results_case_name(results, config))}_stations.csv"
+    summary = results.get("summary", {})
+    station_source = results.get("station_source_csv") or summary.get("station_source_csv")
+    if station_source:
+        return Path(station_source)
+    model_source = str(summary.get("model_source") or results.get("model_source") or "")
+    case_name = _clean_case_name(_results_case_name(results, config))
+    if model_source == aero_solver.MODEL_SOURCE_IMPORTED_CSV:
+        return Path(config["output_dir"]) / f"{case_name}_optimizer_station_data_stations.csv"
+    if model_source == aero_solver.MODEL_SOURCE_BEMT_XFOIL:
+        return Path(config["output_dir"]) / f"{case_name}_bemt_xfoil_stations.csv"
+    return Path(config["output_dir"]) / f"{case_name}_stations.csv"
 
 
 def _results_case_name(results: dict[str, Any], config: dict[str, Any]) -> str:
@@ -651,14 +952,32 @@ def _format_station_frame(frame: pd.DataFrame) -> pd.DataFrame:
         "r_m": "{:.4f}",
         "chord_m": "{:.4f}",
         "twist_deg": "{:.2f}",
+        "twist_input_deg": "{:.2f}",
+        "twist_offset_deg": "{:.2f}",
+        "twist_effective_deg": "{:.2f}",
         "Re": "{:.0f}",
+        "omega_rad_s": "{:.2f}",
+        "Vi_m_s": "{:.3f}",
+        "Vt_m_s": "{:.2f}",
+        "Va_m_s": "{:.3f}",
+        "Vrel_m_s": "{:.2f}",
         "phi_deg": "{:.2f}",
         "alpha_deg": "{:.2f}",
+        "alpha_imported_deg": "{:.2f}",
+        "alpha_recomputed_deg": "{:.2f}",
         "Cl": "{:.3f}",
+        "cl_imported": "{:.3f}",
+        "cl_recomputed": "{:.3f}",
         "Cd": "{:.4f}",
+        "cd_imported": "{:.4f}",
+        "cd_recomputed": "{:.4f}",
         "Cm": "{:.4f}",
         "dT_N": "{:.3f}",
+        "dthrust_imported_n": "{:.3f}",
+        "dthrust_recomputed_n": "{:.3f}",
         "dQ_Nm": "{:.4f}",
+        "dtorque_imported_nm": "{:.4f}",
+        "dtorque_recomputed_nm": "{:.4f}",
         "qz_N_per_m": "{:.2f}",
         "qy_tangential_N_per_m": "{:.2f}",
         "torque_loading_Nm_per_m": "{:.3f}",
@@ -668,7 +987,16 @@ def _format_station_frame(frame: pd.DataFrame) -> pd.DataFrame:
     for column, fmt in formats.items():
         if column in formatted.columns:
             formatted[column] = formatted[column].map(lambda value, fmt=fmt: _format_cell(value, fmt))
-    for column in {"case_name", "airfoil", "polar_Re_used", "polar_source"}:
+    for column in {
+        "case_name",
+        "model_source",
+        "airfoil",
+        "polar_Re_used",
+        "polar_source",
+        "source_file",
+        "source_geometry_csv",
+        "kinematic_estimate_note",
+    }:
         if column in formatted.columns:
             formatted[column] = formatted[column].fillna("").astype(str)
     for column in formatted.columns:
@@ -807,6 +1135,71 @@ def _aero_warning_rows(station_frame: pd.DataFrame, summary: dict[str, Any], con
     extrap_threshold = float(config.get("polar_extrapolation_fail_fraction_pct", 20.0))
     tip_start = float(config.get("tip_region_r_R", 0.90))
 
+    if "Cl" in station_frame.columns:
+        cl_values = pd.to_numeric(station_frame["Cl"], errors="coerce")
+        bad_cl = cl_values < -0.02
+        if bad_cl.any():
+            rows.append(
+                {
+                    "status": "FAIL",
+                    "flag": "Cl < -0.02",
+                    "detail": f"{int(bad_cl.sum())} station(s); minimum Cl {cl_values.min():.6g}.",
+                    "guidance": "Tip unloading must approach zero from the positive side for this proof.",
+                }
+            )
+
+    if "dT_N" in station_frame.columns:
+        dthrust = pd.to_numeric(station_frame["dT_N"], errors="coerce")
+        bad_dthrust = dthrust < -1.0e-6
+        if bad_dthrust.any():
+            rows.append(
+                {
+                    "status": "FAIL",
+                    "flag": "dT_N < -1e-6",
+                    "detail": f"{int(bad_dthrust.sum())} station(s); minimum dT_N {dthrust.min():.6g}.",
+                    "guidance": "Negative thrust loading invalidates spanload-shape proof.",
+                }
+            )
+
+    if "dQ_Nm" in station_frame.columns:
+        dtorque = pd.to_numeric(station_frame["dQ_Nm"], errors="coerce")
+        bad_dtorque = dtorque < -1.0e-6
+        if bad_dtorque.any():
+            rows.append(
+                {
+                    "status": "FAIL",
+                    "flag": "dQ_Nm < -1e-6",
+                    "detail": f"{int(bad_dtorque.sum())} station(s); minimum dQ_Nm {dtorque.min():.6g}.",
+                    "guidance": "Negative torque loading must be reviewed before using these plots.",
+                }
+            )
+
+    if "cumulative_thrust_fraction" in station_frame.columns:
+        cumulative_thrust = pd.to_numeric(station_frame["cumulative_thrust_fraction"], errors="coerce")
+        before_final = cumulative_thrust.iloc[:-1]
+        if bool((before_final > 1.02).any()):
+            rows.append(
+                {
+                    "status": "FAIL",
+                    "flag": "cumulative thrust fraction > 1.02",
+                    "detail": f"maximum before final {before_final.max():.6g}.",
+                    "guidance": "Cumulative thrust overshoot usually indicates negative outboard thrust loading.",
+                }
+            )
+
+    if "cumulative_torque_fraction" in station_frame.columns:
+        cumulative_torque = pd.to_numeric(station_frame["cumulative_torque_fraction"], errors="coerce")
+        before_final = cumulative_torque.iloc[:-1]
+        if bool((before_final > 1.02).any()):
+            rows.append(
+                {
+                    "status": "FAIL",
+                    "flag": "cumulative torque fraction > 1.02",
+                    "detail": f"maximum before final {before_final.max():.6g}.",
+                    "guidance": "Cumulative torque overshoot usually indicates negative outboard torque loading.",
+                }
+            )
+
     if "qz_N_per_m" in station_frame.columns:
         negative_mask = pd.to_numeric(station_frame["qz_N_per_m"], errors="coerce") < 0.0
         negative_fraction = 100.0 * float(negative_mask.sum()) / count
@@ -837,6 +1230,7 @@ def _aero_warning_rows(station_frame: pd.DataFrame, summary: dict[str, Any], con
     if not tip_frame.empty:
         negative_cl = "Cl" in tip_frame.columns and (pd.to_numeric(tip_frame["Cl"], errors="coerce") < 0.0).any()
         negative_alpha = "alpha_deg" in tip_frame.columns and (pd.to_numeric(tip_frame["alpha_deg"], errors="coerce") < 0.0).any()
+        alpha_below_minus_one = "alpha_deg" in tip_frame.columns and (pd.to_numeric(tip_frame["alpha_deg"], errors="coerce") < -1.0).any()
         if negative_cl or negative_alpha:
             rows.append(
                 {
@@ -844,6 +1238,15 @@ def _aero_warning_rows(station_frame: pd.DataFrame, summary: dict[str, Any], con
                     "flag": "Negative Cl or alpha at tip",
                     "detail": f"negative Cl: {_yes_no(negative_cl)}, negative alpha: {_yes_no(negative_alpha)}",
                     "guidance": "Check tip twist and expected bell-spanload unloading.",
+                }
+            )
+        if alpha_below_minus_one:
+            rows.append(
+                {
+                    "status": "WARN",
+                    "flag": "alpha_deg < -1 near tip",
+                    "detail": "One or more tip-region stations have alpha below -1 deg.",
+                    "guidance": "Review source geometry and whether a collective twist offset was applied.",
                 }
             )
 
@@ -1006,7 +1409,8 @@ def _load_existing_results_silent(config: dict[str, Any]) -> dict[str, Any] | No
 
 
 def _save_config(config: dict[str, Any], config_path: str | Path) -> None:
-    path = Path(config_path)
+    path = resolve_project_output_path(config_path)
+    assert_aero_output_path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
     st.success(f"Saved config: {path}")
@@ -1033,7 +1437,7 @@ def _open_output_folder(output_dir: str | Path) -> None:
 
 
 def _result_status(summary: dict[str, Any]) -> str:
-    if summary.get("target_matched") and summary.get("valid_for_thesis"):
+    if summary.get("target_matched") and summary.get("valid_for_thesis_export", summary.get("valid_for_thesis")):
         return "green"
     if summary.get("target_matched") and not summary.get("polar_is_placeholder"):
         return "yellow"

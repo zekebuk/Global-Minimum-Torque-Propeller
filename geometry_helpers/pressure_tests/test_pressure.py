@@ -8,6 +8,11 @@ import sys
 import time
 from pathlib import Path
 
+try:
+    import pytest
+except ImportError:
+    pytest = None
+
 PROJECT_ROOT = None
 for parent in Path(__file__).resolve().parents:
     if (parent / "Geometry_optimization.py").is_file():
@@ -40,6 +45,8 @@ from Geometry_optimization import (
 
 
 class TestResults:
+    __test__ = False
+
     def __init__(self):
         self.passed = 0
         self.failed = 0
@@ -62,6 +69,16 @@ class TestResults:
             for name, reason in self.errors:
                 print(f"  - {name}: {reason}")
         print(f"{'='*70}\n")
+
+
+if pytest is not None:
+    @pytest.fixture()
+    def results():
+        tracker = TestResults()
+        yield tracker
+        if tracker.failed:
+            messages = "; ".join(f"{name}: {reason}" for name, reason in tracker.errors)
+            pytest.fail(messages)
 
 
 def test_unit_conversions(results):

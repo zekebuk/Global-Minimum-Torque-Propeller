@@ -21,9 +21,9 @@ ALPHA_START_DEG = -8.0
 ALPHA_END_DEG = 16.0
 ALPHA_STEP_DEG = 0.5
 MIN_CONVERGED_ALPHA_POINTS = 10
-DEFAULT_XFOIL_ROOT = Path(
-    r"C:\Users\Zekeb\OneDrive\OneDrive - Cal Poly\ME 599 THESIS\XFOIL6.99"
-)
+CODE_DIR = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = CODE_DIR.parent if CODE_DIR.name.lower() == "code" else CODE_DIR
+DEFAULT_XFOIL_ROOT = PROJECT_ROOT / "XFOIL6.99"
 
 
 @dataclass(frozen=True)

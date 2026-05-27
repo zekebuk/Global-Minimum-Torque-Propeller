@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import html
+import json
 import math
 import struct
 import sys
@@ -10,11 +11,11 @@ import zlib
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Iterable, Mapping, Sequence
 
 
-ROOT_DIR = Path(__file__).resolve().parent
-CODE_DIR = ROOT_DIR / "Code"
+CODE_DIR = Path(__file__).resolve().parent
+ROOT_DIR = CODE_DIR.parent
 if str(CODE_DIR) not in sys.path:
     sys.path.insert(0, str(CODE_DIR))
 
@@ -36,19 +37,23 @@ from Geometry_optimization import (  # noqa: E402
     normalize_reference_variant,
     optimize_geometry,
     optimized_case_name,
+    optimizer_geometry_csv_name,
     reference_case_name,
+    result_summary_dict,
     validate_user_inputs,
     write_convergence_history_csv,
     write_csv,
     write_summary_json,
 )
 from common_plot_style import apply_matplotlib_style, save_matplotlib_figure  # noqa: E402
+from output_paths import get_figures_dir, get_results_dir, assert_verification_output_path, write_metadata_sidecar  # noqa: E402
 
 
 DEFAULT_THRUST_MATCH_TOL_PCT = 5.0
 DEFAULT_TORQUE_REDUCTION_TOL_PCT = 0.0
 DEFAULT_TIP_REDUCTION_TOL_PCT = 10.0
 DEFAULT_CHORD_TOL_M = 1.0e-6
+GENERATING_SCRIPT = "theory_verification.py"
 CORE_THEORY_CHECKS = {
     "same thrust target",
     "actual thrust match",
@@ -60,6 +65,12 @@ CORE_THEORY_CHECKS = {
     "reduced integrated tip loading",
     "inboard thrust fraction increased",
     "inboard-shifted cumulative thrust",
+    "spanload shape proof uses nonnegative thrust",
+    "MIL closer to elliptical target than GMT",
+    "GMT closer to bell target than MIL",
+    "GMT lower center of thrust",
+    "GMT lower tip thrust fraction",
+    "GMT cumulative thrust builds earlier inboard",
     "valid hover induced velocity",
     "acceptable Cl clipping fraction",
 }
@@ -125,6 +136,50 @@ class VerificationMetrics:
 
 
 @dataclass(frozen=True)
+class SpanloadShapeCaseMetrics:
+    source_csv: Path
+    mu_root: float
+    mu: list[float]
+    dmu: list[float]
+    normalized_loading: list[float]
+    elliptical_target: list[float]
+    bell_target: list[float]
+    cumulative_thrust_fraction: list[float]
+    rms_error_elliptical: float
+    rms_error_bell: float
+    correlation_elliptical: float
+    correlation_bell: float
+    center_of_thrust_mu: float
+    tip_thrust_fraction_mu_gt_085: float
+    cumulative_thrust_fraction_at_070: float
+    cumulative_thrust_fraction_at_080: float
+    cumulative_thrust_fraction_at_090: float
+    negative_thrust_station_count: int
+    min_dthrust_n: float
+    negative_cl_station_count: int
+    min_cl: float
+    cumulative_thrust_overshoot_before_final: bool
+    cumulative_thrust_overshoot_max_before_final: float
+
+
+@dataclass(frozen=True)
+class SpanloadShapeComparison:
+    mil: SpanloadShapeCaseMetrics
+    gmt: SpanloadShapeCaseMetrics
+    common_mu: list[float]
+    common_mil_normalized_loading: list[float]
+    common_gmt_normalized_loading: list[float]
+    common_elliptical_target: list[float]
+    common_bell_target: list[float]
+    mil_closer_to_elliptical_than_gmt: bool
+    gmt_closer_to_bell_than_mil: bool
+    gmt_lower_center_of_thrust_mu: bool
+    gmt_lower_tip_thrust_fraction_mu_gt_085: bool
+    gmt_cumulative_thrust_builds_earlier_inboard: bool
+    valid_for_spanload_shape_proof: bool
+
+
+@dataclass(frozen=True)
 class VerificationCheck:
     name: str
     status: str
@@ -147,6 +202,7 @@ class VerificationResult:
     common_mil: dict[str, list[float]]
     common_gmt: dict[str, list[float]]
     metrics: VerificationMetrics
+    spanload_shape: SpanloadShapeComparison
     checks: list[VerificationCheck]
     warnings: list[str]
     assumptions: list[str]
@@ -163,6 +219,22 @@ class VerificationResult:
     @property
     def outcome(self) -> str:
         return classify_verification_checks(self.checks)
+
+
+@dataclass(frozen=True)
+class GeometryCsvMetrics:
+    path: Path
+    thrust_n: float
+    torque_nm: float
+    power_w: float
+    eta_static: float
+    ct: float
+    cq: float
+    cp: float
+    cl_clipping_fraction: float
+    tip_thrust_fraction: float
+    inboard_thrust_fraction: float
+    cumulative_50_thrust_radius: float
 
 
 def classify_verification_checks(checks: Sequence[VerificationCheck]) -> str:
@@ -191,6 +263,12 @@ def classify_verification_checks(checks: Sequence[VerificationCheck]) -> str:
         "inboard thrust fraction increased",
         "reduced integrated tip loading",
         "inboard-shifted cumulative thrust",
+        "spanload shape proof uses nonnegative thrust",
+        "MIL closer to elliptical target than GMT",
+        "GMT closer to bell target than MIL",
+        "GMT lower center of thrust",
+        "GMT lower tip thrust fraction",
+        "GMT cumulative thrust builds earlier inboard",
         "acceptable Cl clipping fraction",
     }
     if all(statuses.get(name) == "PASS" for name in torque_only_checks):
@@ -377,6 +455,168 @@ def loading_reduction_pct(
     return reduction_pct(mil_band, gmt_band)
 
 
+def weighted_rms_error(actual: Sequence[float], target: Sequence[float], weights: Sequence[float]) -> float:
+    denominator = sum(weights)
+    if denominator <= 0.0:
+        return float("nan")
+    return math.sqrt(sum((left - right) ** 2 * weight for left, right, weight in zip(actual, target, weights)) / denominator)
+
+
+def weighted_correlation(left: Sequence[float], right: Sequence[float], weights: Sequence[float]) -> float:
+    denominator = sum(weights)
+    if denominator <= 0.0:
+        return float("nan")
+    left_mean = sum(value * weight for value, weight in zip(left, weights)) / denominator
+    right_mean = sum(value * weight for value, weight in zip(right, weights)) / denominator
+    covariance = sum((a - left_mean) * (b - right_mean) * weight for a, b, weight in zip(left, right, weights))
+    left_variance = sum((value - left_mean) ** 2 * weight for value, weight in zip(left, weights))
+    right_variance = sum((value - right_mean) ** 2 * weight for value, weight in zip(right, weights))
+    scale = math.sqrt(left_variance * right_variance)
+    return safe_div(covariance, scale, float("nan"))
+
+
+def normalize_loading_density(dthrust_n: Sequence[float], dmu: Sequence[float]) -> list[float]:
+    total_thrust = sum(dthrust_n)
+    if abs(total_thrust) <= 1.0e-12:
+        return [0.0 for _ in dthrust_n]
+    return [safe_div(dthrust, width) / total_thrust for dthrust, width in zip(dthrust_n, dmu)]
+
+
+def normalize_density_to_unit_integral(values: Sequence[float], dmu: Sequence[float]) -> list[float]:
+    integral = sum(value * width for value, width in zip(values, dmu))
+    if abs(integral) <= 1.0e-12:
+        return [0.0 for _ in values]
+    return [value / integral for value in values]
+
+
+def normalized_target_shapes(mu_values: Sequence[float], dmu: Sequence[float], mu_root: float) -> tuple[list[float], list[float]]:
+    ell_raw: list[float] = []
+    bell_raw: list[float] = []
+    active_span = max(1.0 - mu_root, 1.0e-12)
+    for mu in mu_values:
+        s = min(1.0, max(0.0, (mu - mu_root) / active_span))
+        ell = math.sqrt(max(0.0, 1.0 - s * s))
+        bell = max(0.0, 1.0 - s * s) ** 1.5
+        ell_raw.append(ell)
+        bell_raw.append(bell)
+    return normalize_density_to_unit_integral(ell_raw, dmu), normalize_density_to_unit_integral(bell_raw, dmu)
+
+
+def cumulative_thrust_fraction_at_mu(
+    mu_values: Sequence[float],
+    dthrust_n: Sequence[float],
+    target_mu: float,
+    mu_root: float,
+) -> float:
+    total = sum(dthrust_n)
+    if abs(total) <= 1.0e-12:
+        return 0.0
+    if target_mu <= mu_root:
+        return 0.0
+    if target_mu >= 1.0:
+        return 1.0
+    return integrate_annular_band(mu_values, dthrust_n, mu_root, target_mu, mu_root) / total
+
+
+def _csv_float(row: Mapping[str, object], *names: str, default: float = 0.0) -> float:
+    lowered = {str(key).lower(): value for key, value in row.items()}
+    for name in names:
+        value = lowered.get(name.lower())
+        if value not in (None, ""):
+            return float(value)
+    return default
+
+
+def spanload_shape_case_from_csv(path: Path) -> SpanloadShapeCaseMetrics:
+    if not path.exists():
+        raise FileNotFoundError(f"spanload shape CSV not found: {path}")
+    with path.open(newline="", encoding="utf-8-sig") as handle:
+        rows = list(csv.DictReader(handle))
+    if not rows:
+        raise ValueError(f"spanload shape CSV is empty: {path}")
+
+    mu = [_csv_float(row, "mu", "r_R") for row in rows]
+    dthrust = [_csv_float(row, "dthrust_n", "dT_N") for row in rows]
+    cl = [_csv_float(row, "cl", "Cl") for row in rows]
+    mu_root = mu[0]
+    left_edges, right_edges = station_edges(mu, mu_root)
+    dmu = [right - left for left, right in zip(left_edges, right_edges)]
+    normalized_loading = normalize_loading_density(dthrust, dmu)
+    elliptical_target, bell_target = normalized_target_shapes(mu, dmu, mu_root)
+    cumulative = cumulative_fraction(dthrust)
+    cumulative_before_final = cumulative[:-1]
+    total_thrust = sum(dthrust)
+    center_of_thrust = safe_div(sum(mu_i * dthrust_i for mu_i, dthrust_i in zip(mu, dthrust)), total_thrust, float("nan"))
+    tip_thrust = integrate_annular_band(mu, dthrust, 0.85, 1.0, mu_root)
+    return SpanloadShapeCaseMetrics(
+        source_csv=path,
+        mu_root=mu_root,
+        mu=mu,
+        dmu=dmu,
+        normalized_loading=normalized_loading,
+        elliptical_target=elliptical_target,
+        bell_target=bell_target,
+        cumulative_thrust_fraction=cumulative,
+        rms_error_elliptical=weighted_rms_error(normalized_loading, elliptical_target, dmu),
+        rms_error_bell=weighted_rms_error(normalized_loading, bell_target, dmu),
+        correlation_elliptical=weighted_correlation(normalized_loading, elliptical_target, dmu),
+        correlation_bell=weighted_correlation(normalized_loading, bell_target, dmu),
+        center_of_thrust_mu=center_of_thrust,
+        tip_thrust_fraction_mu_gt_085=safe_div(tip_thrust, total_thrust),
+        cumulative_thrust_fraction_at_070=cumulative_thrust_fraction_at_mu(mu, dthrust, 0.70, mu_root),
+        cumulative_thrust_fraction_at_080=cumulative_thrust_fraction_at_mu(mu, dthrust, 0.80, mu_root),
+        cumulative_thrust_fraction_at_090=cumulative_thrust_fraction_at_mu(mu, dthrust, 0.90, mu_root),
+        negative_thrust_station_count=sum(value < 0.0 for value in dthrust),
+        min_dthrust_n=min(dthrust, default=0.0),
+        negative_cl_station_count=sum(value < -0.02 for value in cl),
+        min_cl=min(cl, default=0.0),
+        cumulative_thrust_overshoot_before_final=any(value > 1.02 for value in cumulative_before_final),
+        cumulative_thrust_overshoot_max_before_final=max(cumulative_before_final, default=0.0),
+    )
+
+
+def spanload_shape_comparison_from_csv(mil_csv: Path, gmt_csv: Path) -> SpanloadShapeComparison:
+    mil = spanload_shape_case_from_csv(mil_csv)
+    gmt = spanload_shape_case_from_csv(gmt_csv)
+    common_mu, _ = common_grid_for(mil.mu, gmt.mu)
+    common_mu_root = common_mu[0]
+    common_left, common_right = station_edges(common_mu, common_mu_root)
+    common_dmu = [right - left for left, right in zip(common_left, common_right)]
+    mil_loading = normalize_density_to_unit_integral(
+        interpolate_series(mil.mu, mil.normalized_loading, common_mu),
+        common_dmu,
+    )
+    gmt_loading = normalize_density_to_unit_integral(
+        interpolate_series(gmt.mu, gmt.normalized_loading, common_mu),
+        common_dmu,
+    )
+    elliptical_target, bell_target = normalized_target_shapes(common_mu, common_dmu, common_mu_root)
+    return SpanloadShapeComparison(
+        mil=mil,
+        gmt=gmt,
+        common_mu=common_mu,
+        common_mil_normalized_loading=mil_loading,
+        common_gmt_normalized_loading=gmt_loading,
+        common_elliptical_target=elliptical_target,
+        common_bell_target=bell_target,
+        mil_closer_to_elliptical_than_gmt=mil.rms_error_elliptical < gmt.rms_error_elliptical,
+        gmt_closer_to_bell_than_mil=gmt.rms_error_bell < mil.rms_error_bell,
+        gmt_lower_center_of_thrust_mu=gmt.center_of_thrust_mu < mil.center_of_thrust_mu,
+        gmt_lower_tip_thrust_fraction_mu_gt_085=gmt.tip_thrust_fraction_mu_gt_085 < mil.tip_thrust_fraction_mu_gt_085,
+        gmt_cumulative_thrust_builds_earlier_inboard=(
+            gmt.cumulative_thrust_fraction_at_070 >= mil.cumulative_thrust_fraction_at_070
+            and gmt.cumulative_thrust_fraction_at_080 >= mil.cumulative_thrust_fraction_at_080
+            and gmt.cumulative_thrust_fraction_at_090 >= mil.cumulative_thrust_fraction_at_090
+        ),
+        valid_for_spanload_shape_proof=(
+            mil.negative_thrust_station_count == 0
+            and gmt.negative_thrust_station_count == 0
+            and not mil.cumulative_thrust_overshoot_before_final
+            and not gmt.cumulative_thrust_overshoot_before_final
+        ),
+    )
+
+
 def spanwise_from_result(result: DesignResult) -> SpanwiseData:
     stations = sorted(result.stations, key=lambda station: station.mu)
     mu = [station.mu for station in stations]
@@ -474,6 +714,7 @@ def build_design_config(args: argparse.Namespace, spanload_type: str, output_dir
     chord_max_in = args.chord_max_in
     if chord_max_in is None:
         chord_max_in = max_chord_fraction * meters_to_inches(radius_m) * DEFAULT_REFERENCE_MAX_CHORD_MARGIN
+    lock_geometry = args.comparison_geometry == "same"
     return DesignInputs(
         blades=args.blades,
         radius_m=radius_m,
@@ -495,9 +736,9 @@ def build_design_config(args: argparse.Namespace, spanload_type: str, output_dir
         reference_csv_path=args.reference_csv,
         reference_geometry_csv=args.reference_geometry_csv,
         output_directory=output_dir,
-        lock_chord=True,
-        lock_airfoil=True,
-        optimize_twist_only=True,
+        lock_chord=lock_geometry,
+        lock_airfoil=lock_geometry,
+        optimize_twist_only=lock_geometry,
         make_plots=False,
         optimizer=args.optimizer,
         max_iterations=args.max_iterations,
@@ -591,11 +832,20 @@ def dataclass_replace_reference_mode(config: DesignInputs) -> DesignInputs:
 
 
 def write_case_outputs(result: DesignResult, output_dir: Path, case_name: str | None = None) -> None:
+    assert_verification_output_path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     output_name = case_name or optimized_case_name(result.config.spanload_type)
-    write_csv(result, output_dir / f"{output_name}.csv")
-    write_summary_json(result, output_dir / "solver_summary.json")
-    write_convergence_history_csv(result.convergence_history, output_dir / "convergence_history.csv")
+    geometry_csv = output_dir / optimizer_geometry_csv_name(output_name)
+    try:
+        write_csv(result, geometry_csv, output_domain="verification")
+        write_summary_json(result, output_dir / "solver_summary.json", output_domain="verification")
+        write_convergence_history_csv(
+            result.convergence_history,
+            output_dir / "convergence_history.csv",
+            output_domain="verification",
+        )
+    except PermissionError as exc:
+        print(f"WARNING: skipped nested case output because the path is locked or not writable: {exc}")
 
 
 def compute_metrics(
@@ -682,6 +932,7 @@ def build_checks(
     mil_span: SpanwiseData,
     gmt_span: SpanwiseData,
     metrics: VerificationMetrics,
+    shape: SpanloadShapeComparison,
     grids_identical: bool,
     args: argparse.Namespace,
 ) -> list[VerificationCheck]:
@@ -859,6 +1110,50 @@ def build_checks(
         f"<= {args.cl_clipping_tol_pct:.3f}%",
         "Reduced-order Cl clipping should remain a small fraction of the GMT stations.",
     )
+    pass_fail(
+        "spanload shape proof uses nonnegative thrust",
+        shape.valid_for_spanload_shape_proof,
+        f"MIL min dT {shape.mil.min_dthrust_n:.6g} N, GMT min dT {shape.gmt.min_dthrust_n:.6g} N",
+        "no dthrust_n < 0 and no cumulative thrust fraction > 1.02 before final station",
+        "Negative thrust loading invalidates spanload-shape proof.",
+    )
+    pass_fail(
+        "MIL closer to elliptical target than GMT",
+        shape.mil_closer_to_elliptical_than_gmt,
+        f"MIL RMS {shape.mil.rms_error_elliptical:.6g}, GMT RMS {shape.gmt.rms_error_elliptical:.6g}",
+        "MIL RMS error to normalized elliptical target < GMT RMS error",
+    )
+    pass_fail(
+        "GMT closer to bell target than MIL",
+        shape.gmt_closer_to_bell_than_mil,
+        f"MIL RMS {shape.mil.rms_error_bell:.6g}, GMT RMS {shape.gmt.rms_error_bell:.6g}",
+        "GMT RMS error to normalized bell target < MIL RMS error",
+    )
+    pass_fail(
+        "GMT lower center of thrust",
+        shape.gmt_lower_center_of_thrust_mu,
+        f"MIL {shape.mil.center_of_thrust_mu:.6g}, GMT {shape.gmt.center_of_thrust_mu:.6g}",
+        "GMT center_of_thrust_mu < MIL center_of_thrust_mu",
+    )
+    pass_fail(
+        "GMT lower tip thrust fraction",
+        shape.gmt_lower_tip_thrust_fraction_mu_gt_085,
+        f"MIL {shape.mil.tip_thrust_fraction_mu_gt_085:.6g}, GMT {shape.gmt.tip_thrust_fraction_mu_gt_085:.6g}",
+        "GMT tip_thrust_fraction_mu_gt_085 < MIL tip_thrust_fraction_mu_gt_085",
+    )
+    pass_fail(
+        "GMT cumulative thrust builds earlier inboard",
+        shape.gmt_cumulative_thrust_builds_earlier_inboard,
+        (
+            "mu=.70 "
+            f"{shape.mil.cumulative_thrust_fraction_at_070:.4f}->{shape.gmt.cumulative_thrust_fraction_at_070:.4f}, "
+            "mu=.80 "
+            f"{shape.mil.cumulative_thrust_fraction_at_080:.4f}->{shape.gmt.cumulative_thrust_fraction_at_080:.4f}, "
+            "mu=.90 "
+            f"{shape.mil.cumulative_thrust_fraction_at_090:.4f}->{shape.gmt.cumulative_thrust_fraction_at_090:.4f}"
+        ),
+        "GMT cumulative thrust fraction >= MIL at mu=0.70, 0.80, and 0.90",
+    )
     return checks
 
 
@@ -872,6 +1167,7 @@ def build_warnings(
     checks: Sequence[VerificationCheck],
     unit_warnings: Sequence[str],
     metrics: VerificationMetrics,
+    shape: SpanloadShapeComparison,
 ) -> list[str]:
     warnings: list[str] = list(unit_warnings)
     warnings.extend(f"MIL solver warning: {warning}" for warning in mil.result.warnings)
@@ -890,6 +1186,46 @@ def build_warnings(
     if metrics.tip_loading_reduction_pct <= 0.0:
         warnings.append(
             "GMT does not reduce integrated tip loading from r/R = 0.85 to 1.0 under this configuration."
+        )
+    if shape.mil.negative_cl_station_count > 0:
+        warnings.append(
+            f"MIL has {shape.mil.negative_cl_station_count} station(s) with Cl < -0.02; "
+            f"minimum Cl is {shape.mil.min_cl:.6g}."
+        )
+    if shape.gmt.negative_cl_station_count > 0:
+        warnings.append(
+            f"GMT has {shape.gmt.negative_cl_station_count} station(s) with Cl < -0.02; "
+            f"minimum Cl is {shape.gmt.min_cl:.6g}."
+        )
+    if shape.mil.negative_thrust_station_count > 0:
+        warnings.append(
+            f"MIL has {shape.mil.negative_thrust_station_count} station(s) with dthrust_n < 0; "
+            "spanload-shape proof is invalid for this case."
+        )
+    if shape.gmt.negative_thrust_station_count > 0:
+        warnings.append(
+            f"GMT has {shape.gmt.negative_thrust_station_count} station(s) with dthrust_n < 0; "
+            "spanload-shape proof is invalid for this case."
+        )
+    if shape.mil.cumulative_thrust_overshoot_before_final:
+        warnings.append(
+            "MIL cumulative thrust fraction exceeds 1.02 before the final station; "
+            f"maximum before final is {shape.mil.cumulative_thrust_overshoot_max_before_final:.6g}."
+        )
+    if shape.gmt.cumulative_thrust_overshoot_before_final:
+        warnings.append(
+            "GMT cumulative thrust fraction exceeds 1.02 before the final station; "
+            f"maximum before final is {shape.gmt.cumulative_thrust_overshoot_max_before_final:.6g}."
+        )
+    if shape.gmt.tip_thrust_fraction_mu_gt_085 > shape.mil.tip_thrust_fraction_mu_gt_085:
+        warnings.append(
+            "GMT has larger tip thrust fraction than MIL "
+            f"({shape.gmt.tip_thrust_fraction_mu_gt_085:.6g} vs {shape.mil.tip_thrust_fraction_mu_gt_085:.6g})."
+        )
+    if shape.gmt.center_of_thrust_mu > shape.mil.center_of_thrust_mu:
+        warnings.append(
+            "GMT has higher center_of_thrust_mu than MIL "
+            f"({shape.gmt.center_of_thrust_mu:.6g} vs {shape.mil.center_of_thrust_mu:.6g})."
         )
 
     core_failed = any(check.name in CORE_THEORY_CHECKS and check.status == "FAIL" for check in checks)
@@ -912,13 +1248,89 @@ def dedupe(items: Iterable[str]) -> list[str]:
     return unique
 
 
+def spanload_shape_case_summary_dict(case: SpanloadShapeCaseMetrics) -> dict[str, object]:
+    return {
+        "source_csv": str(case.source_csv),
+        "mu_root": case.mu_root,
+        "rms_error_to_elliptical_target": case.rms_error_elliptical,
+        "rms_error_to_bell_target": case.rms_error_bell,
+        "correlation_with_elliptical_target": case.correlation_elliptical,
+        "correlation_with_bell_target": case.correlation_bell,
+        "center_of_thrust_mu": case.center_of_thrust_mu,
+        "tip_thrust_fraction_mu_gt_085": case.tip_thrust_fraction_mu_gt_085,
+        "cumulative_thrust_fraction_at_mu_070": case.cumulative_thrust_fraction_at_070,
+        "cumulative_thrust_fraction_at_mu_080": case.cumulative_thrust_fraction_at_080,
+        "cumulative_thrust_fraction_at_mu_090": case.cumulative_thrust_fraction_at_090,
+        "negative_thrust_station_count": case.negative_thrust_station_count,
+        "min_dthrust_n": case.min_dthrust_n,
+        "negative_cl_station_count": case.negative_cl_station_count,
+        "min_cl": case.min_cl,
+        "cumulative_thrust_overshoot_before_final": case.cumulative_thrust_overshoot_before_final,
+        "cumulative_thrust_overshoot_max_before_final": case.cumulative_thrust_overshoot_max_before_final,
+    }
+
+
+def spanload_shape_summary_dict(shape: SpanloadShapeComparison) -> dict[str, object]:
+    return {
+        "definitions": {
+            "mu": "r/R",
+            "active_span_coordinate": "s = (mu - mu_root)/(1 - mu_root)",
+            "elliptical_target": "w_ell = sqrt(1 - s^2), normalized so integral over mu equals 1",
+            "bell_target": "w_bell = (1 - s^2)^(3/2), normalized so integral over mu equals 1",
+            "actual_loading": "dthrust_n/dmu from the exported optimized CSV, normalized so integral over mu equals 1",
+        },
+        "mil": spanload_shape_case_summary_dict(shape.mil),
+        "gmt": spanload_shape_case_summary_dict(shape.gmt),
+        "acceptance": {
+            "mil_closer_to_elliptical_than_gmt": shape.mil_closer_to_elliptical_than_gmt,
+            "gmt_closer_to_bell_than_mil": shape.gmt_closer_to_bell_than_mil,
+            "gmt_lower_center_of_thrust_mu": shape.gmt_lower_center_of_thrust_mu,
+            "gmt_lower_tip_thrust_fraction_mu_gt_085": shape.gmt_lower_tip_thrust_fraction_mu_gt_085,
+            "gmt_cumulative_thrust_builds_earlier_inboard": shape.gmt_cumulative_thrust_builds_earlier_inboard,
+            "valid_for_spanload_shape_proof": shape.valid_for_spanload_shape_proof,
+        },
+    }
+
+
+def write_comparison_solver_summary(
+    result: DesignResult,
+    output_path: Path,
+    verification: VerificationResult,
+) -> None:
+    assert_verification_output_path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = result_summary_dict(result)
+    payload["generating_script"] = GENERATING_SCRIPT
+    payload["spanload_shape_comparison"] = spanload_shape_summary_dict(verification.spanload_shape)
+    payload["verification_outcome"] = verification.outcome
+    payload["warnings"] = dedupe(list(payload.get("warnings", [])) + list(verification.warnings))
+    with output_path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2)
+        handle.write("\n")
+    write_metadata_sidecar(
+        output_path,
+        {
+            "generating_script": GENERATING_SCRIPT,
+            "model_source": "theory_verification",
+            "case_name": output_path.stem,
+            "geometry_source_csv": "",
+            "station_source_csv": "",
+            "input_config_path": "",
+            "twist_column_used": "twist_deg",
+            "aero_source": "optimizer_reduced_order",
+        },
+    )
+
+
 def run_verification(args: argparse.Namespace) -> VerificationResult:
     results_dir = args.results_dir
     figures_dir = args.figures_dir
-    if figures_dir.name not in {"reference", "optimized", "comparison"}:
-        figures_dir = figures_dir / "optimized"
-    case_dir = results_dir.parent / "optimized" if results_dir.name == "comparison" else results_dir / "optimized"
-    reference_dir = results_dir.parent / "reference" if results_dir.name == "comparison" else results_dir / "reference"
+    case_dir = results_dir / "cases"
+    reference_dir = results_dir / "reference_cases"
+    assert_verification_output_path(results_dir)
+    assert_verification_output_path(figures_dir)
+    assert_verification_output_path(case_dir)
+    assert_verification_output_path(reference_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
     figures_dir.mkdir(parents=True, exist_ok=True)
 
@@ -963,14 +1375,21 @@ def run_verification(args: argparse.Namespace) -> VerificationResult:
     unit_warnings = validate_units_and_station_data(mil)
     unit_warnings.extend(validate_units_and_station_data(gmt))
 
+    mil_top_csv = case_dir / optimizer_geometry_csv_name("theory_verification_mil")
+    gmt_top_csv = case_dir / optimizer_geometry_csv_name("theory_verification_gmt")
+    case_dir.mkdir(parents=True, exist_ok=True)
+    write_csv(mil.result, mil_top_csv, output_domain="verification")
+    write_csv(gmt.result, gmt_top_csv, output_domain="verification")
+
     mil_span = spanwise_from_result(mil.result)
     gmt_span = spanwise_from_result(gmt.result)
     common_grid, grids_identical = common_grid_for(mil_span.mu, gmt_span.mu)
     common_mil = interpolate_spanwise(mil_span, common_grid)
     common_gmt = interpolate_spanwise(gmt_span, common_grid)
     metrics = compute_metrics(mil, gmt, mil_span, gmt_span, common_grid, common_mil, common_gmt)
-    checks = build_checks(mil, gmt, mil_span, gmt_span, metrics, grids_identical, args)
-    warnings = build_warnings(mil, gmt, checks, unit_warnings, metrics)
+    spanload_shape = spanload_shape_comparison_from_csv(mil_top_csv, gmt_top_csv)
+    checks = build_checks(mil, gmt, mil_span, gmt_span, metrics, spanload_shape, grids_identical, args)
+    warnings = build_warnings(mil, gmt, checks, unit_warnings, metrics, spanload_shape)
     assumptions = build_assumptions(args, mil, gmt)
 
     verification = VerificationResult(
@@ -982,13 +1401,40 @@ def run_verification(args: argparse.Namespace) -> VerificationResult:
         common_mil=common_mil,
         common_gmt=common_gmt,
         metrics=metrics,
+        spanload_shape=spanload_shape,
         checks=checks,
         warnings=warnings,
         assumptions=assumptions,
         results_dir=results_dir,
         figures_dir=figures_dir,
     )
+
+    mil_summary_json = case_dir / "solver_summary_mil.json"
+    gmt_summary_json = case_dir / "solver_summary.json"
+    write_comparison_solver_summary(mil.result, mil_summary_json, verification)
+    write_comparison_solver_summary(gmt.result, gmt_summary_json, verification)
+    write_convergence_history_csv(
+        gmt.result.convergence_history,
+        case_dir / "convergence_history.csv",
+        output_domain="verification",
+    )
+    mil_csv_metrics = geometry_csv_metrics_from_file(mil_top_csv, mil.result)
+    gmt_csv_metrics = geometry_csv_metrics_from_file(gmt_top_csv, gmt.result)
+    validate_csv_metrics_against_result("MIL", mil_csv_metrics, mil.result)
+    validate_csv_metrics_against_result("GMT", gmt_csv_metrics, gmt.result)
+    validate_csv_metrics_against_summary("MIL", mil_csv_metrics, mil_summary_json)
+    validate_csv_metrics_against_summary("GMT", gmt_csv_metrics, gmt_summary_json)
+
     write_summary_csv(verification, results_dir / "theory_verification_summary.csv")
+    result_table_csv = case_dir / "optimized_mil_vs_gmt_result_table.csv"
+    write_result_table_csv(verification, result_table_csv, mil_csv_metrics, gmt_csv_metrics)
+    write_result_table_markdown(
+        verification,
+        case_dir / "optimized_mil_vs_gmt_result_table.md",
+        mil_csv_metrics,
+        gmt_csv_metrics,
+    )
+    validate_result_table_against_csv(result_table_csv, mil_csv_metrics, gmt_csv_metrics)
     if not args.skip_plots:
         write_plots(verification, figures_dir)
     write_report(verification, results_dir / "theory_verification_report.txt")
@@ -1009,7 +1455,12 @@ def build_assumptions(args: argparse.Namespace, mil: SolverCase, gmt: SolverCase
         f"Air density is hardcoded/defaulted to {args.rho:.6g} kg/m^3 unless changed by CLI.",
         f"Blade count is hardcoded/defaulted to {args.blades} unless changed by CLI.",
         f"Freestream velocity is hardcoded/defaulted to {args.v_inf:.6g} m/s unless changed by CLI.",
-        "Both cases are solved with chord_locked=True, airfoil_locked=True, optimize_twist_only=True.",
+        "MIL case locks: "
+        f"chord_locked={mil.result.config.lock_chord}, airfoil_locked={mil.result.config.lock_airfoil}, "
+        f"optimize_twist_only={mil.result.config.optimize_twist_only}.",
+        "GMT case locks: "
+        f"chord_locked={gmt.result.config.lock_chord}, airfoil_locked={gmt.result.config.lock_airfoil}, "
+        f"optimize_twist_only={gmt.result.config.optimize_twist_only}.",
         f"Comparison geometry mode: {geometry_mode}.",
         f"Solver mode is {args.mode!r}; optimizer is {args.optimizer!r}; max_iterations={args.max_iterations}.",
         "Twist values are read from the solver as degrees and plotted as beta [deg].",
@@ -1022,8 +1473,11 @@ def build_assumptions(args: argparse.Namespace, mil: SolverCase, gmt: SolverCase
 
 
 def write_summary_csv(verification: VerificationResult, output_path: Path) -> None:
+    assert_verification_output_path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     m = verification.metrics
+    shape = verification.spanload_shape
+    shape = verification.spanload_shape
     rows = [
         ("total_thrust", verification.mil.result.thrust_n, verification.gmt.result.thrust_n, "", "N", "", "", ""),
         ("total_torque", verification.mil.result.torque_nm, verification.gmt.result.torque_nm, "", "N*m", "", "", ""),
@@ -1040,6 +1494,15 @@ def write_summary_csv(verification: VerificationResult, output_path: Path) -> No
         ("inboard_loading_change_pct", "", "", m.inboard_loading_change_pct, "%", status_for_check(verification, "inboard thrust fraction increased"), "> 0", "r/R 0.2 to 0.72"),
         ("inboard_thrust_fraction", m.inboard_fraction_mil, m.inboard_fraction_gmt, "", "-", "", "", "r/R 0.2 to 0.72"),
         ("tip_thrust_fraction", m.tip_fraction_mil, m.tip_fraction_gmt, "", "-", "", "", "r/R 0.85 to 1.0"),
+        ("rms_error_to_elliptical_target", shape.mil.rms_error_elliptical, shape.gmt.rms_error_elliptical, shape.gmt.rms_error_elliptical - shape.mil.rms_error_elliptical, "-", status_for_check(verification, "MIL closer to elliptical target than GMT"), "MIL < GMT", "normalized dT/dmu shape"),
+        ("rms_error_to_bell_target", shape.mil.rms_error_bell, shape.gmt.rms_error_bell, shape.gmt.rms_error_bell - shape.mil.rms_error_bell, "-", status_for_check(verification, "GMT closer to bell target than MIL"), "GMT < MIL", "normalized dT/dmu shape"),
+        ("correlation_with_elliptical_target", shape.mil.correlation_elliptical, shape.gmt.correlation_elliptical, shape.gmt.correlation_elliptical - shape.mil.correlation_elliptical, "-", "", "", "weighted Pearson correlation"),
+        ("correlation_with_bell_target", shape.mil.correlation_bell, shape.gmt.correlation_bell, shape.gmt.correlation_bell - shape.mil.correlation_bell, "-", "", "", "weighted Pearson correlation"),
+        ("center_of_thrust_mu", shape.mil.center_of_thrust_mu, shape.gmt.center_of_thrust_mu, shape.gmt.center_of_thrust_mu - shape.mil.center_of_thrust_mu, "mu", status_for_check(verification, "GMT lower center of thrust"), "GMT < MIL", ""),
+        ("tip_thrust_fraction_mu_gt_085", shape.mil.tip_thrust_fraction_mu_gt_085, shape.gmt.tip_thrust_fraction_mu_gt_085, shape.gmt.tip_thrust_fraction_mu_gt_085 - shape.mil.tip_thrust_fraction_mu_gt_085, "-", status_for_check(verification, "GMT lower tip thrust fraction"), "GMT < MIL", ""),
+        ("cumulative_thrust_fraction_at_mu_070", shape.mil.cumulative_thrust_fraction_at_070, shape.gmt.cumulative_thrust_fraction_at_070, shape.gmt.cumulative_thrust_fraction_at_070 - shape.mil.cumulative_thrust_fraction_at_070, "-", status_for_check(verification, "GMT cumulative thrust builds earlier inboard"), "GMT >= MIL", ""),
+        ("cumulative_thrust_fraction_at_mu_080", shape.mil.cumulative_thrust_fraction_at_080, shape.gmt.cumulative_thrust_fraction_at_080, shape.gmt.cumulative_thrust_fraction_at_080 - shape.mil.cumulative_thrust_fraction_at_080, "-", status_for_check(verification, "GMT cumulative thrust builds earlier inboard"), "GMT >= MIL", ""),
+        ("cumulative_thrust_fraction_at_mu_090", shape.mil.cumulative_thrust_fraction_at_090, shape.gmt.cumulative_thrust_fraction_at_090, shape.gmt.cumulative_thrust_fraction_at_090 - shape.mil.cumulative_thrust_fraction_at_090, "-", status_for_check(verification, "GMT cumulative thrust builds earlier inboard"), "GMT >= MIL", ""),
         ("cumulative_50_thrust_radius", m.cumulative_50_radius_mil, m.cumulative_50_radius_gmt, "", "r/R", status_for_check(verification, "inboard-shifted cumulative thrust"), "GMT < MIL", ""),
         ("cl_clipping_fraction", m.cl_clipping_fraction_mil_pct, m.cl_clipping_fraction_gmt_pct, "", "%", status_for_check(verification, "acceptable Cl clipping fraction"), "<= configured tolerance", ""),
         ("max_chord_difference", "", "", m.max_chord_diff_m, "m", status_for_check(verification, "same chord distribution"), f"<= {DEFAULT_CHORD_TOL_M}", ""),
@@ -1050,6 +1513,211 @@ def write_summary_csv(verification: VerificationResult, output_path: Path) -> No
         writer.writerow(["metric", "mil_value", "gmt_value", "comparison_value", "units", "status", "criterion", "notes"])
         for row in rows:
             writer.writerow([format_csv_value(value) for value in row])
+    write_metadata_sidecar(
+        output_path,
+        {
+            "generating_script": GENERATING_SCRIPT,
+            "model_source": "theory_verification",
+            "case_name": "optimized_mil_vs_gmt",
+            "geometry_source_csv": "",
+            "station_source_csv": "",
+            "input_config_path": "",
+            "twist_column_used": "twist_deg",
+            "aero_source": "optimizer_reduced_order",
+        },
+    )
+
+
+def geometry_csv_metrics_from_file(path: Path, result: DesignResult) -> GeometryCsvMetrics:
+    if not path.exists():
+        raise FileNotFoundError(f"comparison source CSV not found: {path}")
+    with path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    if not rows:
+        raise ValueError(f"comparison source CSV is empty: {path}")
+
+    mu = [float(row["mu"]) for row in rows]
+    dthrust = [float(row["dthrust_n"]) for row in rows]
+    dtorque = [float(row["dtorque_nm"]) for row in rows]
+    thrust = sum(dthrust)
+    torque = sum(dtorque)
+    rpm = result.config.rpm
+    rho = result.config.rho
+    diameter_m = 2.0 * result.config.radius_m
+    disk_area = math.pi * result.config.radius_m**2
+    power = shaft_power_w(torque, rpm_to_rad_s(rpm))
+    eta_static = 0.0
+    if result.config.freestream_mps <= 1.0e-6 and power > 0.0 and thrust > 0.0:
+        eta_static = thrust**1.5 / (power * math.sqrt(2.0 * rho * disk_area))
+    ct, cq, cp = propeller_coefficients(thrust, torque, rho, rpm, diameter_m)
+    clipped = [
+        row for row in rows
+        if row.get("is_clipped", row.get("hit_cl_limit", "")).strip().lower() == "true"
+        or row.get("hit_cl_limit", "").strip().lower() == "true"
+    ]
+    hub_mu = result.config.hub_radius_fraction
+    tip_thrust = integrate_annular_band(mu, dthrust, 0.85, 1.0, hub_mu)
+    inboard_thrust = integrate_annular_band(mu, dthrust, 0.2, 0.72, hub_mu)
+    return GeometryCsvMetrics(
+        path=path,
+        thrust_n=thrust,
+        torque_nm=torque,
+        power_w=power,
+        eta_static=eta_static,
+        ct=ct,
+        cq=cq,
+        cp=cp,
+        cl_clipping_fraction=safe_div(len(clipped), len(rows)),
+        tip_thrust_fraction=safe_div(tip_thrust, thrust),
+        inboard_thrust_fraction=safe_div(inboard_thrust, thrust),
+        cumulative_50_thrust_radius=cumulative_radius_at_fraction(mu, dthrust, 0.5, hub_mu),
+    )
+
+
+def assert_close_for_output_sync(label: str, csv_value: float, expected_value: float, rel_tol: float = 1.0e-5) -> None:
+    tolerance = rel_tol * max(abs(expected_value), 1.0)
+    if abs(csv_value - expected_value) > tolerance:
+        raise RuntimeError(
+            f"output synchronization check failed for {label}: "
+            f"CSV/table value {csv_value:.12g} vs expected {expected_value:.12g} "
+            f"(abs diff {abs(csv_value - expected_value):.3g}, tolerance {tolerance:.3g})"
+        )
+
+
+def validate_csv_metrics_against_result(case_name: str, metrics: GeometryCsvMetrics, result: DesignResult) -> None:
+    assert_close_for_output_sync(f"{case_name} thrust", metrics.thrust_n, result.thrust_n)
+    assert_close_for_output_sync(f"{case_name} torque", metrics.torque_nm, result.torque_nm)
+    assert_close_for_output_sync(f"{case_name} power", metrics.power_w, result.power_w)
+    assert_close_for_output_sync(f"{case_name} eta_static", metrics.eta_static, result.eta_static)
+
+
+def validate_csv_metrics_against_summary(case_name: str, metrics: GeometryCsvMetrics, summary_path: Path) -> None:
+    if not summary_path.exists():
+        raise FileNotFoundError(f"{case_name} solver summary not found for output sync check: {summary_path}")
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    final_metrics = summary["final_metrics"]
+    assert_close_for_output_sync(f"{case_name} summary thrust", metrics.thrust_n, float(final_metrics["thrust_n"]))
+    assert_close_for_output_sync(f"{case_name} summary torque", metrics.torque_nm, float(final_metrics["torque_nm"]))
+    assert_close_for_output_sync(f"{case_name} summary power", metrics.power_w, float(final_metrics["power_w"]))
+    assert_close_for_output_sync(f"{case_name} summary eta_static", metrics.eta_static, float(final_metrics["eta_static"]))
+
+
+def table_row_by_metric(table_path: Path) -> dict[str, dict[str, str]]:
+    with table_path.open(newline="", encoding="utf-8") as handle:
+        return {row["metric"]: row for row in csv.DictReader(handle)}
+
+
+def validate_result_table_against_csv(
+    table_path: Path,
+    mil_metrics: GeometryCsvMetrics,
+    gmt_metrics: GeometryCsvMetrics,
+) -> None:
+    rows = table_row_by_metric(table_path)
+    checks = [
+        ("total thrust", "optimized_mil", mil_metrics.thrust_n),
+        ("total thrust", "optimized_gmt", gmt_metrics.thrust_n),
+        ("total torque", "optimized_mil", mil_metrics.torque_nm),
+        ("total torque", "optimized_gmt", gmt_metrics.torque_nm),
+        ("shaft power", "optimized_mil", mil_metrics.power_w),
+        ("shaft power", "optimized_gmt", gmt_metrics.power_w),
+        ("efficiency", "optimized_mil", mil_metrics.eta_static),
+        ("efficiency", "optimized_gmt", gmt_metrics.eta_static),
+    ]
+    for metric, column, expected in checks:
+        if metric not in rows:
+            raise RuntimeError(f"comparison table missing metric row: {metric}")
+        assert_close_for_output_sync(f"comparison table {metric} {column}", float(rows[metric][column]), expected)
+
+
+def comparison_result_table_rows(
+    verification: VerificationResult,
+    mil_csv: GeometryCsvMetrics,
+    gmt_csv: GeometryCsvMetrics,
+) -> list[tuple[object, ...]]:
+    mil = verification.mil.result
+    gmt = verification.gmt.result
+    torque_reduction = reduction_pct(mil_csv.torque_nm, gmt_csv.torque_nm)
+    power_reduction = reduction_pct(mil_csv.power_w, gmt_csv.power_w)
+    eta_change = pct_change(gmt_csv.eta_static, mil_csv.eta_static)
+    shape = verification.spanload_shape
+    return [
+        ("source MIL output", "", str(mil_csv.path), "", "", "top-level exported geometry CSV"),
+        ("source GMT output", "", "", str(gmt_csv.path), "", "top-level exported geometry CSV"),
+        ("rpm", "rpm", mil.config.rpm, gmt.config.rpm, gmt.config.rpm - mil.config.rpm, "must match for power comparison"),
+        ("air density", "kg/m^3", mil.config.rho, gmt.config.rho, gmt.config.rho - mil.config.rho, "must match for coefficient comparison"),
+        ("target thrust", "N", mil.config.thrust_target_n, gmt.config.thrust_target_n, gmt.config.thrust_target_n - mil.config.thrust_target_n, "must match"),
+        ("total thrust", "N", mil_csv.thrust_n, gmt_csv.thrust_n, gmt_csv.thrust_n - mil_csv.thrust_n, "GMT - MIL"),
+        ("total torque", "N*m", mil_csv.torque_nm, gmt_csv.torque_nm, gmt_csv.torque_nm - mil_csv.torque_nm, "GMT - MIL"),
+        ("shaft power", "W", mil_csv.power_w, gmt_csv.power_w, gmt_csv.power_w - mil_csv.power_w, "P = Q*2*pi*rpm/60 from source CSV torque"),
+        ("efficiency", "-", mil_csv.eta_static, gmt_csv.eta_static, gmt_csv.eta_static - mil_csv.eta_static, f"{select_efficiency(mil)[1]}; advance ratio is zero"),
+        ("CT", "-", mil_csv.ct, gmt_csv.ct, gmt_csv.ct - mil_csv.ct, "same rho, rpm, and diameter definitions"),
+        ("CQ", "-", mil_csv.cq, gmt_csv.cq, gmt_csv.cq - mil_csv.cq, "same rho, rpm, and diameter definitions"),
+        ("CP", "-", mil_csv.cp, gmt_csv.cp, gmt_csv.cp - mil_csv.cp, "same rho, rpm, and diameter definitions"),
+        ("torque reduction", "%", "", "", torque_reduction, "100*(MIL-GMT)/MIL"),
+        ("power reduction", "%", "", "", power_reduction, "100*(MIL-GMT)/MIL"),
+        ("efficiency change", "%", "", "", eta_change, "100*(GMT-MIL)/MIL"),
+        ("RMS error to elliptical target", "-", shape.mil.rms_error_elliptical, shape.gmt.rms_error_elliptical, shape.gmt.rms_error_elliptical - shape.mil.rms_error_elliptical, "normalized spanload shape; lower is closer"),
+        ("RMS error to bell target", "-", shape.mil.rms_error_bell, shape.gmt.rms_error_bell, shape.gmt.rms_error_bell - shape.mil.rms_error_bell, "normalized spanload shape; lower is closer"),
+        ("correlation with elliptical target", "-", shape.mil.correlation_elliptical, shape.gmt.correlation_elliptical, shape.gmt.correlation_elliptical - shape.mil.correlation_elliptical, "weighted Pearson correlation over mu"),
+        ("correlation with bell target", "-", shape.mil.correlation_bell, shape.gmt.correlation_bell, shape.gmt.correlation_bell - shape.mil.correlation_bell, "weighted Pearson correlation over mu"),
+        ("center_of_thrust_mu", "mu", shape.mil.center_of_thrust_mu, shape.gmt.center_of_thrust_mu, shape.gmt.center_of_thrust_mu - shape.mil.center_of_thrust_mu, "sum(mu*dT)/sum(dT); lower means more inboard"),
+        ("tip_thrust_fraction_mu_gt_085", "-", shape.mil.tip_thrust_fraction_mu_gt_085, shape.gmt.tip_thrust_fraction_mu_gt_085, shape.gmt.tip_thrust_fraction_mu_gt_085 - shape.mil.tip_thrust_fraction_mu_gt_085, "integrated fraction from mu=0.85 to 1.0"),
+        ("cumulative thrust fraction at mu = 0.70", "-", shape.mil.cumulative_thrust_fraction_at_070, shape.gmt.cumulative_thrust_fraction_at_070, shape.gmt.cumulative_thrust_fraction_at_070 - shape.mil.cumulative_thrust_fraction_at_070, "GMT should be greater for earlier inboard build"),
+        ("cumulative thrust fraction at mu = 0.80", "-", shape.mil.cumulative_thrust_fraction_at_080, shape.gmt.cumulative_thrust_fraction_at_080, shape.gmt.cumulative_thrust_fraction_at_080 - shape.mil.cumulative_thrust_fraction_at_080, "GMT should be greater for earlier inboard build"),
+        ("cumulative thrust fraction at mu = 0.90", "-", shape.mil.cumulative_thrust_fraction_at_090, shape.gmt.cumulative_thrust_fraction_at_090, shape.gmt.cumulative_thrust_fraction_at_090 - shape.mil.cumulative_thrust_fraction_at_090, "GMT should be greater for earlier inboard build"),
+        ("valid for spanload-shape proof", "-", shape.valid_for_spanload_shape_proof, shape.valid_for_spanload_shape_proof, "", "false if any dthrust_n < 0 or cumulative thrust fraction exceeds 1.02 before the final station"),
+        ("tip thrust fraction from r/R = 0.85 to 1.0", "-", mil_csv.tip_thrust_fraction, gmt_csv.tip_thrust_fraction, gmt_csv.tip_thrust_fraction - mil_csv.tip_thrust_fraction, "fraction of case total"),
+        ("inboard thrust fraction from r/R = 0.2 to 0.72", "-", mil_csv.inboard_thrust_fraction, gmt_csv.inboard_thrust_fraction, gmt_csv.inboard_thrust_fraction - mil_csv.inboard_thrust_fraction, "fraction of case total"),
+        ("cumulative 50% thrust radius", "r/R", mil_csv.cumulative_50_thrust_radius, gmt_csv.cumulative_50_thrust_radius, gmt_csv.cumulative_50_thrust_radius - mil_csv.cumulative_50_thrust_radius, "lower means more inboard cumulative loading"),
+        ("Cl clipping fraction", "-", mil_csv.cl_clipping_fraction, gmt_csv.cl_clipping_fraction, gmt_csv.cl_clipping_fraction - mil_csv.cl_clipping_fraction, "station-count fraction with hit_cl_limit/is_clipped = True"),
+    ]
+
+
+def write_result_table_csv(
+    verification: VerificationResult,
+    output_path: Path,
+    mil_csv: GeometryCsvMetrics,
+    gmt_csv: GeometryCsvMetrics,
+) -> None:
+    assert_verification_output_path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    print(f"Comparison table MIL CSV source: {mil_csv.path}")
+    print(f"Comparison table GMT CSV source: {gmt_csv.path}")
+    with output_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["metric", "units", "optimized_mil", "optimized_gmt", "gmt_vs_mil", "notes"])
+        for row in comparison_result_table_rows(verification, mil_csv, gmt_csv):
+            writer.writerow([format_csv_value(value) for value in row])
+    write_metadata_sidecar(
+        output_path,
+        {
+            "generating_script": GENERATING_SCRIPT,
+            "model_source": "theory_verification",
+            "case_name": "optimized_mil_vs_gmt",
+            "geometry_source_csv": {"MIL": str(mil_csv.path), "GMT": str(gmt_csv.path)},
+            "station_source_csv": "",
+            "input_config_path": "",
+            "twist_column_used": "twist_deg",
+            "aero_source": "optimizer_reduced_order",
+        },
+    )
+
+
+def write_result_table_markdown(
+    verification: VerificationResult,
+    output_path: Path,
+    mil_csv: GeometryCsvMetrics,
+    gmt_csv: GeometryCsvMetrics,
+) -> None:
+    assert_verification_output_path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "| metric | units | optimized_mil | optimized_gmt | gmt_vs_mil | notes |",
+        "|---|---:|---:|---:|---:|---|",
+    ]
+    for row in comparison_result_table_rows(verification, mil_csv, gmt_csv):
+        lines.append("| " + " | ".join(str(format_csv_value(value)) for value in row) + " |")
+    output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def format_csv_value(value: object) -> object:
@@ -1066,8 +1734,10 @@ def status_for_check(verification: VerificationResult, check_name: str) -> str:
 
 
 def write_report(verification: VerificationResult, output_path: Path) -> None:
+    assert_verification_output_path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     m = verification.metrics
+    shape = verification.spanload_shape
     mil = verification.mil.result
     gmt = verification.gmt.result
     omega = rpm_to_rad_s(mil.config.rpm)
@@ -1171,6 +1841,20 @@ def write_report(verification: VerificationResult, output_path: Path) -> None:
         f"Inboard loading change, r/R 0.2 to 0.72: {m.inboard_loading_change_pct:.3f} %",
         f"Inboard thrust fraction MIL -> GMT: {m.inboard_fraction_mil:.6f} -> {m.inboard_fraction_gmt:.6f}",
         f"Tip thrust fraction MIL -> GMT: {m.tip_fraction_mil:.6f} -> {m.tip_fraction_gmt:.6f}",
+        f"MIL RMS error to elliptical target: {shape.mil.rms_error_elliptical:.6f}",
+        f"MIL RMS error to bell target: {shape.mil.rms_error_bell:.6f}",
+        f"GMT RMS error to elliptical target: {shape.gmt.rms_error_elliptical:.6f}",
+        f"GMT RMS error to bell target: {shape.gmt.rms_error_bell:.6f}",
+        f"MIL correlation with elliptical target: {shape.mil.correlation_elliptical:.6f}",
+        f"MIL correlation with bell target: {shape.mil.correlation_bell:.6f}",
+        f"GMT correlation with elliptical target: {shape.gmt.correlation_elliptical:.6f}",
+        f"GMT correlation with bell target: {shape.gmt.correlation_bell:.6f}",
+        f"Center of thrust mu MIL -> GMT: {shape.mil.center_of_thrust_mu:.6f} -> {shape.gmt.center_of_thrust_mu:.6f}",
+        f"Tip thrust fraction mu > 0.85 MIL -> GMT: {shape.mil.tip_thrust_fraction_mu_gt_085:.6f} -> {shape.gmt.tip_thrust_fraction_mu_gt_085:.6f}",
+        f"Cumulative thrust fraction at mu=0.70 MIL -> GMT: {shape.mil.cumulative_thrust_fraction_at_070:.6f} -> {shape.gmt.cumulative_thrust_fraction_at_070:.6f}",
+        f"Cumulative thrust fraction at mu=0.80 MIL -> GMT: {shape.mil.cumulative_thrust_fraction_at_080:.6f} -> {shape.gmt.cumulative_thrust_fraction_at_080:.6f}",
+        f"Cumulative thrust fraction at mu=0.90 MIL -> GMT: {shape.mil.cumulative_thrust_fraction_at_090:.6f} -> {shape.gmt.cumulative_thrust_fraction_at_090:.6f}",
+        f"Valid for spanload-shape proof: {shape.valid_for_spanload_shape_proof}",
         f"50 percent cumulative thrust radius MIL -> GMT: {m.cumulative_50_radius_mil:.6f} -> {m.cumulative_50_radius_gmt:.6f} r/R",
         f"Maximum chord difference: {m.max_chord_diff_m:.9f} m ({m.max_chord_diff_pct_radius:.6f} %R)",
         f"Maximum twist difference: {m.max_twist_diff_deg:.6f} deg",
@@ -1221,6 +1905,7 @@ def unique_in_order(values: Sequence[str]) -> list[str]:
 
 
 def write_plots(verification: VerificationResult, figures_dir: Path) -> None:
+    assert_verification_output_path(figures_dir)
     try:
         import matplotlib.pyplot as plt
     except Exception as exc:
@@ -1273,6 +1958,8 @@ def write_plots(verification: VerificationResult, figures_dir: Path) -> None:
         figures_dir,
         "optimized_mil_vs_gmt_thrust_loading",
     )
+    plot_normalized_spanload_shape_comparison(plt, verification, figures_dir)
+    plot_cumulative_thrust_comparison(plt, verification, figures_dir)
     plot_two_series(
         plt,
         common_mu,
@@ -1306,6 +1993,61 @@ def write_plots(verification: VerificationResult, figures_dir: Path) -> None:
         ylim=(0.0, 1.02),
     )
     plot_summary_bars(plt, verification, figures_dir)
+
+
+def plot_normalized_spanload_shape_comparison(plt, verification: VerificationResult, figures_dir: Path) -> None:
+    shape = verification.spanload_shape
+    fig, ax = plt.subplots(figsize=(5.2, 3.4))
+    ax.plot(
+        shape.common_mu,
+        shape.common_mil_normalized_loading,
+        color="#0072B2",
+        marker="o",
+        markevery=max(1, len(shape.common_mu) // 12),
+        label="MIL actual",
+    )
+    ax.plot(shape.common_mu, shape.common_elliptical_target, color="#0072B2", linestyle="--", label="elliptical target")
+    ax.plot(
+        shape.common_mu,
+        shape.common_gmt_normalized_loading,
+        color="#D55E00",
+        marker="s",
+        markevery=max(1, len(shape.common_mu) // 12),
+        label="GMT actual",
+    )
+    ax.plot(shape.common_mu, shape.common_bell_target, color="#D55E00", linestyle="--", label="bell target")
+    ax.set_xlabel("r/R [-]")
+    ax.set_ylabel("normalized dT/dmu [-]")
+    style_axes(ax)
+    save_figure(fig, figures_dir, "normalized_spanload_shape_comparison")
+    plt.close(fig)
+
+
+def plot_cumulative_thrust_comparison(plt, verification: VerificationResult, figures_dir: Path) -> None:
+    shape = verification.spanload_shape
+    fig, ax = plt.subplots(figsize=(5.2, 3.4))
+    ax.plot(
+        shape.mil.mu,
+        shape.mil.cumulative_thrust_fraction,
+        color="#0072B2",
+        marker="o",
+        markevery=max(1, len(shape.mil.mu) // 12),
+        label="MIL cumulative thrust",
+    )
+    ax.plot(
+        shape.gmt.mu,
+        shape.gmt.cumulative_thrust_fraction,
+        color="#D55E00",
+        marker="s",
+        markevery=max(1, len(shape.gmt.mu) // 12),
+        label="GMT cumulative thrust",
+    )
+    ax.set_xlabel("r/R [-]")
+    ax.set_ylabel("cumulative thrust fraction [-]")
+    ax.set_ylim(0.0, 1.02)
+    style_axes(ax)
+    save_figure(fig, figures_dir, "cumulative_thrust_comparison")
+    plt.close(fig)
 
 
 def set_plot_style(plt) -> None:
@@ -1347,6 +2089,7 @@ def style_axes(ax) -> None:
 
 
 def save_figure(fig, figures_dir: Path, filename: str) -> None:
+    assert_verification_output_path(figures_dir)
     fig.tight_layout()
     save_matplotlib_figure(fig, figures_dir, filename)
 
@@ -1372,6 +2115,7 @@ def plot_summary_bars(plt, verification: VerificationResult, figures_dir: Path) 
 
 
 def write_plots_fallback(verification: VerificationResult, figures_dir: Path) -> None:
+    assert_verification_output_path(figures_dir)
     common_mu = verification.common_grid
     specs = [
         (
@@ -1457,7 +2201,6 @@ def save_fallback_line_plot(
     height = 480
     geometry = chart_geometry(x_values, list(mil_y) + list(gmt_y), width, height, ylim)
     save_line_svg(figures_dir / f"{filename}.svg", xlabel, ylabel, x_values, mil_y, gmt_y, geometry)
-    save_line_pdf(figures_dir / f"{filename}.pdf", xlabel, ylabel, x_values, mil_y, gmt_y, geometry)
     save_line_png(figures_dir / f"{filename}.png", xlabel, ylabel, x_values, mil_y, gmt_y, geometry)
 
 
@@ -1591,40 +2334,6 @@ def sample_markers(x_values: Sequence[float], y_values: Sequence[float]) -> list
     return [(x, y) for idx, (x, y) in enumerate(zip(x_values, y_values)) if idx % step == 0 or idx == len(x_values) - 1]
 
 
-def save_line_pdf(
-    path: Path,
-    xlabel: str,
-    ylabel: str,
-    x_values: Sequence[float],
-    mil_y: Sequence[float],
-    gmt_y: Sequence[float],
-    geometry: dict[str, object],
-) -> None:
-    width = float(geometry["width"])
-    height = float(geometry["height"])
-    commands: list[str] = []
-    pdf_line(commands, 0, 0, width, 0, "#ffffff", 0.1)
-    for tick in geometry["x_ticks"]:
-        x = map_x(float(tick), geometry)
-        pdf_line(commands, x, float(geometry["top"]), x, float(geometry["bottom"]), "#d9d9d9", 0.6, height)
-        pdf_text(commands, x - 8, float(geometry["bottom"]) + 24, format_tick(float(tick)), 8, height)
-    for tick in geometry["y_ticks"]:
-        y = map_y(float(tick), geometry)
-        pdf_line(commands, float(geometry["left"]), y, float(geometry["right"]), y, "#d9d9d9", 0.6, height)
-        pdf_text(commands, float(geometry["left"]) - 44, y + 3, format_tick(float(tick)), 8, height)
-    pdf_line(commands, float(geometry["left"]), float(geometry["bottom"]), float(geometry["right"]), float(geometry["bottom"]), "#000000", 1.0, height)
-    pdf_line(commands, float(geometry["left"]), float(geometry["top"]), float(geometry["left"]), float(geometry["bottom"]), "#000000", 1.0, height)
-    pdf_polyline(commands, x_values, mil_y, geometry, "#0072B2", height)
-    pdf_polyline(commands, x_values, gmt_y, geometry, "#D55E00", height)
-    pdf_text(commands, 0.5 * (float(geometry["left"]) + float(geometry["right"])) - 10, height - 24, xlabel, 10, height)
-    pdf_text(commands, 18, 0.5 * (float(geometry["top"]) + float(geometry["bottom"])) + 50, ylabel, 10, height, rotate=True)
-    pdf_line(commands, float(geometry["left"]) + 18, float(geometry["top"]) + 12, float(geometry["left"]) + 56, float(geometry["top"]) + 12, "#0072B2", 1.5, height)
-    pdf_text(commands, float(geometry["left"]) + 64, float(geometry["top"]) + 16, "MIL", 9, height)
-    pdf_line(commands, float(geometry["left"]) + 18, float(geometry["top"]) + 32, float(geometry["left"]) + 56, float(geometry["top"]) + 32, "#D55E00", 1.5, height)
-    pdf_text(commands, float(geometry["left"]) + 64, float(geometry["top"]) + 36, "GMT", 9, height)
-    write_pdf(path, width, height, "\n".join(commands))
-
-
 def save_line_png(
     path: Path,
     xlabel: str,
@@ -1672,7 +2381,6 @@ def save_fallback_summary_bars(verification: VerificationResult, figures_dir: Pa
         ("efficiency [-]", verification.metrics.eta_mil, verification.metrics.eta_gmt),
     ]
     save_summary_svg(figures_dir / "optimized_mil_vs_gmt_summary_bar_chart.svg", metrics)
-    save_summary_pdf(figures_dir / "optimized_mil_vs_gmt_summary_bar_chart.pdf", metrics)
     save_summary_png(figures_dir / "optimized_mil_vs_gmt_summary_bar_chart.png", metrics)
 
 
@@ -1708,26 +2416,6 @@ def save_summary_svg(path: Path, metrics: Sequence[tuple[str, float, float]]) ->
     path.write_text("\n".join(elements), encoding="utf-8")
 
 
-def save_summary_pdf(path: Path, metrics: Sequence[tuple[str, float, float]]) -> None:
-    width, height = 760.0, 560.0
-    commands: list[str] = []
-    for idx, (label, mil_value, gmt_value) in enumerate(metrics):
-        x0, y0, w, h = panel_geometry(idx, int(width), int(height))
-        ymax = max(mil_value, gmt_value) * 1.18
-        pdf_text(commands, x0 + w / 2 - 35, y0 - 10, label, 9, height)
-        pdf_line(commands, x0, y0 + h, x0 + w, y0 + h, "#000000", 0.8, height)
-        pdf_line(commands, x0, y0, x0, y0 + h, "#000000", 0.8, height)
-        for bar_idx, (name, value, color) in enumerate((("MIL", mil_value, "#0072B2"), ("GMT", gmt_value, "#D55E00"))):
-            bw = 46
-            bx = x0 + 70 + bar_idx * 86
-            bh = safe_div(value, ymax) * h
-            by = y0 + h - bh
-            pdf_rect(commands, bx, by, bw, bh, color, height)
-            pdf_text(commands, bx + 6, y0 + h + 18, name, 8, height)
-            pdf_text(commands, bx + 4, by - 4, format_tick(value), 8, height)
-    write_pdf(path, width, height, "\n".join(commands))
-
-
 def save_summary_png(path: Path, metrics: Sequence[tuple[str, float, float]]) -> None:
     width, height = 760, 560
     image = new_image(width, height, (255, 255, 255))
@@ -1746,95 +2434,6 @@ def save_summary_png(path: Path, metrics: Sequence[tuple[str, float, float]]) ->
             draw_text(image, bx, y0 + h + 16, name, (0, 0, 0), 1)
             draw_text(image, bx, by - 12, format_tick(value), (0, 0, 0), 1)
     write_png(path, image)
-
-
-def pdf_color(color: str) -> tuple[float, float, float]:
-    color = color.lstrip("#")
-    return int(color[0:2], 16) / 255.0, int(color[2:4], 16) / 255.0, int(color[4:6], 16) / 255.0
-
-
-def pdf_line(
-    commands: list[str],
-    x1: float,
-    y1: float,
-    x2: float,
-    y2: float,
-    color: str,
-    width: float,
-    page_height: float = 480.0,
-) -> None:
-    r, g, b = pdf_color(color)
-    commands.append(f"{r:.3f} {g:.3f} {b:.3f} RG {width:.2f} w {x1:.2f} {page_height - y1:.2f} m {x2:.2f} {page_height - y2:.2f} l S")
-
-
-def pdf_polyline(
-    commands: list[str],
-    x_values: Sequence[float],
-    y_values: Sequence[float],
-    geometry: dict[str, object],
-    color: str,
-    page_height: float,
-) -> None:
-    r, g, b = pdf_color(color)
-    points = [(map_x(x, geometry), page_height - map_y(y, geometry)) for x, y in zip(x_values, y_values)]
-    if not points:
-        return
-    command = [f"{r:.3f} {g:.3f} {b:.3f} RG 1.6 w {points[0][0]:.2f} {points[0][1]:.2f} m"]
-    command.extend(f"{x:.2f} {y:.2f} l" for x, y in points[1:])
-    command.append("S")
-    commands.append(" ".join(command))
-
-
-def pdf_text(
-    commands: list[str],
-    x: float,
-    y: float,
-    text: str,
-    size: int,
-    page_height: float,
-    rotate: bool = False,
-) -> None:
-    escaped = pdf_escape(text)
-    if rotate:
-        commands.append(f"BT /F1 {size} Tf 0 1 -1 0 {x:.2f} {page_height - y:.2f} Tm ({escaped}) Tj ET")
-    else:
-        commands.append(f"BT /F1 {size} Tf 1 0 0 1 {x:.2f} {page_height - y:.2f} Tm ({escaped}) Tj ET")
-
-
-def pdf_rect(commands: list[str], x: float, y: float, width: float, height: float, color: str, page_height: float) -> None:
-    r, g, b = pdf_color(color)
-    commands.append(f"{r:.3f} {g:.3f} {b:.3f} rg {x:.2f} {page_height - y - height:.2f} {width:.2f} {height:.2f} re f")
-
-
-def pdf_escape(text: str) -> str:
-    return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
-
-
-def write_pdf(path: Path, width: float, height: float, content: str) -> None:
-    stream = content.encode("latin-1", errors="replace")
-    objects = [
-        b"<< /Type /Catalog /Pages 2 0 R >>",
-        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-        f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width:.2f} {height:.2f}] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>".encode("ascii"),
-        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-        b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"\nendstream",
-    ]
-    output = bytearray(b"%PDF-1.4\n")
-    offsets = [0]
-    for idx, obj in enumerate(objects, start=1):
-        offsets.append(len(output))
-        output.extend(f"{idx} 0 obj\n".encode("ascii"))
-        output.extend(obj)
-        output.extend(b"\nendobj\n")
-    xref_offset = len(output)
-    output.extend(f"xref\n0 {len(objects) + 1}\n".encode("ascii"))
-    output.extend(b"0000000000 65535 f \n")
-    for offset in offsets[1:]:
-        output.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
-    output.extend(
-        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n".encode("ascii")
-    )
-    path.write_bytes(bytes(output))
 
 
 def new_image(width: int, height: int, color: tuple[int, int, int]) -> dict[str, object]:
@@ -1988,8 +2587,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--chord-min-in", type=float, default=0.50)
     parser.add_argument("--chord-max-in", type=float, default=None)
     parser.add_argument("--chord-blend", type=float, default=0.58)
-    parser.add_argument("--twist-blend", type=float, default=0.0)
-    parser.add_argument("--smooth-passes", type=int, default=3)
+    parser.add_argument("--twist-blend", type=float, default=0.20)
+    parser.add_argument("--smooth-passes", type=int, default=2)
     parser.add_argument("--alpha-min", type=float, default=-2.0)
     parser.add_argument("--alpha-max", type=float, default=18.0)
     parser.add_argument("--alpha-step", type=float, default=0.5)
@@ -2002,8 +2601,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tip-loading-reduction-tol-pct", type=float, default=DEFAULT_TIP_REDUCTION_TOL_PCT)
     parser.add_argument("--cl-clipping-tol-pct", type=float, default=20.0)
     parser.add_argument("--chord-tolerance-m", type=float, default=DEFAULT_CHORD_TOL_M)
-    parser.add_argument("--results-dir", type=Path, default=ROOT_DIR / "results" / "geometry" / "comparison")
-    parser.add_argument("--figures-dir", type=Path, default=ROOT_DIR / "figures_paper")
+    parser.add_argument("--results-dir", type=Path, default=ROOT_DIR / "results" / "verification" / "theory")
+    parser.add_argument("--figures-dir", type=Path, default=ROOT_DIR / "figures_paper" / "verification" / "theory")
     parser.add_argument("--skip-plots", action="store_true")
     parser.add_argument("--write-reference-cases", action="store_true")
     parser.add_argument("--strict-exit-code", action="store_true", help="Return exit code 1 when theory checks fail.")

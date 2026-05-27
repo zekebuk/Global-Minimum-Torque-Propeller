@@ -23,7 +23,7 @@ def set_paper_style() -> None:
 
 
 def save_figure(fig, name: str, category: str) -> Path:
-    valid_categories = {"reference", "optimized", "comparison"}
+    valid_categories = {"beam_solver", "abaqus", "comparisons"}
     if category not in valid_categories:
         raise ValueError(f"Unknown figure category: {category}")
 
