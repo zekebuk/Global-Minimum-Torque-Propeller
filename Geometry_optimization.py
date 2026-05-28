@@ -119,6 +119,17 @@ REFERENCE_GMT_CASE = "reference_gmt"
 OPTIMIZED_MIL_CASE = "optimized_mil"
 OPTIMIZED_GMT_CASE = "optimized_gmt"
 STANDARD_CASE_NAMES = [REFERENCE_MIL_CASE, REFERENCE_GMT_CASE, OPTIMIZED_MIL_CASE, OPTIMIZED_GMT_CASE]
+THESIS_THRUST_TOLERANCE_FRACTION = 0.05
+DOMINANT_VALIDITY_PENALTY = 1.0e6
+THRUST_VALIDITY_SWEEP_TARGETS_N = (15.0, 20.0, 25.0, 30.0, 35.0)
+FAILURE_NONE = "none"
+FAILURE_CLIPPING_FRACTION = "clipping_fraction_exceeds_limit"
+FAILURE_ALPHA_LIMIT_FRACTION = "alpha_limit_fraction_exceeds_limit"
+FAILURE_TWIST_MANUFACTURABILITY = "twist_manufacturability_failed"
+FAILURE_NEGATIVE_OR_NONFINITE_LOADING = "negative_or_nonfinite_loading"
+FAILURE_TARGET_INFEASIBLE_LOCKED = "target_thrust_infeasible_under_locked_geometry"
+FAILURE_THRUST_TARGET_NOT_MET = "thrust_target_not_met"
+FAILURE_MULTIPLE = "multiple_validity_failures"
 REFERENCE_VARIANT_ALIASES = {
     REFERENCE_MIL_CASE: "mil_22",
     REFERENCE_GMT_CASE: "gmt_22",
@@ -403,6 +414,29 @@ class DesignResult:
     convergence_history: Sequence[dict[str, float]]
     reference_source: str
     optimizer_name: str
+    cl_limit_fraction_pct: float = 0.0
+    alpha_limit_fraction_pct: float = 0.0
+    high_alpha_fraction_pct: float = 0.0
+    negative_loading_fraction_pct: float = 0.0
+    nonfinite_loading_fraction_pct: float = 0.0
+    manufacturable_twist_pass: bool = True
+    valid_for_optimizer_summary: bool = False
+    valid_for_bemt_summary: bool = False
+    valid_for_thesis_export: bool = False
+    failure_reason: str = FAILURE_NONE
+    failure_reasons: Sequence[str] = ()
+    aero_calibration_used: bool = False
+    calibration_mode: str = "none"
+
+
+@dataclass(frozen=True)
+class AlphaMatchResult:
+    parameters: OptimizationParameters
+    selected_result: DesignResult | None
+    valid_candidate_found: bool
+    target_met_with_valid_candidate: bool
+    selected_candidate_valid: bool
+    failure_reasons: Sequence[str] = ()
 
 
 AIRFOIL_LIBRARY = {
@@ -1584,6 +1618,142 @@ def candidate_airfoil(config: DesignInputs, station: ReferenceStation) -> str:
     return build_default_airfoil_schedule([station.mu])[0]
 
 
+def unique_failure_reasons(reasons: Iterable[str]) -> List[str]:
+    unique: List[str] = []
+    seen: set[str] = set()
+    for reason in reasons:
+        if not reason or reason == FAILURE_NONE or reason in seen:
+            continue
+        seen.add(reason)
+        unique.append(reason)
+    return unique
+
+
+def primary_failure_reason(reasons: Sequence[str]) -> str:
+    if not reasons:
+        return FAILURE_NONE
+    if len(reasons) > 1:
+        return FAILURE_MULTIPLE
+    return reasons[0]
+
+
+def calibration_mode_for_config(config: DesignInputs) -> str:
+    if config.mode == "reference_regularized":
+        return "reference_regularized_diagnostic"
+    return "none"
+
+
+def aero_calibration_used_for_config(config: DesignInputs) -> bool:
+    return calibration_mode_for_config(config) != "none"
+
+
+def locked_thesis_geometry(config: DesignInputs) -> bool:
+    return config.lock_chord and config.lock_airfoil and config.optimize_twist_only
+
+
+def station_validity_metrics(
+    config: DesignInputs,
+    stations: Sequence[StationResult],
+    twist_metrics: dict[str, Any],
+) -> dict[str, float | bool]:
+    count = max(len(stations), 1)
+    alpha_limit_fraction = sum(station.hit_alpha_min or station.hit_alpha_max for station in stations) / count
+    cl_limit_fraction = sum(station.hit_cl_limit for station in stations) / count
+    negative_loading_fraction = sum(station.negative_force for station in stations) / count
+    nonfinite_loading_fraction = sum(
+        station.impossible_force
+        or not all(
+            math.isfinite(value)
+            for value in (
+                station.dthrust_n,
+                station.dtorque_nm,
+                station.cl,
+                station.alpha_deg,
+                station.chord_m,
+                station.twist_deg,
+            )
+        )
+        for station in stations
+    ) / count
+    high_alpha_threshold = config.alpha_search_max_deg - 1.0
+    high_alpha_fraction = sum(station.alpha_deg >= high_alpha_threshold for station in stations) / count
+    return {
+        "cl_limit_fraction_pct": 100.0 * cl_limit_fraction,
+        "alpha_limit_fraction_pct": 100.0 * alpha_limit_fraction,
+        "high_alpha_fraction_pct": 100.0 * high_alpha_fraction,
+        "negative_loading_fraction_pct": 100.0 * negative_loading_fraction,
+        "nonfinite_loading_fraction_pct": 100.0 * nonfinite_loading_fraction,
+        "manufacturable_twist_pass": bool(twist_metrics["manufacturable_twist_pass"]),
+    }
+
+
+def validity_failure_reasons_from_metrics(
+    config: DesignInputs,
+    normalized_thrust_error: float,
+    metrics: dict[str, float | bool],
+    extra_failure_reasons: Sequence[str] = (),
+) -> List[str]:
+    reasons: List[str] = []
+    if float(metrics["cl_limit_fraction_pct"]) > config.max_cl_limit_fraction_pct:
+        reasons.append(FAILURE_CLIPPING_FRACTION)
+    if float(metrics["alpha_limit_fraction_pct"]) > config.max_alpha_limit_fraction_pct:
+        reasons.append(FAILURE_ALPHA_LIMIT_FRACTION)
+    if config.manufacturable_twist and not bool(metrics["manufacturable_twist_pass"]):
+        reasons.append(FAILURE_TWIST_MANUFACTURABILITY)
+    if (
+        float(metrics["negative_loading_fraction_pct"]) > 0.0
+        or float(metrics["nonfinite_loading_fraction_pct"]) > 0.0
+    ):
+        reasons.append(FAILURE_NEGATIVE_OR_NONFINITE_LOADING)
+    reasons.extend(extra_failure_reasons)
+    reasons = unique_failure_reasons(reasons)
+    if normalized_thrust_error > THESIS_THRUST_TOLERANCE_FRACTION:
+        if FAILURE_TARGET_INFEASIBLE_LOCKED not in reasons:
+            reasons.append(FAILURE_THRUST_TARGET_NOT_MET)
+    return unique_failure_reasons(reasons)
+
+
+def validity_flags_from_metrics(
+    result_finite: bool,
+    torque_nm: float,
+    normalized_thrust_error: float,
+    failure_reasons: Sequence[str],
+) -> tuple[bool, bool, bool]:
+    valid_for_optimizer_summary = (
+        normalized_thrust_error <= THESIS_THRUST_TOLERANCE_FRACTION
+        and result_finite
+        and torque_nm > 0.0
+        and FAILURE_NEGATIVE_OR_NONFINITE_LOADING not in failure_reasons
+    )
+    valid_for_bemt_summary = False
+    thesis_blocking_reasons = {
+        FAILURE_CLIPPING_FRACTION,
+        FAILURE_ALPHA_LIMIT_FRACTION,
+        FAILURE_TWIST_MANUFACTURABILITY,
+        FAILURE_NEGATIVE_OR_NONFINITE_LOADING,
+        FAILURE_TARGET_INFEASIBLE_LOCKED,
+        FAILURE_THRUST_TARGET_NOT_MET,
+    }
+    valid_for_thesis_export = (
+        valid_for_optimizer_summary
+        and not any(reason in thesis_blocking_reasons for reason in failure_reasons)
+    )
+    return valid_for_optimizer_summary, valid_for_bemt_summary, valid_for_thesis_export
+
+
+def alpha_match_constraints_pass(result: DesignResult) -> bool:
+    return (
+        result.cl_limit_fraction_pct <= result.config.max_cl_limit_fraction_pct
+        and result.alpha_limit_fraction_pct <= result.config.max_alpha_limit_fraction_pct
+        and result.negative_loading_fraction_pct <= 0.0
+        and result.nonfinite_loading_fraction_pct <= 0.0
+        and (not result.config.manufacturable_twist or result.manufacturable_twist_pass)
+        and math.isfinite(result.thrust_n)
+        and math.isfinite(result.torque_nm)
+        and result.torque_nm > 0.0
+    )
+
+
 def build_candidate_result(
     config: DesignInputs,
     reference_stations: Sequence[ReferenceStation],
@@ -1594,6 +1764,7 @@ def build_candidate_result(
     optimizer_name: str,
     initial_warnings: Sequence[str] = (),
     aero_calibration_scale: float = 1.0,
+    forced_failure_reasons: Sequence[str] = (),
 ) -> DesignResult:
     omega = rpm_to_omega(config.rpm)
     n_rev_per_sec = config.rpm / 60.0
@@ -1852,10 +2023,11 @@ def build_candidate_result(
         tip_positive_unload_penalty /= len(tip_stations)
 
     twist_metrics = design_twist_metrics(config, stations)
-    twist_bump_penalty = 0.0
-    for bump_deg in twist_metrics["positive_twist_bumps_deg"]:
-        twist_bump_penalty += (bump_deg / max(config.max_positive_twist_bump_deg, 1.0e-6)) ** 2
-    twist_bump_penalty /= max(len(twist_metrics["positive_twist_bumps_deg"]), 1)
+    twist_bump_limit = max(config.max_positive_twist_bump_deg, 1.0e-6)
+    twist_bump_penalty = (
+        max(0.0, twist_metrics["max_positive_twist_bump_deg"] - config.max_positive_twist_bump_deg)
+        / twist_bump_limit
+    ) ** 2
     twist_gradient_penalty = (
         max(
             0.0,
@@ -1875,6 +2047,64 @@ def build_candidate_result(
         + (high_alpha_fraction / max(config.max_alpha_limit_fraction_pct / 100.0, 1.0e-6)) ** 2
         + 4.0 * polar_range_fraction
     )
+    validity_metrics = station_validity_metrics(config, stations, twist_metrics)
+    result_values = [
+        thrust_n,
+        torque_nm,
+        power_w,
+        ct,
+        cq,
+        cp,
+        spanload_error,
+        normalized_thrust_error,
+        normalized_torque,
+    ]
+    result_finite = all(math.isfinite(value) for value in result_values)
+    failure_reasons = validity_failure_reasons_from_metrics(
+        config,
+        normalized_thrust_error,
+        validity_metrics,
+        forced_failure_reasons,
+    )
+    valid_for_optimizer_summary, valid_for_bemt_summary, valid_for_thesis_export = validity_flags_from_metrics(
+        result_finite,
+        torque_nm,
+        normalized_thrust_error,
+        failure_reasons,
+    )
+    cl_threshold = max(config.max_cl_limit_fraction_pct, 1.0e-6)
+    alpha_threshold = max(config.max_alpha_limit_fraction_pct, 1.0e-6)
+    dominant_validity_penalty_raw = 0.0
+    if validity_metrics["cl_limit_fraction_pct"] > config.max_cl_limit_fraction_pct:
+        dominant_validity_penalty_raw += (
+            1.0
+            + (
+                (float(validity_metrics["cl_limit_fraction_pct"]) - config.max_cl_limit_fraction_pct)
+                / cl_threshold
+            )
+            ** 2
+        )
+    if validity_metrics["alpha_limit_fraction_pct"] > config.max_alpha_limit_fraction_pct:
+        dominant_validity_penalty_raw += (
+            1.0
+            + (
+                (float(validity_metrics["alpha_limit_fraction_pct"]) - config.max_alpha_limit_fraction_pct)
+                / alpha_threshold
+            )
+            ** 2
+        )
+    if (
+        float(validity_metrics["negative_loading_fraction_pct"]) > 0.0
+        or float(validity_metrics["nonfinite_loading_fraction_pct"]) > 0.0
+        or not result_finite
+    ):
+        dominant_validity_penalty_raw += (
+            1.0
+            + float(validity_metrics["negative_loading_fraction_pct"]) / 100.0
+            + float(validity_metrics["nonfinite_loading_fraction_pct"]) / 100.0
+        )
+    if config.manufacturable_twist and not twist_metrics["manufacturable_twist_pass"]:
+        dominant_validity_penalty_raw += 1.0 + twist_bump_penalty + twist_gradient_penalty + twist_curvature_penalty
     twist_bump_weight = weights.w_twist_bump or (90.0 if config.manufacturable_twist else 0.0)
     twist_gradient_weight = weights.w_twist_gradient or (35.0 if config.manufacturable_twist else 0.0)
     twist_curvature_weight = weights.w_twist_curvature or (22.0 if config.manufacturable_twist else 0.0)
@@ -1899,10 +2129,13 @@ def build_candidate_result(
         "twist_gradient_penalty": twist_gradient_weight * twist_gradient_penalty,
         "twist_curvature_penalty": twist_curvature_weight * twist_curvature_penalty,
         "aero_limit_penalty": aero_limit_weight * aero_limit_penalty,
+        "dominant_validity_penalty": DOMINANT_VALIDITY_PENALTY * dominant_validity_penalty_raw,
     }
     objective = sum(objective_terms.values())
 
     warnings: List[str] = list(initial_warnings)
+    if FAILURE_TARGET_INFEASIBLE_LOCKED in failure_reasons:
+        warnings.append("target thrust is infeasible under locked chord/airfoil/twist-only constraints")
     if normalized_thrust_error > 0.05:
         warnings.append(f"target thrust mismatch is {100.0 * normalized_thrust_error:.1f}%")
     if chord_limit_fraction > 0.0:
@@ -1955,6 +2188,19 @@ def build_candidate_result(
         convergence_history=[],
         reference_source=reference_source,
         optimizer_name=optimizer_name,
+        cl_limit_fraction_pct=float(validity_metrics["cl_limit_fraction_pct"]),
+        alpha_limit_fraction_pct=float(validity_metrics["alpha_limit_fraction_pct"]),
+        high_alpha_fraction_pct=float(validity_metrics["high_alpha_fraction_pct"]),
+        negative_loading_fraction_pct=float(validity_metrics["negative_loading_fraction_pct"]),
+        nonfinite_loading_fraction_pct=float(validity_metrics["nonfinite_loading_fraction_pct"]),
+        manufacturable_twist_pass=bool(validity_metrics["manufacturable_twist_pass"]),
+        valid_for_optimizer_summary=valid_for_optimizer_summary,
+        valid_for_bemt_summary=valid_for_bemt_summary,
+        valid_for_thesis_export=valid_for_thesis_export,
+        failure_reason=primary_failure_reason(failure_reasons),
+        failure_reasons=tuple(failure_reasons),
+        aero_calibration_used=aero_calibration_used_for_config(config),
+        calibration_mode=calibration_mode_for_config(config),
     )
 
 
@@ -2017,6 +2263,33 @@ def with_parameter(parameters: OptimizationParameters, name: str, value: float) 
     return OptimizationParameters(**data)
 
 
+def alpha_sweep_values(bounds: tuple[float, float], step_deg: float, center_deg: float) -> List[float]:
+    lower, upper = bounds
+    step = max(abs(step_deg), 0.5)
+    values = [lower, upper, clamp(center_deg, lower, upper)]
+    value = lower
+    while value <= upper + 1.0e-9:
+        values.append(value)
+        value += step
+    rounded = sorted({round(clamp(value, lower, upper), 6) for value in values})
+    return rounded
+
+
+def alpha_match_invalid_key(result: DesignResult) -> tuple[float, float, float, float, float, float]:
+    cl_excess = max(0.0, result.cl_limit_fraction_pct - result.config.max_cl_limit_fraction_pct)
+    alpha_excess = max(0.0, result.alpha_limit_fraction_pct - result.config.max_alpha_limit_fraction_pct)
+    twist_fail = 0.0 if (not result.config.manufacturable_twist or result.manufacturable_twist_pass) else 1.0
+    loading_fail = result.negative_loading_fraction_pct + result.nonfinite_loading_fraction_pct
+    return (
+        cl_excess + alpha_excess + 100.0 * twist_fail + loading_fail,
+        result.normalized_thrust_error,
+        max(result.torque_nm, 0.0),
+        result.spanload_error,
+        result.cl_limit_fraction_pct,
+        result.alpha_limit_fraction_pct,
+    )
+
+
 def match_thrust_with_base_alpha(
     config: DesignInputs,
     reference_stations: Sequence[ReferenceStation],
@@ -2027,43 +2300,69 @@ def match_thrust_with_base_alpha(
     optimizer_name: str,
     initial_warnings: Sequence[str],
     aero_calibration_scale: float,
-) -> OptimizationParameters:
+) -> AlphaMatchResult:
     if config.mode == "reproduce_reference":
-        return parameters
+        return AlphaMatchResult(
+            parameters=parameters,
+            selected_result=None,
+            valid_candidate_found=True,
+            target_met_with_valid_candidate=True,
+            selected_candidate_valid=True,
+        )
 
     bounds = parameter_bounds(config)["base_alpha_deg"]
-    low = with_parameter(parameters, "base_alpha_deg", bounds[0])
-    high = with_parameter(parameters, "base_alpha_deg", bounds[1])
-    low_result = build_candidate_result(
-        config, reference_stations, low, weights, q_reference, reference_source, optimizer_name, initial_warnings, aero_calibration_scale
-    )
-    high_result = build_candidate_result(
-        config, reference_stations, high, weights, q_reference, reference_source, optimizer_name, initial_warnings, aero_calibration_scale
-    )
-    best_params = low if low_result.normalized_thrust_error <= high_result.normalized_thrust_error else high
-    best_error = min(low_result.normalized_thrust_error, high_result.normalized_thrust_error)
-
-    if (low_result.thrust_n - config.thrust_target_n) * (high_result.thrust_n - config.thrust_target_n) > 0.0:
-        return best_params
-
-    left = low
-    right = high
-    for _ in range(24):
-        mid_value = 0.5 * (left.base_alpha_deg + right.base_alpha_deg)
-        mid = with_parameter(parameters, "base_alpha_deg", mid_value)
-        mid_result = build_candidate_result(
-            config, reference_stations, mid, weights, q_reference, reference_source, optimizer_name, initial_warnings, aero_calibration_scale
+    candidates: List[DesignResult] = []
+    for alpha_value in alpha_sweep_values(bounds, config.alpha_search_step_deg, parameters.base_alpha_deg):
+        trial_params = with_parameter(parameters, "base_alpha_deg", alpha_value)
+        candidates.append(
+            build_candidate_result(
+                config,
+                reference_stations,
+                trial_params,
+                weights,
+                q_reference,
+                reference_source,
+                optimizer_name,
+                initial_warnings,
+                aero_calibration_scale,
+            )
         )
-        if mid_result.normalized_thrust_error < best_error:
-            best_error = mid_result.normalized_thrust_error
-            best_params = mid
-        if mid_result.thrust_n < config.thrust_target_n:
-            left = mid
-        else:
-            right = mid
-        if mid_result.normalized_thrust_error < 5.0e-4:
-            break
-    return best_params
+
+    valid_candidates = [candidate for candidate in candidates if alpha_match_constraints_pass(candidate)]
+    if valid_candidates:
+        selected = min(
+            valid_candidates,
+            key=lambda candidate: (
+                candidate.normalized_thrust_error,
+                candidate.torque_nm,
+                candidate.spanload_error,
+            ),
+        )
+        target_met = selected.normalized_thrust_error <= THESIS_THRUST_TOLERANCE_FRACTION
+        forced_reasons: List[str] = []
+        if not target_met and locked_thesis_geometry(config):
+            forced_reasons.append(FAILURE_TARGET_INFEASIBLE_LOCKED)
+        return AlphaMatchResult(
+            parameters=selected.parameters,
+            selected_result=selected,
+            valid_candidate_found=True,
+            target_met_with_valid_candidate=target_met,
+            selected_candidate_valid=True,
+            failure_reasons=tuple(forced_reasons),
+        )
+
+    selected = min(candidates, key=alpha_match_invalid_key)
+    forced_reasons = list(selected.failure_reasons)
+    if locked_thesis_geometry(config):
+        forced_reasons.append(FAILURE_TARGET_INFEASIBLE_LOCKED)
+    return AlphaMatchResult(
+        parameters=selected.parameters,
+        selected_result=selected,
+        valid_candidate_found=False,
+        target_met_with_valid_candidate=False,
+        selected_candidate_valid=False,
+        failure_reasons=tuple(unique_failure_reasons(forced_reasons)),
+    )
 
 
 def initial_parameters(config: DesignInputs) -> OptimizationParameters:
@@ -2110,7 +2409,7 @@ def evaluate_with_matched_alpha(
     aero_calibration_scale: float,
 ) -> DesignResult:
     parameters = clamp_parameters(config, parameters)
-    parameters = match_thrust_with_base_alpha(
+    alpha_match = match_thrust_with_base_alpha(
         config,
         reference_stations,
         parameters,
@@ -2121,6 +2420,7 @@ def evaluate_with_matched_alpha(
         initial_warnings,
         aero_calibration_scale,
     )
+    parameters = alpha_match.parameters
     return build_candidate_result(
         config,
         reference_stations,
@@ -2131,6 +2431,7 @@ def evaluate_with_matched_alpha(
         optimizer_name,
         initial_warnings,
         aero_calibration_scale,
+        alpha_match.failure_reasons,
     )
 
 
@@ -3316,36 +3617,39 @@ def result_summary_dict(result: DesignResult) -> dict[str, Any]:
     tip_diag = tip_loading_diagnostics(result)
     conv_diag = convergence_diagnostics(result)
     twist_diag = design_twist_metrics(result.config, result.stations)
-    station_count = max(len(result.stations), 1)
-    alpha_limit_station_count = sum(
-        station.hit_alpha_min or station.hit_alpha_max
-        for station in result.stations
-    )
-    alpha_limit_fraction_pct = 100.0 * alpha_limit_station_count / station_count
-    cl_limit_fraction_pct = 100.0 * cl_diag["clipped_station_count"] / station_count
+    validity_metrics = station_validity_metrics(result.config, result.stations, twist_diag)
+    alpha_limit_fraction_pct = float(validity_metrics["alpha_limit_fraction_pct"])
+    cl_limit_fraction_pct = float(validity_metrics["cl_limit_fraction_pct"])
+    high_alpha_fraction_pct = float(validity_metrics["high_alpha_fraction_pct"])
+    negative_loading_fraction_pct = float(validity_metrics["negative_loading_fraction_pct"])
+    nonfinite_loading_fraction_pct = float(validity_metrics["nonfinite_loading_fraction_pct"])
     max_alpha_deg = max((station.alpha_deg for station in result.stations), default=0.0)
     min_alpha_deg = min((station.alpha_deg for station in result.stations), default=0.0)
     max_cl = max((station.cl for station in result.stations), default=0.0)
-    valid_for_optimizer_summary = (
-        result.normalized_thrust_error <= 0.05
-        and math.isfinite(result.thrust_n)
-        and math.isfinite(result.torque_nm)
-        and result.torque_nm > 0.0
-        and not any(station.impossible_force for station in result.stations)
+    result_values = [result.objective, result.thrust_n, result.torque_nm, result.power_w, result.ct, result.cq, result.cp]
+    result_finite = all(math.isfinite(value) for value in result_values)
+    failure_reasons = validity_failure_reasons_from_metrics(
+        result.config,
+        result.normalized_thrust_error,
+        validity_metrics,
+        result.failure_reasons,
+    )
+    valid_for_optimizer_summary, valid_for_bemt_summary, valid_for_thesis_export = validity_flags_from_metrics(
+        result_finite,
+        result.torque_nm,
+        result.normalized_thrust_error,
+        failure_reasons,
     )
     thesis_aero_pass = (
         cl_limit_fraction_pct <= result.config.max_cl_limit_fraction_pct
         and alpha_limit_fraction_pct <= result.config.max_alpha_limit_fraction_pct
         and not any(station.impossible_force or station.negative_force for station in result.stations)
     )
-    valid_for_thesis_export = (
-        valid_for_optimizer_summary
-        and twist_diag["manufacturable_twist_pass"]
-        and thesis_aero_pass
-    )
     optimized_geometry_csv = result.config.output_directory / optimizer_geometry_csv_name(
         optimized_case_name(result.config.spanload_type, result.config.manufacturable_twist)
     )
+    aero_calibration_used = aero_calibration_used_for_config(result.config)
+    calibration_mode = calibration_mode_for_config(result.config)
     return {
         "model_source": MODEL_SOURCE_OPTIMIZER,
         "generating_script": GENERATING_SCRIPT,
@@ -3355,13 +3659,21 @@ def result_summary_dict(result: DesignResult) -> dict[str, Any]:
         "source_csv_modified_time": source_modified_time(optimized_geometry_csv),
         "geometry_source_csv_modified_time": source_modified_time(optimized_geometry_csv),
         "valid_for_optimizer_summary": valid_for_optimizer_summary,
-        "valid_for_bemt_summary": False,
+        "valid_for_bemt_summary": valid_for_bemt_summary,
         "valid_for_thesis_export": valid_for_thesis_export,
         "validity_status": "thesis_valid" if valid_for_thesis_export else "diagnostic_only_not_thesis_valid",
+        "failure_reason": primary_failure_reason(failure_reasons),
+        "failure_reasons": failure_reasons,
         "solver_mode": result.config.mode,
         "solver_mode_label": mode_label,
         "optimizer": result.optimizer_name,
         "spanload_type": result.config.spanload_type,
+        "aero_calibration_used": aero_calibration_used,
+        "aero_calibration_scale": result.aero_calibration_scale,
+        "calibration_mode": calibration_mode,
+        "chord_locked": result.config.lock_chord,
+        "airfoil_locked": result.config.lock_airfoil,
+        "optimize_twist_only": result.config.optimize_twist_only,
         "reference_geometry_source": result.reference_source,
         "reference_geometry_scaling": {
             "statement": SCALED_REFERENCE_STATEMENT,
@@ -3385,15 +3697,19 @@ def result_summary_dict(result: DesignResult) -> dict[str, Any]:
             "statement": "Reference terms are calibration/regularization terms, not undisclosed hard-coded optimizer output.",
         },
         "aero_calibration": {
+            "used": aero_calibration_used,
             "section_force_scale": result.aero_calibration_scale,
+            "aero_calibration_scale": result.aero_calibration_scale,
+            "calibration_mode": calibration_mode,
             "statement": "This scalar calibrates the reduced-order section-force model in reference-regularized runs and is reported explicitly.",
         },
         "locked_inputs": {
             "diameter_m": 2.0 * result.config.radius_m,
             "diameter_in": meters_to_inches(2.0 * result.config.radius_m),
-            "chord_locked": result.config.lock_chord or result.config.optimize_twist_only,
-            "airfoil_locked": result.config.lock_airfoil or result.config.optimize_twist_only,
+            "chord_locked": result.config.lock_chord,
+            "airfoil_locked": result.config.lock_airfoil,
             "optimize_twist_only": result.config.optimize_twist_only,
+            "manufacturable_twist": result.config.manufacturable_twist,
             "rpm": result.config.rpm,
             "rho_kg_m3": result.config.rho,
             "v_inf_mps": result.config.freestream_mps,
@@ -3440,6 +3756,9 @@ def result_summary_dict(result: DesignResult) -> dict[str, Any]:
             "manufacturable_twist_pass": twist_diag["manufacturable_twist_pass"],
             "cl_limit_station_fraction_pct": cl_limit_fraction_pct,
             "alpha_limit_station_fraction_pct": alpha_limit_fraction_pct,
+            "high_alpha_station_fraction_pct": high_alpha_fraction_pct,
+            "negative_loading_station_fraction_pct": negative_loading_fraction_pct,
+            "nonfinite_loading_station_fraction_pct": nonfinite_loading_fraction_pct,
             "max_alpha_deg": max_alpha_deg,
             "min_alpha_deg": min_alpha_deg,
             "max_Cl": max_cl,
@@ -3453,6 +3772,9 @@ def result_summary_dict(result: DesignResult) -> dict[str, Any]:
             "min_alpha_deg": min_alpha_deg,
             "max_Cl": max_cl,
             "clipped_station_count": cl_diag["clipped_station_count"],
+            "high_alpha_station_fraction_pct": high_alpha_fraction_pct,
+            "negative_loading_station_fraction_pct": negative_loading_fraction_pct,
+            "nonfinite_loading_station_fraction_pct": nonfinite_loading_fraction_pct,
             "cl_limit_threshold_pct": result.config.max_cl_limit_fraction_pct,
             "alpha_limit_threshold_pct": result.config.max_alpha_limit_fraction_pct,
             "outside_polar_range_station_count": sum(
@@ -3636,7 +3958,7 @@ def print_summary(result: DesignResult) -> None:
     print(f"  iterations/evals     : {iteration_count}")
     print(f"  spanload type        : {result.config.spanload_type}")
     print(f"  reference source     : {result.reference_source}")
-    print(f"  aero calibration     : {result.aero_calibration_scale:.4f}")
+    print(f"  aero calibration     : {result.calibration_mode} ({result.aero_calibration_scale:.4f})")
     print(f"  global twist offset  : {result.target_alpha_deg:.3f} deg")
     print(f"  diameter             : {diameter_m:.4f} m ({diameter_in:.2f} in)")
     print(f"  rpm                  : {result.config.rpm:.1f}")
@@ -3667,6 +3989,8 @@ def print_summary(result: DesignResult) -> None:
             "  Cl clipping          : "
             f"{cl_diag['clipped_station_count']} stations ({100.0 * cl_diag['clipped_fraction']:.1f}%)"
         )
+    if result.failure_reason != FAILURE_NONE:
+        print(f"  validity             : {result.failure_reason}")
     if result.warnings:
         print()
         print("Warnings")
@@ -3724,6 +4048,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--max-twist-curvature", type=float, default=None, help="Maximum allowed absolute twist curvature in deg per (r/R)^2 after the root transition.")
     parser.add_argument("--max-cl-limit-fraction-pct", type=float, default=None, help="Maximum percent of stations allowed to hit the reduced-order Cl cap for thesis export.")
     parser.add_argument("--max-alpha-limit-fraction-pct", type=float, default=None, help="Maximum percent of stations allowed outside the alpha range for thesis export.")
+    parser.add_argument("--thrust-validity-sweep", action="store_true", help="Audit locked thesis validity for target thrusts 15, 20, 25, 30, and 35 N.")
 
 
 def apply_defaults(args: argparse.Namespace) -> argparse.Namespace:
@@ -3741,6 +4066,7 @@ def apply_defaults(args: argparse.Namespace) -> argparse.Namespace:
         args.lock_chord = True
         args.lock_airfoil = True
         args.optimize_twist_only = True
+        args.manufacturable_twist = True
         if args.smooth_passes is None:
             args.smooth_passes = 3
         if args.rpm is None:
@@ -3754,6 +4080,9 @@ def apply_defaults(args: argparse.Namespace) -> argparse.Namespace:
 
     if args.preset in {"thesis_gmt_22_manufacturable", "thesis_mil_22_manufacturable"}:
         args.manufacturable_twist = True
+        args.lock_chord = True
+        args.lock_airfoil = True
+        args.optimize_twist_only = True
         if args.diameter_in is None:
             args.diameter_in = 22.0
         if args.spanload is None:
@@ -3764,7 +4093,6 @@ def apply_defaults(args: argparse.Namespace) -> argparse.Namespace:
             )
         if args.mode is None:
             args.mode = "reference_regularized"
-        args.lock_airfoil = True
         if args.smooth_passes is None:
             args.smooth_passes = 8
         if args.rpm is None:
@@ -3878,6 +4206,155 @@ def output_spanload_name(spanload_type: str) -> str:
     return case_family_for_spanload(spanload_type)
 
 
+def thrust_validity_sweep_row(result: DesignResult) -> dict[str, object]:
+    summary = result_summary_dict(result)
+    final_metrics = summary["final_metrics"]
+    aero_validity = summary["aero_validity"]
+    twist_metrics = summary["twist_manufacturability"]
+    return {
+        "target_thrust_N": result.config.thrust_target_n,
+        "actual_thrust_N": result.thrust_n,
+        "thrust_error_pct": 100.0 * result.normalized_thrust_error,
+        "torque_Nm": result.torque_nm,
+        "power_W": result.power_w,
+        "CT": result.ct,
+        "CQ": result.cq,
+        "CP": result.cp,
+        "max_alpha_deg": final_metrics["max_alpha_deg"],
+        "min_alpha_deg": final_metrics["min_alpha_deg"],
+        "max_Cl": final_metrics["max_Cl"],
+        "cl_limit_station_fraction_pct": aero_validity["cl_limit_station_fraction_pct"],
+        "alpha_limit_station_fraction_pct": aero_validity["alpha_limit_station_fraction_pct"],
+        "max_positive_twist_bump_deg": twist_metrics["max_positive_twist_bump_deg"],
+        "max_abs_twist_gradient_deg_per_mu": twist_metrics["max_abs_twist_gradient_deg_per_mu"],
+        "max_twist_curvature": twist_metrics["max_twist_curvature"],
+        "manufacturable_twist_pass": twist_metrics["manufacturable_twist_pass"],
+        "valid_for_thesis_export": summary["valid_for_thesis_export"],
+        "failure_reasons": list(summary["failure_reasons"]),
+    }
+
+
+def run_thrust_validity_sweep(
+    base_config: DesignInputs,
+    reference_stations: Sequence[ReferenceStation],
+    initial_warnings: Sequence[str],
+    reference_source: str,
+    targets: Sequence[float] = THRUST_VALIDITY_SWEEP_TARGETS_N,
+    audits_dir: Path | None = None,
+) -> dict[str, Any]:
+    output_dir = audits_dir or get_results_dir(
+        "geometry_optimizer",
+        model_source=MODEL_SOURCE_OPTIMIZER,
+        case_name="audits",
+    )
+    assert_geometry_output_path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    rows: List[dict[str, object]] = []
+    results: List[DesignResult] = []
+    for target in targets:
+        target_label = str(target).replace(".", "p")
+        sweep_config = replace(
+            base_config,
+            thrust_target_n=float(target),
+            lock_chord=True,
+            lock_airfoil=True,
+            optimize_twist_only=True,
+            manufacturable_twist=True,
+            output_directory=output_dir / f"target_{target_label}N",
+        )
+        result = optimize_geometry(sweep_config, reference_stations, initial_warnings, reference_source)
+        results.append(result)
+        rows.append(thrust_validity_sweep_row(result))
+
+    valid_rows = [row for row in rows if bool(row["valid_for_thesis_export"])]
+    highest_valid = max(valid_rows, key=lambda row: float(row["target_thrust_N"]), default=None)
+    target_35_row = next((row for row in rows if abs(float(row["target_thrust_N"]) - 35.0) <= 1.0e-9), None)
+    feasible_35 = bool(target_35_row and target_35_row["valid_for_thesis_export"])
+    summary_payload: dict[str, Any] = {
+        "generating_script": GENERATING_SCRIPT,
+        "model_source": MODEL_SOURCE_OPTIMIZER,
+        "case_name": "thrust_validity_sweep",
+        "targets_N": [float(target) for target in targets],
+        "locked_chord": True,
+        "locked_airfoil": True,
+        "optimize_twist_only": True,
+        "manufacturable_twist": True,
+        "calibration_mode": calibration_mode_for_config(base_config),
+        "aero_calibration_used": aero_calibration_used_for_config(base_config),
+        "highest_valid_target_thrust_N": None if highest_valid is None else highest_valid["target_thrust_N"],
+        "highest_valid_actual_thrust_N": None if highest_valid is None else highest_valid["actual_thrust_N"],
+        "thirty_five_N_feasible_under_locked_chord_airfoil_constraints": feasible_35,
+        "target_35_valid_for_thesis_export": feasible_35,
+        "target_35_failure_reasons": [] if target_35_row is None else target_35_row["failure_reasons"],
+        "rows": rows,
+    }
+    if not feasible_35:
+        summary_payload["target_35_status"] = "infeasible_under_current_locked_constraints"
+    else:
+        summary_payload["target_35_status"] = "feasible_under_current_locked_constraints"
+
+    csv_path = output_dir / "thrust_validity_sweep.csv"
+    json_path = output_dir / "thrust_validity_sweep_summary.json"
+    fields = [
+        "target_thrust_N",
+        "actual_thrust_N",
+        "thrust_error_pct",
+        "torque_Nm",
+        "power_W",
+        "CT",
+        "CQ",
+        "CP",
+        "max_alpha_deg",
+        "min_alpha_deg",
+        "max_Cl",
+        "cl_limit_station_fraction_pct",
+        "alpha_limit_station_fraction_pct",
+        "max_positive_twist_bump_deg",
+        "max_abs_twist_gradient_deg_per_mu",
+        "max_twist_curvature",
+        "manufacturable_twist_pass",
+        "valid_for_thesis_export",
+        "failure_reasons",
+    ]
+    with csv_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for row in rows:
+            csv_row = dict(row)
+            csv_row["failure_reasons"] = ";".join(str(reason) for reason in row["failure_reasons"])
+            writer.writerow(csv_row)
+    with json_path.open("w", encoding="utf-8") as handle:
+        json.dump(summary_payload, handle, indent=2, default=_json_default)
+        handle.write("\n")
+    write_metadata_sidecar(
+        csv_path,
+        _base_output_metadata(
+            case_name="thrust_validity_sweep",
+            geometry_source_csv="",
+            station_source_csv=csv_path,
+            twist_column_used="twist_deg",
+            aero_source=MODEL_SOURCE_OPTIMIZER,
+        ),
+    )
+    write_metadata_sidecar(
+        json_path,
+        _base_output_metadata(
+            case_name="thrust_validity_sweep",
+            geometry_source_csv="",
+            station_source_csv=csv_path,
+            twist_column_used="twist_deg",
+            aero_source=MODEL_SOURCE_OPTIMIZER,
+        ),
+    )
+    return {
+        "summary": summary_payload,
+        "csv_path": csv_path,
+        "json_path": json_path,
+        "results": results,
+    }
+
+
 def main() -> None:
     args = parse_args()
     config = DesignInputs(
@@ -3977,6 +4454,15 @@ def main() -> None:
         audit_reference_path = default_reference_csv_path()
     if audit_reference_path.exists() and audit_reference_path.suffix.lower() in {".xlsx", ".xlsm"}:
         write_scaled_reference_geometry_audit(audits_dir, audit_reference_path, geometry_root)
+    sweep_outputs: dict[str, Any] | None = None
+    if args.thrust_validity_sweep:
+        sweep_outputs = run_thrust_validity_sweep(
+            config,
+            reference_stations,
+            input_warnings,
+            reference_source,
+            audits_dir=audits_dir,
+        )
     try:
         write_xlsx(result, reference_stations, optimized_xlsx)
         xlsx_written = True
@@ -4005,6 +4491,9 @@ def main() -> None:
     print(f"Wrote solver summary JSON to: {summary_json}")
     print(f"Wrote case solver summary JSON to: {case_summary_json}")
     print(f"Wrote methodology statement to: {methodology_txt}")
+    if sweep_outputs is not None:
+        print(f"Wrote thrust validity sweep CSV to: {sweep_outputs['csv_path']}")
+        print(f"Wrote thrust validity sweep summary JSON to: {sweep_outputs['json_path']}")
     if config.make_plots and not plot_warnings:
         print(f"Wrote thesis plots to: {figure_dir}")
 

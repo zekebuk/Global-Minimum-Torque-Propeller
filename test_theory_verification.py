@@ -263,8 +263,9 @@ def test_manufacturable_preset_uses_thesis_safe_defaults():
     assert args.max_twist_curvature == pytest.approx(1500.0)
     assert args.max_cl_limit_fraction_pct == pytest.approx(10.0)
     assert args.max_alpha_limit_fraction_pct == pytest.approx(10.0)
+    assert args.lock_chord
     assert args.lock_airfoil
-    assert not args.optimize_twist_only
+    assert args.optimize_twist_only
 
 
 def test_twist_manufacturability_rejects_positive_bump_after_transition():
