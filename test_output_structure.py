@@ -30,7 +30,7 @@ def test_output_path_helper_returns_canonical_dirs(tmp_path, monkeypatch):
         "aero_postprocess",
         model_source="bemt_xfoil",
         case_name="optimized_gmt_22",
-    ) == tmp_path / "figures_paper" / "aero_postprocess" / "bemt_xfoil" / "optimized_gmt"
+    ) == tmp_path / "results" / "plots" / "aero_postprocess" / "bemt_xfoil" / "optimized_gmt"
     assert output_paths.get_results_dir(
         "aero_postprocess",
         comparison_name="optimized_mil_vs_gmt",
@@ -42,7 +42,7 @@ def test_output_path_helper_returns_canonical_dirs(tmp_path, monkeypatch):
     assert output_paths.get_figures_dir(
         "fea",
         model_source="fea_abaqus",
-    ) == tmp_path / "figures_paper" / "fea" / "abaqus"
+    ) == tmp_path / "results" / "plots" / "fea" / "abaqus"
 
 
 def test_metadata_sidecar_is_written(tmp_path):

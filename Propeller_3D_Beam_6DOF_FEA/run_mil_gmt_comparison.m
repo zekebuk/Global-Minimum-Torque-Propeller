@@ -195,7 +195,7 @@ text(ax2,0.02,0.88,sprintf('max |\\Delta| = %.3g%%',max_percent_difference), ...
 linkaxes([ax1 ax2],'x');
 xlim(ax1,[min(common_mu) max(common_mu)]);
 export_figure_set(fig,comparison_dir,[output_prefix '_stress_distribution']);
-export_figure_set(fig,fullfile(project_root,'figures_paper','fea',figure_category),[output_prefix '_stress_distribution']);
+export_figure_set(fig,fullfile(project_root,'results','plots','fea',figure_category),[output_prefix '_stress_distribution']);
 close(fig);
 
 mode_number = (1:min(numel(left.modal.frequencies_hz),numel(right.modal.frequencies_hz)))';
@@ -215,7 +215,7 @@ grid on; xlabel('Mode number [-]'); ylabel('Frequency [Hz]');
 legend(cleanComparisonLabel(left_label),cleanComparisonLabel(right_label),'Location','best');
 title(sprintf('%s Natural Frequencies',title_text));
 export_figure_set(fig,comparison_dir,[output_prefix '_modal_frequency']);
-export_figure_set(fig,fullfile(project_root,'figures_paper','fea',figure_category),[output_prefix '_modal_frequency']);
+export_figure_set(fig,fullfile(project_root,'results','plots','fea',figure_category),[output_prefix '_modal_frequency']);
 close(fig);
 
 fprintf('\n%s complete.\n',title_text);

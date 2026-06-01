@@ -46,7 +46,13 @@ from Geometry_optimization import (  # noqa: E402
     write_summary_json,
 )
 from common_plot_style import apply_matplotlib_style, save_matplotlib_figure  # noqa: E402
-from output_paths import get_figures_dir, get_results_dir, assert_verification_output_path, write_metadata_sidecar  # noqa: E402
+from output_paths import (  # noqa: E402
+    assert_verification_output_path,
+    get_figures_dir,
+    get_results_dir,
+    resolve_project_output_path,
+    write_metadata_sidecar,
+)
 
 
 DEFAULT_THRUST_MATCH_TOL_PCT = 5.0
@@ -1323,8 +1329,8 @@ def write_comparison_solver_summary(
 
 
 def run_verification(args: argparse.Namespace) -> VerificationResult:
-    results_dir = args.results_dir
-    figures_dir = args.figures_dir
+    results_dir = resolve_project_output_path(args.results_dir)
+    figures_dir = resolve_project_output_path(args.figures_dir)
     case_dir = results_dir / "cases"
     reference_dir = results_dir / "reference_cases"
     assert_verification_output_path(results_dir)
@@ -2091,7 +2097,7 @@ def style_axes(ax) -> None:
 def save_figure(fig, figures_dir: Path, filename: str) -> None:
     assert_verification_output_path(figures_dir)
     fig.tight_layout()
-    save_matplotlib_figure(fig, figures_dir, filename)
+    save_matplotlib_figure(fig, figures_dir, filename, overwrite=True)
 
 
 def plot_summary_bars(plt, verification: VerificationResult, figures_dir: Path) -> None:
@@ -2602,7 +2608,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cl-clipping-tol-pct", type=float, default=20.0)
     parser.add_argument("--chord-tolerance-m", type=float, default=DEFAULT_CHORD_TOL_M)
     parser.add_argument("--results-dir", type=Path, default=ROOT_DIR / "results" / "verification" / "theory")
-    parser.add_argument("--figures-dir", type=Path, default=ROOT_DIR / "figures_paper" / "verification" / "theory")
+    parser.add_argument("--figures-dir", type=Path, default=ROOT_DIR / "results" / "plots" / "verification" / "theory")
     parser.add_argument("--skip-plots", action="store_true")
     parser.add_argument("--write-reference-cases", action="store_true")
     parser.add_argument("--strict-exit-code", action="store_true", help="Return exit code 1 when theory checks fail.")

@@ -13,7 +13,7 @@ from common_plot_style import apply_matplotlib_style, save_matplotlib_figure  # 
 
 FEA_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = FEA_DIR.parents[1] if FEA_DIR.parent.name.lower() == "code" else FEA_DIR.parent
-FIGURES_DIR = PROJECT_ROOT / "figures_paper" / "fea"
+FIGURES_DIR = PROJECT_ROOT / "results" / "plots" / "fea"
 
 
 def set_paper_style() -> None:
@@ -28,7 +28,7 @@ def save_figure(fig, name: str, category: str) -> Path:
         raise ValueError(f"Unknown figure category: {category}")
 
     out_dir = FIGURES_DIR / category
-    return save_matplotlib_figure(fig, out_dir, name)
+    return save_matplotlib_figure(fig, out_dir, name, overwrite=True)
 
 
 def style_axes(ax, legend: bool = True) -> None:

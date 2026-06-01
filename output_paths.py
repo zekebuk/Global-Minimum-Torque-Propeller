@@ -10,6 +10,7 @@ from typing import Any, Mapping
 CODE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = CODE_DIR.parent if CODE_DIR.name.lower() == "code" else CODE_DIR
 FIGURE_EXPORT_POLICY = "png_svg_only"
+PLOTS_DIR_NAME = "plots"
 
 SUPPORTED_STAGES = {"geometry_optimizer", "aero_postprocess", "verification", "fea"}
 SUPPORTED_MODEL_SOURCES = {
@@ -32,6 +33,12 @@ def resolve_project_output_path(path: str | Path) -> Path:
     if candidate.is_absolute():
         return candidate
     return PROJECT_ROOT / candidate
+
+
+def get_plots_root() -> Path:
+    path = project_path("results") / PLOTS_DIR_NAME
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def git_metadata() -> dict[str, Any]:
@@ -94,7 +101,7 @@ def get_figures_dir(
     comparison_name: str | None = None,
 ) -> Path:
     return _get_output_dir(
-        root=project_path("figures_paper"),
+        root=get_plots_root(),
         stage=stage,
         model_source=model_source,
         case_name=case_name,
@@ -111,6 +118,10 @@ def canonical_case_dir_name(case_name: str | None) -> str | None:
         if clean == base or clean.startswith(base + "_"):
             return base
     return clean
+
+
+def safe_filename_stem(value: str | Path) -> str:
+    return _clean_path_part(value) or "plot"
 
 
 def _get_output_dir(
@@ -203,7 +214,7 @@ def assert_geometry_output_path(path: str | Path) -> Path:
         path,
         (
             project_path("results/geometry_optimizer"),
-            project_path("figures_paper/geometry_optimizer"),
+            project_path("results/plots/geometry_optimizer"),
         ),
         "geometry",
     )
@@ -214,7 +225,7 @@ def assert_aero_output_path(path: str | Path) -> Path:
         path,
         (
             project_path("results/aero_postprocess"),
-            project_path("figures_paper/aero_postprocess"),
+            project_path("results/plots/aero_postprocess"),
         ),
         "aero",
     )
@@ -225,7 +236,7 @@ def assert_verification_output_path(path: str | Path) -> Path:
         path,
         (
             project_path("results/verification"),
-            project_path("figures_paper/verification"),
+            project_path("results/plots/verification"),
         ),
         "verification",
     )
@@ -236,7 +247,7 @@ def assert_fea_output_path(path: str | Path) -> Path:
         path,
         (
             project_path("results/fea"),
-            project_path("figures_paper/fea"),
+            project_path("results/plots/fea"),
         ),
         "FEA",
     )

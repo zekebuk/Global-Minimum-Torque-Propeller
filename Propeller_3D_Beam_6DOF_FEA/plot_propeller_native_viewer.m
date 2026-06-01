@@ -540,7 +540,7 @@ app.controls = struct('view',view_dropdown,'type',type_dropdown, ...
         old_node_labels = node_labels_checkbox.Value;
         old_element_labels = element_labels_checkbox.Value;
 
-        out_dir = fullfile(projectRootFromFeaDir(this_dir),'figures_paper','fea','beam_solver');
+        out_dir = fullfile(projectRootFromFeaDir(this_dir),'results','plots','fea','beam_solver');
         if ~isfolder(out_dir)
             mkdir(out_dir);
         end

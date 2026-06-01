@@ -15,7 +15,7 @@ from plot_style import case_style, save_figure, set_paper_style, style_axes
 ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = ROOT.parents[1] if ROOT.parent.name.lower() == "code" else ROOT.parent
 RESULTS_DIR = PROJECT_ROOT / "results" / "fea" / "beam_solver"
-FIGURES_DIR = PROJECT_ROOT / "figures_paper" / "fea"
+FIGURES_DIR = PROJECT_ROOT / "results" / "plots" / "fea"
 
 
 @dataclass(frozen=True)
@@ -765,12 +765,6 @@ def clear_figures_dir() -> None:
     for category in ("beam_solver", "abaqus", "comparisons"):
         out_dir = FIGURES_DIR / category
         out_dir.mkdir(parents=True, exist_ok=True)
-        for pattern in ("*.svg", "*.png"):
-            for path in out_dir.glob(pattern):
-                path.unlink()
-    for pattern in ("*.svg", "*.png"):
-        for path in FIGURES_DIR.glob(pattern):
-            path.unlink()
 
 
 def _legacy_per_group_main() -> None:

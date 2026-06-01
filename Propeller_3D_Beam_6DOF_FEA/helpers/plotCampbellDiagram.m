@@ -68,7 +68,7 @@ saveFigureFormats(fig,campbell.plot_path);
 
 figure_category = figureCategoryForCase(output_name);
 project_root = projectRootFromResultsRoot(results_root);
-figures_dir = fullfile(project_root,'figures_paper','fea',figure_category);
+figures_dir = fullfile(project_root,'results','plots','fea',figure_category);
 if ~exist(figures_dir,'dir')
     mkdir(figures_dir);
 end

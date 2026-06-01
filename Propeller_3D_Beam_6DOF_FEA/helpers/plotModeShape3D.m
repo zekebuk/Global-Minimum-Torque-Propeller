@@ -32,11 +32,12 @@ end
 title(ax,ttl,'Interpreter','none');
 
 if ~isempty(results_dir) && ~isempty(output_name)
-    if ~exist(results_dir,'dir')
-        mkdir(results_dir);
+    plot_dir = central_plot_dir(results_dir,output_name);
+    if ~exist(plot_dir,'dir')
+        mkdir(plot_dir);
     end
     stem = sprintf('%s_mode_%02d_shape_%s',output_name,modeNumber,lower(regexprep(viewMode,'[^a-zA-Z0-9]','_')));
-    saveModeFigure(fig,results_dir,stem);
+    saveModeFigure(fig,plot_dir,stem);
 end
 
 end
@@ -83,6 +84,48 @@ else
     catch
     end
     print(fig,fullfile(results_dir,[stem '.png']),'-dpng','-r300');
+end
+
+end
+
+function out_dir = central_plot_dir(results_dir,output_name)
+
+project_root = project_root_from_results_dir(results_dir);
+out_dir = fullfile(project_root,'results','plots','fea','beam_solver',sanitize_stem(output_name));
+
+end
+
+function project_root = project_root_from_results_dir(results_dir)
+
+current = char(string(results_dir));
+while true
+    [parent,name] = fileparts(current);
+    if strcmpi(name,'results')
+        project_root = parent;
+        return
+    end
+    if isempty(parent) || strcmp(parent,current)
+        break
+    end
+    current = parent;
+end
+
+helper_dir = fileparts(mfilename('fullpath'));
+fea_dir = fileparts(helper_dir);
+code_dir = fileparts(fea_dir);
+[project_root,code_folder] = fileparts(code_dir);
+if ~strcmpi(code_folder,'Code')
+    project_root = code_dir;
+end
+
+end
+
+function stem = sanitize_stem(stem)
+
+stem = regexprep(char(string(stem)),'[^a-zA-Z0-9_\-]','_');
+stem = regexprep(stem,'(^_+|_+$)','');
+if isempty(stem)
+    stem = 'mode_shape';
 end
 
 end

@@ -390,7 +390,7 @@ def same_geometry_verification(tmp_path):
             "--results-dir",
             str(tmp_path / "results" / "verification" / "comparison"),
             "--figures-dir",
-            str(tmp_path / "figures_paper" / "verification" / "comparison"),
+            str(tmp_path / "results" / "plots" / "verification" / "comparison"),
         ]
     )
     return run_verification(apply_verification_preset(args))

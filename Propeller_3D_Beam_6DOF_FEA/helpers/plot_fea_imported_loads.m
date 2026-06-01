@@ -7,7 +7,7 @@ end
 
 applyPlotStyle();
 
-out_dir = fullfile(project_root_from_fea_dir(this_dir),'figures_paper','fea','beam_solver',sanitize_stem(case_name));
+out_dir = fullfile(project_root_from_fea_dir(this_dir),'results','plots','fea','beam_solver',sanitize_stem(case_name));
 if ~exist(out_dir,'dir')
     mkdir(out_dir);
 end

@@ -309,12 +309,13 @@ Each generated plot has a `filename.metadata.json` sidecar recording `generating
 
 ## Output Structure
 
-- `results/geometry_optimizer/<case>/` and `figures_paper/geometry_optimizer/<case>/`: direct outputs from `Geometry_optimization.py`.
-- `results/aero_postprocess/optimizer_station_data/<case>/` and `figures_paper/aero_postprocess/optimizer_station_data/<case>/`: `aero_solver.py` reading optimizer CSV station values directly, without recomputing alpha, Cl, Cd, dT, or dQ.
-- `results/aero_postprocess/bemt_xfoil/<case>/` and `figures_paper/aero_postprocess/bemt_xfoil/<case>/`: `aero_solver.py` recomputing aerodynamic quantities with BEMT and XFOIL/generated polar data.
-- `results/aero_postprocess/comparisons/<comparison_name>/` and `figures_paper/aero_postprocess/comparisons/<comparison_name>/`: MIL vs GMT overlays and comparison summaries.
-- `results/verification/theory/` and `figures_paper/verification/theory/`: `theory_verification.py` comparison outputs.
-- `results/fea/beam_solver/<case>/`, `results/fea/abaqus_exports/`, `results/fea/comparisons/`, and matching `figures_paper/fea/...`: downstream structural outputs.
+- `results/geometry_optimizer/<case>/`: direct data outputs from `Geometry_optimization.py`.
+- `results/aero_postprocess/optimizer_station_data/<case>/`: `aero_solver.py` reading optimizer CSV station values directly, without recomputing alpha, Cl, Cd, dT, or dQ.
+- `results/aero_postprocess/bemt_xfoil/<case>/`: `aero_solver.py` recomputing aerodynamic quantities with BEMT and XFOIL/generated polar data.
+- `results/aero_postprocess/comparisons/<comparison_name>/`: MIL vs GMT comparison data.
+- `results/verification/theory/`: `theory_verification.py` comparison data.
+- `results/fea/beam_solver/<case>/`, `results/fea/abaqus_exports/`, and `results/fea/comparisons/`: downstream structural data.
+- `results/plots/...`: all thesis-ready PNG/SVG figures. Run `python scripts/generate_all_results_plots.py` from the repo root to regenerate available plots.
 
 Model source names used in metadata:
 
@@ -387,8 +388,8 @@ Run with an explicit geometry and polar file:
 
 Default output locations:
 
-- optimizer station mode: `results/aero_postprocess/optimizer_station_data/<case>/` and `figures_paper/aero_postprocess/optimizer_station_data/<case>/`
-- BEMT/XFOIL mode: `results/aero_postprocess/bemt_xfoil/<case>/` and `figures_paper/aero_postprocess/bemt_xfoil/<case>/`
+- optimizer station mode data: `results/aero_postprocess/optimizer_station_data/<case>/`; plots: `results/plots/aero_postprocess/optimizer_station_data/<case>/`
+- BEMT/XFOIL mode data: `results/aero_postprocess/bemt_xfoil/<case>/`; plots: `results/plots/aero_postprocess/bemt_xfoil/<case>/`
 
 Optional XROTOR validation path:
 

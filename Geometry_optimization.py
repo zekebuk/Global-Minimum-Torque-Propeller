@@ -12,11 +12,12 @@ from pathlib import Path
 from typing import Any, Iterable, List, Sequence
 from xml.sax.saxutils import escape
 
-from common_plot_style import apply_matplotlib_style, save_matplotlib_figure
+from common_plot_style import apply_matplotlib_style, save_matplotlib_figure, style_matplotlib_axes
 from output_paths import (
     canonical_case_dir_name,
     get_figures_dir,
     get_results_dir,
+    resolve_project_output_path,
     assert_geometry_output_path,
     assert_verification_output_path,
     write_metadata_sidecar,
@@ -97,7 +98,10 @@ python Geometry_optimization.py \\
 """.strip()
 
 INCH_TO_METER = 0.0254
+AIR_DYNAMIC_VISCOSITY_KG_M_S = 1.81e-5
 DEFAULT_REFERENCE_MAX_CHORD_MARGIN = 1.08
+GMT_SPANLOAD_TYPES = {"gmt_bell", "gmt_bell_simple", "gmt_bell_cubic", "paper_inspired", "reference_calibrated_gmt"}
+TIP_UNLOAD_START_MU = 0.78
 SPANLOAD_CHOICES = [
     "minimum_induced_loss",
     "gmt_bell",
@@ -106,11 +110,13 @@ SPANLOAD_CHOICES = [
     "paper_inspired",
     "reference_calibrated_gmt",
 ]
-MODE_CHOICES = ["free_optimize", "reference_regularized", "reproduce_reference"]
+MODE_CHOICES = ["free_optimize", "reference_regularized", "reproduce_reference", "gmt_requirements"]
 OPTIMIZER_CHOICES = ["auto", "coordinate_search", "scipy"]
 PRESET_CHOICES = [
     "thesis_gmt_22",
     "thesis_gmt_22_static",
+    "thesis_gmt_requirements_22",
+    "thesis_gmt_22_free_design",
     "thesis_gmt_22_manufacturable",
     "thesis_mil_22_manufacturable",
 ]
@@ -129,7 +135,23 @@ FAILURE_TWIST_MANUFACTURABILITY = "twist_manufacturability_failed"
 FAILURE_NEGATIVE_OR_NONFINITE_LOADING = "negative_or_nonfinite_loading"
 FAILURE_TARGET_INFEASIBLE_LOCKED = "target_thrust_infeasible_under_locked_geometry"
 FAILURE_THRUST_TARGET_NOT_MET = "thrust_target_not_met"
+FAILURE_AIRFOIL_SCHEDULE_INVALID = "airfoil_schedule_invalid"
 FAILURE_MULTIPLE = "multiple_validity_failures"
+RECOMMEND_GEOMETRY_VALID = "geometry is valid for CAD export"
+RECOMMEND_REDUCE_THRUST = "reduce target thrust"
+RECOMMEND_INCREASE_RPM = "increase RPM"
+RECOMMEND_ALLOW_CHORD = "allow chord optimization"
+RECOMMEND_ALLOW_AIRFOIL = "allow airfoil schedule optimization"
+RECOMMEND_REDUCE_GMT = "reduce GMT aggressiveness"
+RECOMMEND_EXPAND_POLARS = "expand valid polar database"
+THRUST_RPM_SWEEP_RPMS = (3000.0, 3500.0, 4000.0, 4500.0, 5000.0)
+GMT_AGGRESSIVENESS_LABELS = {
+    "mil": 0.0,
+    "mil-like": 0.0,
+    "mild": 0.25,
+    "moderate": 0.55,
+    "aggressive": 1.0,
+}
 REFERENCE_VARIANT_ALIASES = {
     REFERENCE_MIL_CASE: "mil_22",
     REFERENCE_GMT_CASE: "gmt_22",
@@ -242,6 +264,13 @@ class AirfoilModel:
     def cd(self, cl_value: float) -> float:
         return self.cd0 + self.induced_drag_k * cl_value * cl_value
 
+    def alpha_for_cl(self, cl_value: float) -> float:
+        return self.alpha_l0_deg + math.degrees(cl_value / max(self.cl_alpha_per_rad, 1.0e-9))
+
+    @property
+    def alpha_stall_deg(self) -> float:
+        return self.alpha_for_cl(self.cl_max)
+
 
 @dataclass(frozen=True)
 class ReferenceStation:
@@ -266,6 +295,9 @@ class ObjectiveWeights:
     w_twist_gradient: float = 0.0
     w_twist_curvature: float = 0.0
     w_aero_limits: float = 0.0
+    w_twist_curvature_smooth: float = 0.0
+    w_cl_curvature_smooth: float = 0.0
+    w_tip_cl_target: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -288,6 +320,8 @@ class SectionAero:
     cl_max: float
     cl_margin: float
     cd: float
+    reynolds_number: float
+    alpha_stall_deg: float
     dthrust_n: float
     dtorque_nm: float
     hit_alpha_min: bool
@@ -299,6 +333,7 @@ class SectionAero:
 
 @dataclass(frozen=True)
 class DesignInputs:
+    preset: str = ""
     blades: int = 2
     radius_m: float = diameter_in_to_radius_m(22.0)
     hub_radius_fraction: float = 0.20
@@ -308,8 +343,11 @@ class DesignInputs:
     rho: float = 1.225
     spanload_type: str = "gmt_bell"
     mode: str = "reference_regularized"
+    gmt_aggressiveness: float = 1.0
     chord_min_in: float = 0.50
     chord_max_in: float = 2.45
+    twist_min_deg: float = 0.0
+    twist_max_deg: float = 65.0
     chord_blend: float = 0.58
     twist_blend: float = 0.20
     smooth_passes: int = 2
@@ -335,6 +373,7 @@ class DesignInputs:
     max_twist_curvature_limit: float = 1500.0
     max_cl_limit_fraction_pct: float = 10.0
     max_alpha_limit_fraction_pct: float = 10.0
+    allowed_airfoils: tuple[str, ...] = ()
 
     @property
     def chord_min_m(self) -> float:
@@ -364,6 +403,8 @@ class StationResult:
     cl_max: float
     cl_margin: float
     cd: float
+    reynolds_number: float
+    alpha_stall_deg: float
     dthrust_n: float
     dtorque_nm: float
     airfoil: str
@@ -427,6 +468,10 @@ class DesignResult:
     failure_reasons: Sequence[str] = ()
     aero_calibration_used: bool = False
     calibration_mode: str = "none"
+    requested_gmt_aggressiveness: float = 1.0
+    achieved_gmt_aggressiveness: float = 1.0
+    optimizer_fallback_used: bool = False
+    optimizer_fallback_reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -516,6 +561,43 @@ def build_default_airfoil_schedule(mu_values: Sequence[float]) -> List[str]:
     return [exact_schedule.get(round(mu, 2), "MH115") for mu in mu_values]
 
 
+def allowed_airfoils_for_config(config: DesignInputs) -> tuple[str, ...]:
+    if config.allowed_airfoils:
+        return tuple(canonical_allowed_airfoil_name(name) for name in config.allowed_airfoils)
+    return tuple(AIRFOIL_LIBRARY.keys())
+
+
+def canonical_allowed_airfoil_name(raw_airfoil: object) -> str:
+    airfoil = str(raw_airfoil).strip()
+    if airfoil in AIRFOIL_LIBRARY:
+        return airfoil
+    upper = airfoil.upper()
+    if upper in AIRFOIL_LIBRARY:
+        return upper
+    return airfoil
+
+
+def parse_gmt_aggressiveness(value: object) -> float:
+    if value is None:
+        return 1.0
+    if isinstance(value, (int, float)):
+        return clamp(float(value), 0.0, 1.0)
+    text = str(value).strip().lower()
+    if text in GMT_AGGRESSIVENESS_LABELS:
+        return GMT_AGGRESSIVENESS_LABELS[text]
+    try:
+        return clamp(float(text), 0.0, 1.0)
+    except ValueError as exc:
+        choices = ", ".join(sorted(GMT_AGGRESSIVENESS_LABELS))
+        raise ValueError(f"gmt_aggressiveness must be numeric 0..1 or one of: {choices}") from exc
+
+
+def parse_allowed_airfoils(value: str | None) -> tuple[str, ...]:
+    if value is None or not value.strip():
+        return ()
+    return tuple(canonical_allowed_airfoil_name(part.strip()) for part in value.split(",") if part.strip())
+
+
 def validate_user_inputs(config: DesignInputs) -> None:
     if config.blades < 1:
         raise ValueError("blade count must be at least 1")
@@ -535,10 +617,16 @@ def validate_user_inputs(config: DesignInputs) -> None:
         raise ValueError(f"unsupported solver mode: {config.mode}")
     if config.optimizer not in OPTIMIZER_CHOICES:
         raise ValueError(f"unsupported optimizer: {config.optimizer}")
+    if not 0.0 <= config.gmt_aggressiveness <= 1.0:
+        raise ValueError("gmt_aggressiveness must be between 0 and 1")
     if config.chord_min_m <= 0.0:
         raise ValueError("minimum chord must be positive")
     if config.chord_max_m <= config.chord_min_m:
         raise ValueError("maximum chord must exceed minimum chord")
+    if config.twist_max_deg <= config.twist_min_deg:
+        raise ValueError("twist maximum must exceed twist minimum")
+    if config.twist_min_deg < -10.0 or config.twist_max_deg > 75.0:
+        raise ValueError("twist bounds must stay within the -10 to 75 deg sanity range")
     if not 0.0 <= config.chord_blend <= 1.0:
         raise ValueError("chord_blend must be between 0 and 1")
     if not 0.0 <= config.twist_blend <= 1.0:
@@ -561,6 +649,9 @@ def validate_user_inputs(config: DesignInputs) -> None:
         raise ValueError("max Cl limit fraction percent must be between 0 and 100")
     if not 0.0 <= config.max_alpha_limit_fraction_pct <= 100.0:
         raise ValueError("max alpha limit fraction percent must be between 0 and 100")
+    unknown_airfoils = [name for name in allowed_airfoils_for_config(config) if name not in AIRFOIL_LIBRARY]
+    if unknown_airfoils:
+        raise ValueError(f"allowed airfoil schedule contains unknown airfoil(s): {', '.join(unknown_airfoils)}")
 
 
 def default_reference_csv_path() -> Path:
@@ -1215,22 +1306,26 @@ def smoothstep(value: float) -> float:
     return x * x * (3.0 - 2.0 * x)
 
 
-def spanload_density(mu: float, kind: str, hub_mu: float) -> float:
+def spanload_density(mu: float, kind: str, hub_mu: float, gmt_aggressiveness: float = 1.0) -> float:
     x = clamp((mu - hub_mu) / max(1.0 - hub_mu, 1.0e-9), 0.0, 1.0)
     root_factor = max(x, 1.0e-9) ** 0.75
     elliptic_tip = max(1.0 - x * x, 0.0)
+    mil_density = root_factor * math.sqrt(elliptic_tip)
 
     if kind == "minimum_induced_loss":
-        return root_factor * math.sqrt(elliptic_tip)
+        return mil_density
     if kind == "gmt_bell_simple":
-        return root_factor * elliptic_tip**2.0
+        aggressive_density = root_factor * elliptic_tip**2.0
+        return (1.0 - gmt_aggressiveness) * mil_density + gmt_aggressiveness * aggressive_density
     if kind == "gmt_bell_cubic":
-        return root_factor * elliptic_tip**3.0
+        aggressive_density = root_factor * elliptic_tip**3.0
+        return (1.0 - gmt_aggressiveness) * mil_density + gmt_aggressiveness * aggressive_density
     if kind in {"paper_inspired", "reference_calibrated_gmt", "gmt_bell"}:
         midspan_hold = 1.0 + 0.70 * math.exp(-((x - 0.58) / 0.22) ** 2)
         shoulder = 1.0 + 0.20 * math.exp(-((x - 0.45) / 0.24) ** 2)
         rapid_tip_unload = max(1.0 - x**2.7, 0.0) ** 2.6
-        return root_factor * midspan_hold * shoulder * rapid_tip_unload
+        aggressive_density = root_factor * midspan_hold * shoulder * rapid_tip_unload
+        return (1.0 - gmt_aggressiveness) * mil_density + gmt_aggressiveness * aggressive_density
     raise ValueError(f"unsupported spanload_type: {kind}")
 
 
@@ -1239,17 +1334,91 @@ def normalized_section_weights(
     dr_values: Sequence[float],
     kind: str,
     hub_mu: float,
+    gmt_aggressiveness: float = 1.0,
 ) -> List[float]:
-    raw = [spanload_density(mu, kind, hub_mu) * dr_m for mu, dr_m in zip(mu_values, dr_values)]
+    raw = [
+        spanload_density(mu, kind, hub_mu, gmt_aggressiveness) * dr_m
+        for mu, dr_m in zip(mu_values, dr_values)
+    ]
     total = sum(raw)
     if total <= 0.0:
         raise ValueError("spanload distribution collapsed to zero")
     return [value / total for value in raw]
 
 
-def normalized_spanload(mu_values: Sequence[float], kind: str, hub_mu: float) -> List[float]:
+def is_gmt_spanload_type(spanload_type: str) -> bool:
+    return spanload_type in GMT_SPANLOAD_TYPES
+
+
+def tip_positive_loading_constraints_active(config: DesignInputs) -> bool:
+    return config.mode != "reproduce_reference" and is_gmt_spanload_type(config.spanload_type)
+
+
+def twist_slope_constraints_active(config: DesignInputs) -> bool:
+    return config.manufacturable_twist or config.mode == "gmt_requirements" or is_gmt_spanload_type(config.spanload_type)
+
+
+def local_inflow_density_factors(
+    mu_values: Sequence[float],
+    kind: str,
+    hub_mu: float,
+    gmt_aggressiveness: float = 1.0,
+) -> List[float]:
+    densities = [spanload_density(mu, kind, hub_mu, gmt_aggressiveness) for mu in mu_values]
+    average_density = sum(densities) / max(len(densities), 1)
+    if average_density <= 0.0:
+        return [1.0] * len(densities)
+    return [density / average_density for density in densities]
+
+
+def local_induced_velocity_multiplier(density_factor: float) -> float:
+    return 0.82 + 0.50 * max(density_factor, 0.0)
+
+
+def gmt_tip_target_cl(mu: float) -> float:
+    normalized_tip = clamp((mu - TIP_UNLOAD_START_MU) / max(1.0 - TIP_UNLOAD_START_MU, 1.0e-9), 0.0, 1.0)
+    return 0.015 + 0.30 * (1.0 - normalized_tip) ** 1.7
+
+
+def squared_second_difference_penalty(values: Sequence[float], scale: float) -> float:
+    if len(values) < 3:
+        return 0.0
+    safe_scale = max(abs(scale), 1.0e-9)
+    total = 0.0
+    for idx in range(1, len(values) - 1):
+        second_difference = values[idx + 1] - 2.0 * values[idx] + values[idx - 1]
+        total += (second_difference / safe_scale) ** 2
+    return total / max(len(values) - 2, 1)
+
+
+def interval_slope_excess_penalty(
+    mu_values: Sequence[float],
+    values: Sequence[float],
+    limit: float,
+) -> float:
+    if len(values) < 2:
+        return 0.0
+    safe_limit = max(abs(limit), 1.0e-9)
+    total = 0.0
+    count = 0
+    for left_mu, right_mu, left_value, right_value in zip(mu_values[:-1], mu_values[1:], values[:-1], values[1:]):
+        dmu = right_mu - left_mu
+        if abs(dmu) <= 1.0e-12:
+            continue
+        slope = (right_value - left_value) / dmu
+        total += (max(0.0, abs(slope) - safe_limit) / safe_limit) ** 2
+        count += 1
+    return total / max(count, 1)
+
+
+def normalized_spanload(
+    mu_values: Sequence[float],
+    kind: str,
+    hub_mu: float,
+    gmt_aggressiveness: float = 1.0,
+) -> List[float]:
     dr_values = annulus_widths(mu_values, hub_mu, 1.0)
-    return normalized_section_weights(mu_values, dr_values, kind, hub_mu)
+    return normalized_section_weights(mu_values, dr_values, kind, hub_mu, gmt_aggressiveness)
 
 
 def actuator_disk_area(radius_m: float) -> float:
@@ -1276,17 +1445,29 @@ def smooth_series(values: Sequence[float], passes: int) -> List[float]:
     return smoothed
 
 
-def local_alpha_target(base_alpha_deg: float, mu: float, hub_mu: float, spanload_type: str) -> float:
+def local_alpha_target(
+    base_alpha_deg: float,
+    mu: float,
+    hub_mu: float,
+    spanload_type: str,
+    gmt_aggressiveness: float = 1.0,
+) -> float:
     x = clamp((mu - hub_mu) / max(1.0 - hub_mu, 1.0e-9), 0.0, 1.0)
     bell_bias = 0.0
     if spanload_type in {"gmt_bell", "paper_inspired", "reference_calibrated_gmt"}:
-        bell_bias = 1.6 * (0.55 - x) - 3.0 * smoothstep((x - 0.72) / 0.28)
+        bell_bias = gmt_aggressiveness * (1.6 * (0.55 - x) - 3.0 * smoothstep((x - 0.72) / 0.28))
     return clamp(base_alpha_deg + bell_bias, 2.0, 16.0)
 
 
-def assign_target_alpha(airfoil: AirfoilModel, base_alpha_deg: float, mu: float, spanload_type: str) -> float:
+def assign_target_alpha(
+    airfoil: AirfoilModel,
+    base_alpha_deg: float,
+    mu: float,
+    spanload_type: str,
+    gmt_aggressiveness: float = 1.0,
+) -> float:
     del airfoil
-    return local_alpha_target(base_alpha_deg, mu, 0.20, spanload_type)
+    return local_alpha_target(base_alpha_deg, mu, 0.20, spanload_type, gmt_aggressiveness)
 
 
 def reference_loading_proxy(station: ReferenceStation) -> float:
@@ -1427,7 +1608,7 @@ def enforce_manufacturable_twist_profile(
     twist_values_deg: Sequence[float],
     config: DesignInputs,
 ) -> List[float]:
-    twists = [clamp(value, 0.0, 65.0) for value in twist_values_deg]
+    twists = [clamp(value, config.twist_min_deg, config.twist_max_deg) for value in twist_values_deg]
     if len(twists) < 3:
         return twists
 
@@ -1457,7 +1638,7 @@ def enforce_manufacturable_twist_profile(
             curvature = 2.0 * (right_slope - left_slope) / span
             if abs(curvature) > max_curvature:
                 updated[idx] = 0.25 * twists[idx - 1] + 0.5 * twists[idx] + 0.25 * twists[idx + 1]
-        twists = [clamp(value, 0.0, 65.0) for value in updated]
+        twists = [clamp(value, config.twist_min_deg, config.twist_max_deg) for value in updated]
 
     for idx in range(1, len(twists)):
         dmu = max(mu_values[idx] - mu_values[idx - 1], 1.0e-9)
@@ -1465,7 +1646,40 @@ def enforce_manufacturable_twist_profile(
             twists[idx] = min(twists[idx], twists[idx - 1] + max_positive)
         twists[idx] = max(twists[idx], twists[idx - 1] - max_gradient * dmu)
         twists[idx] = min(twists[idx], twists[idx - 1] + max_gradient * dmu)
-    return [clamp(value, 0.0, 65.0) for value in twists]
+    return [clamp(value, config.twist_min_deg, config.twist_max_deg) for value in twists]
+
+
+def enforce_positive_tip_loading_twist_profile(
+    mu_values: Sequence[float],
+    twist_values_deg: Sequence[float],
+    config: DesignInputs,
+    reference_stations: Sequence[ReferenceStation],
+    density_factors: Sequence[float],
+    airfoil_names: Sequence[str],
+    induced_velocity: float,
+    omega: float,
+) -> List[float]:
+    twists = list(twist_values_deg)
+    if not tip_positive_loading_constraints_active(config):
+        return twists
+
+    for idx, (mu, station, airfoil_name) in enumerate(zip(mu_values, reference_stations, airfoil_names)):
+        if mu < TIP_UNLOAD_START_MU:
+            continue
+        airfoil = AIRFOIL_LIBRARY[airfoil_name]
+        radius_m = station.mu * config.radius_m
+        density_factor = density_factors[idx] if idx < len(density_factors) else 1.0
+        local_vi = induced_velocity * local_induced_velocity_multiplier(density_factor)
+        v_axial, v_tan, _, _ = compute_section_velocities(config.freestream_mps, omega, radius_m, local_vi)
+        phi_deg = math.degrees(math.atan2(v_axial, max(v_tan, 1.0e-6)))
+        target_cl = gmt_tip_target_cl(mu)
+        cl_floor = 0.005
+        cl_ceiling = min(0.92 * airfoil.cl_max, max(target_cl, cl_floor + 0.015))
+        alpha_floor = airfoil.alpha_for_cl(cl_floor)
+        alpha_ceiling = min(config.alpha_search_max_deg - 0.75, airfoil.alpha_for_cl(cl_ceiling))
+        twists[idx] = clamp(twists[idx], phi_deg + alpha_floor, phi_deg + alpha_ceiling)
+
+    return [clamp(value, config.twist_min_deg, config.twist_max_deg) for value in twists]
 
 
 def reference_chord_penalty(chords_m: Sequence[float], radius_m: float) -> float:
@@ -1520,6 +1734,7 @@ def compute_section_forces(
     force_factor = cl_value * math.cos(phi_rad) - cd_value * math.sin(phi_rad)
     torque_factor = cl_value * math.sin(phi_rad) + cd_value * math.cos(phi_rad)
     dynamic_pressure = 0.5 * rho * v_rel * v_rel
+    reynolds_number = rho * v_rel * chord_m / max(AIR_DYNAMIC_VISCOSITY_KG_M_S, 1.0e-12)
     dthrust_n = blades * dynamic_pressure * chord_m * force_factor * dr_m
     dtorque_nm = blades * dynamic_pressure * chord_m * torque_factor * radius_m * dr_m
     hit_alpha_min = alpha_deg < alpha_min_deg
@@ -1535,6 +1750,8 @@ def compute_section_forces(
         cl_max=airfoil.cl_max,
         cl_margin=cl_margin,
         cd=cd_value,
+        reynolds_number=reynolds_number,
+        alpha_stall_deg=airfoil.alpha_stall_deg,
         dthrust_n=dthrust_n,
         dtorque_nm=dtorque_nm,
         hit_alpha_min=hit_alpha_min,
@@ -1546,6 +1763,25 @@ def compute_section_forces(
 
 
 def weights_for_mode(mode: str) -> ObjectiveWeights:
+    if mode == "gmt_requirements":
+        return ObjectiveWeights(
+            w_thrust=32.0,
+            w_torque=5.5,
+            w_spanload=3.0,
+            w_reference_twist=0.12,
+            w_reference_chord=0.08,
+            w_smooth=0.35,
+            w_bounds=8.0,
+            w_positive_loading=70.0,
+            w_tip_positive_unload=30.0,
+            w_twist_bump=120.0,
+            w_twist_gradient=45.0,
+            w_twist_curvature=30.0,
+            w_aero_limits=95.0,
+            w_twist_curvature_smooth=9.0,
+            w_cl_curvature_smooth=7.0,
+            w_tip_cl_target=16.0,
+        )
     if mode == "free_optimize":
         return ObjectiveWeights(
             w_thrust=22.0,
@@ -1557,6 +1793,9 @@ def weights_for_mode(mode: str) -> ObjectiveWeights:
             w_bounds=5.0,
             w_positive_loading=40.0,
             w_tip_positive_unload=28.0,
+            w_twist_curvature_smooth=4.0,
+            w_cl_curvature_smooth=4.0,
+            w_tip_cl_target=8.0,
         )
     if mode == "reproduce_reference":
         return ObjectiveWeights(
@@ -1569,6 +1808,8 @@ def weights_for_mode(mode: str) -> ObjectiveWeights:
             w_bounds=3.0,
             w_positive_loading=12.0,
             w_tip_positive_unload=4.0,
+            w_twist_curvature_smooth=1.0,
+            w_cl_curvature_smooth=1.0,
         )
     return ObjectiveWeights(
         w_thrust=24.0,
@@ -1580,6 +1821,9 @@ def weights_for_mode(mode: str) -> ObjectiveWeights:
         w_bounds=5.0,
         w_positive_loading=48.0,
         w_tip_positive_unload=35.0,
+        w_twist_curvature_smooth=5.0,
+        w_cl_curvature_smooth=5.0,
+        w_tip_cl_target=10.0,
     )
 
 
@@ -1615,7 +1859,11 @@ def candidate_chord(
 def candidate_airfoil(config: DesignInputs, station: ReferenceStation) -> str:
     if config.lock_airfoil or config.optimize_twist_only or config.mode == "reproduce_reference":
         return station.airfoil
-    return build_default_airfoil_schedule([station.mu])[0]
+    preferred = build_default_airfoil_schedule([station.mu])[0]
+    allowed = allowed_airfoils_for_config(config)
+    if preferred in allowed:
+        return preferred
+    return allowed[0] if allowed else preferred
 
 
 def unique_failure_reasons(reasons: Iterable[str]) -> List[str]:
@@ -1651,6 +1899,15 @@ def locked_thesis_geometry(config: DesignInputs) -> bool:
     return config.lock_chord and config.lock_airfoil and config.optimize_twist_only
 
 
+def free_design_enabled(config: DesignInputs) -> bool:
+    return not config.optimize_twist_only and (not config.lock_chord or not config.lock_airfoil)
+
+
+def airfoil_schedule_valid(config: DesignInputs, stations: Sequence[StationResult]) -> bool:
+    allowed = set(allowed_airfoils_for_config(config))
+    return all(station.airfoil in AIRFOIL_LIBRARY and station.airfoil in allowed for station in stations)
+
+
 def station_validity_metrics(
     config: DesignInputs,
     stations: Sequence[StationResult],
@@ -1684,6 +1941,7 @@ def station_validity_metrics(
         "negative_loading_fraction_pct": 100.0 * negative_loading_fraction,
         "nonfinite_loading_fraction_pct": 100.0 * nonfinite_loading_fraction,
         "manufacturable_twist_pass": bool(twist_metrics["manufacturable_twist_pass"]),
+        "airfoil_schedule_valid": airfoil_schedule_valid(config, stations),
     }
 
 
@@ -1698,13 +1956,15 @@ def validity_failure_reasons_from_metrics(
         reasons.append(FAILURE_CLIPPING_FRACTION)
     if float(metrics["alpha_limit_fraction_pct"]) > config.max_alpha_limit_fraction_pct:
         reasons.append(FAILURE_ALPHA_LIMIT_FRACTION)
-    if config.manufacturable_twist and not bool(metrics["manufacturable_twist_pass"]):
+    if twist_slope_constraints_active(config) and not bool(metrics["manufacturable_twist_pass"]):
         reasons.append(FAILURE_TWIST_MANUFACTURABILITY)
     if (
         float(metrics["negative_loading_fraction_pct"]) > 0.0
         or float(metrics["nonfinite_loading_fraction_pct"]) > 0.0
     ):
         reasons.append(FAILURE_NEGATIVE_OR_NONFINITE_LOADING)
+    if not bool(metrics.get("airfoil_schedule_valid", True)):
+        reasons.append(FAILURE_AIRFOIL_SCHEDULE_INVALID)
     reasons.extend(extra_failure_reasons)
     reasons = unique_failure_reasons(reasons)
     if normalized_thrust_error > THESIS_THRUST_TOLERANCE_FRACTION:
@@ -1733,6 +1993,7 @@ def validity_flags_from_metrics(
         FAILURE_NEGATIVE_OR_NONFINITE_LOADING,
         FAILURE_TARGET_INFEASIBLE_LOCKED,
         FAILURE_THRUST_TARGET_NOT_MET,
+        FAILURE_AIRFOIL_SCHEDULE_INVALID,
     }
     valid_for_thesis_export = (
         valid_for_optimizer_summary
@@ -1747,7 +2008,8 @@ def alpha_match_constraints_pass(result: DesignResult) -> bool:
         and result.alpha_limit_fraction_pct <= result.config.max_alpha_limit_fraction_pct
         and result.negative_loading_fraction_pct <= 0.0
         and result.nonfinite_loading_fraction_pct <= 0.0
-        and (not result.config.manufacturable_twist or result.manufacturable_twist_pass)
+        and (not twist_slope_constraints_active(result.config) or result.manufacturable_twist_pass)
+        and airfoil_schedule_valid(result.config, result.stations)
         and math.isfinite(result.thrust_n)
         and math.isfinite(result.torque_nm)
         and result.torque_nm > 0.0
@@ -1771,7 +2033,19 @@ def build_candidate_result(
     diameter_m = 2.0 * config.radius_m
     mu_values = [station.mu for station in reference_stations]
     dr_values = annulus_widths(mu_values, config.hub_radius_fraction, config.radius_m)
-    target_weights = normalized_section_weights(mu_values, dr_values, config.spanload_type, config.hub_radius_fraction)
+    target_weights = normalized_section_weights(
+        mu_values,
+        dr_values,
+        config.spanload_type,
+        config.hub_radius_fraction,
+        config.gmt_aggressiveness,
+    )
+    density_factors = local_inflow_density_factors(
+        mu_values,
+        config.spanload_type,
+        config.hub_radius_fraction,
+        config.gmt_aggressiveness,
+    )
     reference_weights = normalized_reference_loading(reference_stations, dr_values)
     loading_scale = max(parameters.loading_scale, 0.05)
     induced_velocity = disk_induced_velocity(
@@ -1781,7 +2055,6 @@ def build_candidate_result(
         config.hub_radius_fraction,
         config.freestream_mps,
     )
-    average_target_weight = sum(target_weights) / max(len(target_weights), 1)
 
     raw_chords: List[float] = []
     raw_twists: List[float] = []
@@ -1794,7 +2067,7 @@ def build_candidate_result(
             correction = twist_correction(station.mu, config.hub_radius_fraction, parameters)
             twist_deg = station.twist_deg + (1.0 - config.twist_blend) * correction
         raw_chords.append(chord_m)
-        raw_twists.append(clamp(twist_deg, 0.0, 65.0))
+        raw_twists.append(clamp(twist_deg, config.twist_min_deg, config.twist_max_deg))
         raw_airfoils.append(candidate_airfoil(config, station))
 
     if config.lock_chord or config.optimize_twist_only or config.mode == "reproduce_reference":
@@ -1809,19 +2082,19 @@ def build_candidate_result(
         smoothed_twists = raw_twists
     else:
         smoothed_twists = [
-            clamp(value, 0.0, 65.0)
+            clamp(value, config.twist_min_deg, config.twist_max_deg)
             for value in smooth_series(raw_twists, config.smooth_passes)
         ]
     if config.manufacturable_twist and config.mode != "reproduce_reference":
         smoothed_twists = enforce_manufacturable_twist_profile(mu_values, smoothed_twists, config)
         capped_twists: List[float] = []
-        for station, target_weight, twist_deg, airfoil_name in zip(
+        for station, density_factor, twist_deg, airfoil_name in zip(
             reference_stations,
-            target_weights,
+            density_factors,
             smoothed_twists,
             raw_airfoils,
         ):
-            local_vi_multiplier = 0.82 + 0.50 * target_weight / max(average_target_weight, 1.0e-9)
+            local_vi_multiplier = local_induced_velocity_multiplier(density_factor)
             local_vi = induced_velocity * local_vi_multiplier
             radius_m = station.mu * config.radius_m
             v_axial, v_tan, _, _ = compute_section_velocities(config.freestream_mps, omega, radius_m, local_vi)
@@ -1837,13 +2110,13 @@ def build_candidate_result(
             capped_twists.append(clamp(twist_deg, phi_deg + alpha_floor, phi_deg + alpha_ceiling))
         smoothed_twists = enforce_manufacturable_twist_profile(mu_values, capped_twists, config)
         capped_twists = []
-        for station, target_weight, twist_deg, airfoil_name in zip(
+        for station, density_factor, twist_deg, airfoil_name in zip(
             reference_stations,
-            target_weights,
+            density_factors,
             smoothed_twists,
             raw_airfoils,
         ):
-            local_vi_multiplier = 0.82 + 0.50 * target_weight / max(average_target_weight, 1.0e-9)
+            local_vi_multiplier = local_induced_velocity_multiplier(density_factor)
             local_vi = induced_velocity * local_vi_multiplier
             radius_m = station.mu * config.radius_m
             v_axial, v_tan, _, _ = compute_section_velocities(config.freestream_mps, omega, radius_m, local_vi)
@@ -1858,15 +2131,25 @@ def build_candidate_result(
             )
             capped_twists.append(clamp(twist_deg, phi_deg + alpha_floor, phi_deg + alpha_ceiling))
         smoothed_twists = capped_twists
+    smoothed_twists = enforce_positive_tip_loading_twist_profile(
+        mu_values,
+        smoothed_twists,
+        config,
+        reference_stations,
+        density_factors,
+        raw_airfoils,
+        induced_velocity,
+        omega,
+    )
 
     stations: List[StationResult] = []
     thrust_n = 0.0
     torque_nm = 0.0
-    for idx, (station, dr_m, target_weight, chord_m, twist_deg, airfoil_name) in enumerate(
-        zip(reference_stations, dr_values, target_weights, smoothed_chords, smoothed_twists, raw_airfoils),
+    for idx, (station, dr_m, target_weight, density_factor, chord_m, twist_deg, airfoil_name) in enumerate(
+        zip(reference_stations, dr_values, target_weights, density_factors, smoothed_chords, smoothed_twists, raw_airfoils),
         start=1,
     ):
-        local_vi_multiplier = 0.82 + 0.50 * target_weight / max(average_target_weight, 1.0e-9)
+        local_vi_multiplier = local_induced_velocity_multiplier(density_factor)
         local_vi = induced_velocity * local_vi_multiplier
         radius_m = station.mu * config.radius_m
         v_axial, v_tan, _, _ = compute_section_velocities(config.freestream_mps, omega, radius_m, local_vi)
@@ -1909,6 +2192,8 @@ def build_candidate_result(
                 cl_max=aero.cl_max,
                 cl_margin=aero.cl_margin,
                 cd=aero.cd,
+                reynolds_number=aero.reynolds_number,
+                alpha_stall_deg=aero.alpha_stall_deg,
                 dthrust_n=dthrust_n,
                 dtorque_nm=dtorque_nm,
                 airfoil=airfoil_name,
@@ -1965,6 +2250,16 @@ def build_candidate_result(
                 stations[idx + 1].twist_deg - 2.0 * stations[idx].twist_deg + stations[idx - 1].twist_deg
             ) / 8.0
         smoothness_penalty /= max(len(stations) - 2, 1)
+    beta_values = [station.twist_deg for station in stations]
+    cl_values = [station.cl for station in stations]
+    mu_station_values = [station.mu for station in stations]
+    twist_curvature_smooth_penalty = squared_second_difference_penalty(beta_values, 1.5)
+    cl_curvature_smooth_penalty = squared_second_difference_penalty(cl_values, 0.08)
+    twist_slope_excess_penalty = interval_slope_excess_penalty(
+        mu_station_values,
+        beta_values,
+        config.max_abs_twist_gradient_deg_per_mu_limit,
+    )
 
     count = max(len(stations), 1)
     chord_limit_fraction = sum(station.hit_chord_min or station.hit_chord_max for station in stations) / count
@@ -2007,10 +2302,10 @@ def build_candidate_result(
         positive_loading_penalty /= len(stations)
 
     tip_positive_unload_penalty = 0.0
+    average_dthrust = max(abs(config.thrust_target_n) / max(len(stations), 1), 1.0e-6)
+    average_dtorque = max(abs(q_reference) / max(len(stations), 1), 1.0e-6)
     tip_stations = [station for station in stations if station.mu > 0.85]
     if tip_stations:
-        average_dthrust = max(abs(config.thrust_target_n) / len(stations), 1.0e-6)
-        average_dtorque = max(abs(q_reference) / len(stations), 1.0e-6)
         for station in tip_stations:
             normalized_tip = clamp((station.mu - 0.85) / 0.15, 0.0, 1.0)
             cl_upper_target = 0.08 + 0.30 * (1.0 - normalized_tip) ** 1.5
@@ -2021,6 +2316,15 @@ def build_candidate_result(
             tip_positive_unload_penalty += (max(0.0, -station.dtorque_nm) / average_dtorque) ** 2
             tip_positive_unload_penalty += (max(0.0, alpha_floor_deg - station.alpha_deg) / 1.0) ** 2
         tip_positive_unload_penalty /= len(tip_stations)
+    tip_cl_target_penalty = 0.0
+    tip_target_stations = [station for station in stations if station.mu >= TIP_UNLOAD_START_MU]
+    if tip_target_stations:
+        for station in tip_target_stations:
+            target_cl = gmt_tip_target_cl(station.mu)
+            tip_cl_target_penalty += ((station.cl - target_cl) / max(0.08, target_cl)) ** 2
+            tip_cl_target_penalty += (max(0.0, -station.cl) / 0.01) ** 2
+            tip_cl_target_penalty += (max(0.0, -station.dthrust_n) / average_dthrust) ** 2
+        tip_cl_target_penalty /= len(tip_target_stations)
 
     twist_metrics = design_twist_metrics(config, stations)
     twist_bump_limit = max(config.max_positive_twist_bump_deg, 1.0e-6)
@@ -2103,14 +2407,19 @@ def build_candidate_result(
             + float(validity_metrics["negative_loading_fraction_pct"]) / 100.0
             + float(validity_metrics["nonfinite_loading_fraction_pct"]) / 100.0
         )
-    if config.manufacturable_twist and not twist_metrics["manufacturable_twist_pass"]:
+    if twist_slope_constraints_active(config) and not twist_metrics["manufacturable_twist_pass"]:
         dominant_validity_penalty_raw += 1.0 + twist_bump_penalty + twist_gradient_penalty + twist_curvature_penalty
-    twist_bump_weight = weights.w_twist_bump or (90.0 if config.manufacturable_twist else 0.0)
-    twist_gradient_weight = weights.w_twist_gradient or (35.0 if config.manufacturable_twist else 0.0)
-    twist_curvature_weight = weights.w_twist_curvature or (22.0 if config.manufacturable_twist else 0.0)
+    if normalized_thrust_error > THESIS_THRUST_TOLERANCE_FRACTION:
+        excess = (normalized_thrust_error - THESIS_THRUST_TOLERANCE_FRACTION) / THESIS_THRUST_TOLERANCE_FRACTION
+        dominant_validity_penalty_raw += 1.0 + excess * excess
+    if not bool(validity_metrics.get("airfoil_schedule_valid", True)):
+        dominant_validity_penalty_raw += 1.0
+    twist_bump_weight = weights.w_twist_bump or (90.0 if twist_slope_constraints_active(config) else 0.0)
+    twist_gradient_weight = weights.w_twist_gradient or (35.0 if twist_slope_constraints_active(config) else 0.0)
+    twist_curvature_weight = weights.w_twist_curvature or (22.0 if twist_slope_constraints_active(config) else 0.0)
     aero_limit_weight = weights.w_aero_limits or (75.0 if config.manufacturable_twist else 18.0)
     torque_weight = weights.w_torque
-    if config.manufacturable_twist and config.spanload_type != "minimum_induced_loss":
+    if twist_slope_constraints_active(config) and config.spanload_type != "minimum_induced_loss":
         torque_weight = max(torque_weight, 4.0)
 
     reference_twist_error = reference_twist_rms_deg / 10.0
@@ -2128,6 +2437,10 @@ def build_candidate_result(
         "twist_bump_penalty": twist_bump_weight * twist_bump_penalty,
         "twist_gradient_penalty": twist_gradient_weight * twist_gradient_penalty,
         "twist_curvature_penalty": twist_curvature_weight * twist_curvature_penalty,
+        "twist_slope_excess_penalty": twist_gradient_weight * twist_slope_excess_penalty,
+        "twist_curvature_smooth_penalty": weights.w_twist_curvature_smooth * twist_curvature_smooth_penalty,
+        "cl_curvature_smooth_penalty": weights.w_cl_curvature_smooth * cl_curvature_smooth_penalty,
+        "tip_cl_target_penalty": weights.w_tip_cl_target * tip_cl_target_penalty,
         "aero_limit_penalty": aero_limit_weight * aero_limit_penalty,
         "dominant_validity_penalty": DOMINANT_VALIDITY_PENALTY * dominant_validity_penalty_raw,
     }
@@ -2153,6 +2466,8 @@ def build_candidate_result(
         )
     if negative_force_fraction > 0.0:
         warnings.append(f"{100.0 * negative_force_fraction:.1f}% of stations produced negative thrust or torque contributions")
+    if abs(config.freestream_mps) <= 1.0e-9 and any(station.dthrust_n < -1.0e-9 for station in stations):
+        warnings.append("hover solution has at least one station with negative dT; tip unloading must remain positive")
     if torque_nm <= 0.0:
         warnings.append("computed torque is non-positive")
 
@@ -2201,6 +2516,8 @@ def build_candidate_result(
         failure_reasons=tuple(failure_reasons),
         aero_calibration_used=aero_calibration_used_for_config(config),
         calibration_mode=calibration_mode_for_config(config),
+        requested_gmt_aggressiveness=config.gmt_aggressiveness,
+        achieved_gmt_aggressiveness=config.gmt_aggressiveness,
     )
 
 
@@ -2278,7 +2595,7 @@ def alpha_sweep_values(bounds: tuple[float, float], step_deg: float, center_deg:
 def alpha_match_invalid_key(result: DesignResult) -> tuple[float, float, float, float, float, float]:
     cl_excess = max(0.0, result.cl_limit_fraction_pct - result.config.max_cl_limit_fraction_pct)
     alpha_excess = max(0.0, result.alpha_limit_fraction_pct - result.config.max_alpha_limit_fraction_pct)
-    twist_fail = 0.0 if (not result.config.manufacturable_twist or result.manufacturable_twist_pass) else 1.0
+    twist_fail = 0.0 if (not twist_slope_constraints_active(result.config) or result.manufacturable_twist_pass) else 1.0
     loading_fail = result.negative_loading_fraction_pct + result.nonfinite_loading_fraction_pct
     return (
         cl_excess + alpha_excess + 100.0 * twist_fail + loading_fail,
@@ -2330,14 +2647,39 @@ def match_thrust_with_base_alpha(
 
     valid_candidates = [candidate for candidate in candidates if alpha_match_constraints_pass(candidate)]
     if valid_candidates:
-        selected = min(
-            valid_candidates,
-            key=lambda candidate: (
-                candidate.normalized_thrust_error,
-                candidate.torque_nm,
-                candidate.spanload_error,
-            ),
-        )
+        if config.mode == "gmt_requirements":
+            target_valid_candidates = [
+                candidate
+                for candidate in valid_candidates
+                if candidate.normalized_thrust_error <= THESIS_THRUST_TOLERANCE_FRACTION
+            ]
+            if target_valid_candidates:
+                selected = min(
+                    target_valid_candidates,
+                    key=lambda candidate: (
+                        candidate.normalized_thrust_error,
+                        candidate.torque_nm,
+                        candidate.spanload_error,
+                    ),
+                )
+            else:
+                selected = min(
+                    valid_candidates,
+                    key=lambda candidate: (
+                        candidate.normalized_thrust_error,
+                        candidate.torque_nm,
+                        candidate.spanload_error,
+                    ),
+                )
+        else:
+            selected = min(
+                valid_candidates,
+                key=lambda candidate: (
+                    candidate.normalized_thrust_error,
+                    candidate.torque_nm,
+                    candidate.spanload_error,
+                ),
+            )
         target_met = selected.normalized_thrust_error <= THESIS_THRUST_TOLERANCE_FRACTION
         forced_reasons: List[str] = []
         if not target_met and locked_thesis_geometry(config):
@@ -2655,6 +2997,81 @@ def tip_loading_diagnostics(result: DesignResult, threshold_mu: float = 0.85) ->
     }
 
 
+def loading_fraction_diagnostics(
+    result: DesignResult,
+    tip_threshold_mu: float = 0.85,
+    inboard_min_mu: float = 0.20,
+    inboard_max_mu: float = 0.72,
+) -> dict[str, float]:
+    target_tip = sum(station.target_spanload_weight for station in result.stations if station.mu >= tip_threshold_mu)
+    actual_tip = sum(station.actual_spanload_weight for station in result.stations if station.mu >= tip_threshold_mu)
+    target_inboard = sum(
+        station.target_spanload_weight for station in result.stations if inboard_min_mu <= station.mu <= inboard_max_mu
+    )
+    actual_inboard = sum(
+        station.actual_spanload_weight for station in result.stations if inboard_min_mu <= station.mu <= inboard_max_mu
+    )
+    return {
+        "tip_threshold_mu": tip_threshold_mu,
+        "inboard_min_mu": inboard_min_mu,
+        "inboard_max_mu": inboard_max_mu,
+        "target_tip_loading_fraction": target_tip,
+        "actual_tip_loading_fraction": actual_tip,
+        "target_inboard_loading_fraction": target_inboard,
+        "actual_inboard_loading_fraction": actual_inboard,
+    }
+
+
+def negative_loading_station_count(result: DesignResult) -> int:
+    return sum(station.negative_force or station.impossible_force for station in result.stations)
+
+
+def recommended_next_actions(result: DesignResult, failure_reasons: Sequence[str]) -> List[str]:
+    if not failure_reasons:
+        return [RECOMMEND_GEOMETRY_VALID]
+
+    actions: List[str] = []
+    if FAILURE_TARGET_INFEASIBLE_LOCKED in failure_reasons:
+        if result.config.lock_chord or result.config.optimize_twist_only:
+            actions.append(RECOMMEND_ALLOW_CHORD)
+        if result.config.lock_airfoil or result.config.optimize_twist_only:
+            actions.append(RECOMMEND_ALLOW_AIRFOIL)
+        actions.extend([RECOMMEND_INCREASE_RPM, RECOMMEND_REDUCE_THRUST])
+    elif FAILURE_THRUST_TARGET_NOT_MET in failure_reasons:
+        if result.config.lock_chord or result.config.optimize_twist_only:
+            actions.append(RECOMMEND_ALLOW_CHORD)
+        else:
+            actions.append(RECOMMEND_INCREASE_RPM)
+        actions.append(RECOMMEND_REDUCE_THRUST)
+
+    if FAILURE_CLIPPING_FRACTION in failure_reasons:
+        if result.config.lock_airfoil or result.config.optimize_twist_only:
+            actions.append(RECOMMEND_ALLOW_AIRFOIL)
+        else:
+            actions.append(RECOMMEND_EXPAND_POLARS)
+        actions.append(RECOMMEND_REDUCE_GMT)
+    if FAILURE_ALPHA_LIMIT_FRACTION in failure_reasons:
+        actions.append(RECOMMEND_REDUCE_GMT)
+    if FAILURE_NEGATIVE_OR_NONFINITE_LOADING in failure_reasons:
+        actions.append(RECOMMEND_REDUCE_GMT)
+    if FAILURE_TWIST_MANUFACTURABILITY in failure_reasons:
+        actions.append(RECOMMEND_REDUCE_GMT)
+    if FAILURE_AIRFOIL_SCHEDULE_INVALID in failure_reasons:
+        actions.append(RECOMMEND_ALLOW_AIRFOIL)
+
+    return unique_failure_reasons(actions) or [RECOMMEND_REDUCE_THRUST]
+
+
+def validity_status_label(valid_for_thesis_export: bool, failure_reasons: Sequence[str]) -> str:
+    if valid_for_thesis_export:
+        return "thesis_valid"
+    if FAILURE_TARGET_INFEASIBLE_LOCKED in failure_reasons:
+        return FAILURE_TARGET_INFEASIBLE_LOCKED
+    if FAILURE_THRUST_TARGET_NOT_MET in failure_reasons:
+        return "target_thrust_infeasible_under_current_constraints"
+    return "geometry_checks_not_met"
+
+
 def convergence_diagnostics(result: DesignResult) -> dict[str, object]:
     history = list(result.convergence_history)
     if not history:
@@ -2694,14 +3111,22 @@ def validate_geometry_result(result: DesignResult) -> List[str]:
             break
     if any(station.chord_m <= 0.0 for station in stations):
         warnings.append("one or more stations have non-positive chord")
-    if any(station.twist_deg < 0.0 or station.twist_deg > 65.0 for station in stations):
-        warnings.append("one or more stations have twist outside the 0 to 65 deg physical check range")
+    if any(
+        station.twist_deg < result.config.twist_min_deg or station.twist_deg > result.config.twist_max_deg
+        for station in stations
+    ):
+        warnings.append(
+            "one or more stations have twist outside the configured "
+            f"{result.config.twist_min_deg:g} to {result.config.twist_max_deg:g} deg physical check range"
+        )
     if any(station.alpha_deg < -5.0 or station.alpha_deg > 25.0 for station in stations):
         warnings.append("one or more stations have alpha outside the -5 to 25 deg sanity check range")
     if any(station.cl < -0.02 for station in stations):
         warnings.append("one or more stations have Cl < -0.02; tip unloading must approach zero from positive lift")
     if any(station.dthrust_n < -1.0e-6 for station in stations):
         warnings.append("one or more stations have negative thrust contribution")
+    if abs(result.config.freestream_mps) <= 1.0e-9 and any(station.dthrust_n < -1.0e-9 for station in stations):
+        warnings.append("hover solution has negative dT at one or more stations")
     if any(station.dtorque_nm < -1.0e-6 for station in stations):
         warnings.append("one or more stations have negative torque contribution")
     tip_alpha_negative = [station for station in stations if station.mu > 0.85 and station.alpha_deg < -1.0]
@@ -2730,7 +3155,7 @@ def validate_geometry_result(result: DesignResult) -> List[str]:
     twist_metrics = design_twist_metrics(result.config, stations)
     if not twist_metrics["manufacturable_twist_pass"]:
         warnings.append(
-            "twist profile is diagnostic only: "
+            "twist profile check: "
             f"max positive bump {twist_metrics['max_positive_twist_bump_deg']:.3f} deg, "
             f"max |d beta/dmu| {twist_metrics['max_abs_twist_gradient_deg_per_mu']:.1f}, "
             f"max curvature {twist_metrics['max_twist_curvature']:.1f}"
@@ -2792,7 +3217,7 @@ def dedupe_warnings(warnings: Sequence[str]) -> List[str]:
     return unique
 
 
-def optimize_geometry(
+def _optimize_geometry_once(
     config: DesignInputs,
     reference_stations: Sequence[ReferenceStation] | None = None,
     initial_warnings: Sequence[str] = (),
@@ -2836,8 +3261,24 @@ def optimize_geometry(
             )
     q_reference = max(abs(reference_result.torque_nm * aero_calibration_scale), 1.0e-6)
 
-    if config.mode == "reproduce_reference" or config.max_iterations == 0:
+    if config.mode == "reproduce_reference":
         result = build_candidate_result(
+            config,
+            reference_stations,
+            reference_params,
+            weights,
+            q_reference,
+            reference_source,
+            "reference_evaluation",
+            calibration_warnings,
+            aero_calibration_scale,
+        )
+        history = [convergence_record(0, result)]
+        warnings = dedupe_warnings(list(result.warnings) + validate_geometry_result(result))
+        return replace(result, convergence_history=history, warnings=warnings)
+
+    if config.max_iterations == 0:
+        result = evaluate_with_matched_alpha(
             config,
             reference_stations,
             reference_params,
@@ -2864,9 +3305,13 @@ def optimize_geometry(
                 aero_calibration_scale,
             )
         except Exception as exc:
-            if config.optimizer == "scipy":
+            scipy_unavailable = "scipy.optimize is unavailable" in str(exc) or "No module named 'scipy'" in str(exc)
+            if config.optimizer == "scipy" and not scipy_unavailable:
                 raise
-            fallback_warning = f"scipy optimizer unavailable or failed; used coordinate search instead ({exc})"
+            fallback_warning = (
+                "scipy optimizer unavailable or failed; used coordinate search instead "
+                f"({exc}). Install with: python -m pip install scipy"
+            )
             result, history = optimize_with_coordinate_search(
                 config,
                 reference_stations,
@@ -2875,6 +3320,11 @@ def optimize_geometry(
                 reference_source,
                 calibration_warnings + [fallback_warning],
                 aero_calibration_scale,
+            )
+            result = replace(
+                result,
+                optimizer_fallback_used=True,
+                optimizer_fallback_reason=str(exc),
             )
     else:
         result, history = optimize_with_coordinate_search(
@@ -2889,6 +3339,79 @@ def optimize_geometry(
 
     warnings = dedupe_warnings(list(result.warnings) + validate_geometry_result(result))
     return replace(result, convergence_history=history, warnings=warnings)
+
+
+def gmt_aggressiveness_candidates(requested: float) -> List[float]:
+    requested = clamp(requested, 0.0, 1.0)
+    values = [requested, 0.85, 0.70, 0.55, 0.40, 0.25, 0.10, 0.0]
+    unique = sorted({round(value, 6) for value in values if value <= requested + 1.0e-9}, reverse=True)
+    return unique or [0.0]
+
+
+def gmt_requirements_rank(result: DesignResult) -> tuple[float, float, float, float, float, float]:
+    valid_rank = 0.0 if result.valid_for_thesis_export else 1.0
+    constraint_excess = (
+        max(0.0, result.cl_limit_fraction_pct - result.config.max_cl_limit_fraction_pct)
+        + max(0.0, result.alpha_limit_fraction_pct - result.config.max_alpha_limit_fraction_pct)
+        + result.negative_loading_fraction_pct
+        + result.nonfinite_loading_fraction_pct
+        + (0.0 if result.manufacturable_twist_pass else 100.0)
+    )
+    return (
+        valid_rank,
+        constraint_excess,
+        result.normalized_thrust_error,
+        result.torque_nm,
+        result.spanload_error,
+        -result.achieved_gmt_aggressiveness,
+    )
+
+
+def optimize_gmt_requirements(
+    config: DesignInputs,
+    reference_stations: Sequence[ReferenceStation] | None = None,
+    initial_warnings: Sequence[str] = (),
+    reference_source: str = "unknown reference",
+) -> DesignResult:
+    requested_aggressiveness = clamp(config.gmt_aggressiveness, 0.0, 1.0)
+    attempts: List[DesignResult] = []
+    for aggressiveness in gmt_aggressiveness_candidates(requested_aggressiveness):
+        attempt_config = replace(config, gmt_aggressiveness=aggressiveness)
+        attempt = _optimize_geometry_once(attempt_config, reference_stations, initial_warnings, reference_source)
+        attempt = replace(
+            attempt,
+            requested_gmt_aggressiveness=requested_aggressiveness,
+            achieved_gmt_aggressiveness=aggressiveness,
+        )
+        attempts.append(attempt)
+        if attempt.valid_for_thesis_export:
+            warnings = list(attempt.warnings)
+            if aggressiveness < requested_aggressiveness - 1.0e-9:
+                warnings.append(
+                    "reduced GMT aggressiveness from "
+                    f"{requested_aggressiveness:.3f} to {aggressiveness:.3f} to recover thesis validity"
+                )
+            return replace(attempt, warnings=dedupe_warnings(warnings))
+
+    best = min(attempts, key=gmt_requirements_rank)
+    warnings = list(best.warnings)
+    if best.achieved_gmt_aggressiveness < requested_aggressiveness - 1.0e-9:
+        warnings.append(
+            "GMT requirements solve could not satisfy all hard validity checks even after reducing "
+            f"aggressiveness to {best.achieved_gmt_aggressiveness:.3f}"
+        )
+    return replace(best, warnings=dedupe_warnings(warnings))
+
+
+def optimize_geometry(
+    config: DesignInputs,
+    reference_stations: Sequence[ReferenceStation] | None = None,
+    initial_warnings: Sequence[str] = (),
+    reference_source: str = "unknown reference",
+) -> DesignResult:
+    if config.mode == "gmt_requirements":
+        return optimize_gmt_requirements(config, reference_stations, initial_warnings, reference_source)
+    return _optimize_geometry_once(config, reference_stations, initial_warnings, reference_source)
 
 
 def build_geometry(
@@ -3032,6 +3555,8 @@ def write_csv(result: DesignResult, output_path: Path, *, output_domain: str = "
                 "alpha_deg",
                 "cl",
                 "cd",
+                "Re",
+                "alpha_stall_deg",
                 "dthrust_n",
                 "dtorque_nm",
                 "airfoil",
@@ -3076,6 +3601,8 @@ def write_csv(result: DesignResult, output_path: Path, *, output_domain: str = "
                     f"{station.alpha_deg:.4f}",
                     f"{station.cl:.5f}",
                     f"{station.cd:.5f}",
+                    f"{station.reynolds_number:.0f}",
+                    f"{station.alpha_stall_deg:.4f}",
                     f"{station.dthrust_n:.10f}",
                     f"{station.dtorque_nm:.10f}",
                     station.airfoil,
@@ -3131,6 +3658,11 @@ def write_diagnostic_csv(result: DesignResult, output_path: Path, *, output_doma
         "alpha",
         "Cl",
         "Cd",
+        "Re",
+        "airfoil",
+        "Cl_max",
+        "alpha_stall",
+        "target_Cl_tip",
         "dT",
         "dQ",
         "hit_cl_limit",
@@ -3154,6 +3686,11 @@ def write_diagnostic_csv(result: DesignResult, output_path: Path, *, output_doma
                 "alpha": f"{station.alpha_deg:.6f}",
                 "Cl": f"{station.cl:.6f}",
                 "Cd": f"{station.cd:.6f}",
+                "Re": f"{station.reynolds_number:.0f}",
+                "airfoil": station.airfoil,
+                "Cl_max": f"{station.cl_max:.6f}",
+                "alpha_stall": f"{station.alpha_stall_deg:.6f}",
+                "target_Cl_tip": f"{gmt_tip_target_cl(station.mu):.6f}" if station.mu >= TIP_UNLOAD_START_MU else "",
                 "dT": f"{station.dthrust_n:.10f}",
                 "dQ": f"{station.dtorque_nm:.10f}",
                 "hit_cl_limit": station.hit_cl_limit,
@@ -3612,9 +4149,11 @@ def result_summary_dict(result: DesignResult) -> dict[str, Any]:
         "free_optimize": "free reduced-order optimization",
         "reference_regularized": "reference-regularized optimization",
         "reproduce_reference": "reference reproduction",
+        "gmt_requirements": "GMT requirements torque minimization",
     }[result.config.mode]
     cl_diag = cl_clipping_diagnostics(result)
     tip_diag = tip_loading_diagnostics(result)
+    loading_diag = loading_fraction_diagnostics(result)
     conv_diag = convergence_diagnostics(result)
     twist_diag = design_twist_metrics(result.config, result.stations)
     validity_metrics = station_validity_metrics(result.config, result.stations, twist_diag)
@@ -3626,6 +4165,7 @@ def result_summary_dict(result: DesignResult) -> dict[str, Any]:
     max_alpha_deg = max((station.alpha_deg for station in result.stations), default=0.0)
     min_alpha_deg = min((station.alpha_deg for station in result.stations), default=0.0)
     max_cl = max((station.cl for station in result.stations), default=0.0)
+    negative_station_count = negative_loading_station_count(result)
     result_values = [result.objective, result.thrust_n, result.torque_nm, result.power_w, result.ct, result.cq, result.cp]
     result_finite = all(math.isfinite(value) for value in result_values)
     failure_reasons = validity_failure_reasons_from_metrics(
@@ -3640,6 +4180,7 @@ def result_summary_dict(result: DesignResult) -> dict[str, Any]:
         result.normalized_thrust_error,
         failure_reasons,
     )
+    recommendations = recommended_next_actions(result, failure_reasons)
     thesis_aero_pass = (
         cl_limit_fraction_pct <= result.config.max_cl_limit_fraction_pct
         and alpha_limit_fraction_pct <= result.config.max_alpha_limit_fraction_pct
@@ -3653,6 +4194,19 @@ def result_summary_dict(result: DesignResult) -> dict[str, Any]:
     return {
         "model_source": MODEL_SOURCE_OPTIMIZER,
         "generating_script": GENERATING_SCRIPT,
+        "operating_point": active_operating_point_dict(result.config),
+        "diameter_in": meters_to_inches(2.0 * result.config.radius_m),
+        "rpm": result.config.rpm,
+        "V_inf": result.config.freestream_mps,
+        "V_inf_mps": result.config.freestream_mps,
+        "target_thrust_N": result.config.thrust_target_n,
+        "actual_thrust_N": result.thrust_n,
+        "thrust_error_percent": 100.0 * result.normalized_thrust_error,
+        "torque_Nm": result.torque_nm,
+        "power_W": result.power_w,
+        "CT": result.ct,
+        "CQ": result.cq,
+        "CP": result.cp,
         "geometry_source_csv": str(optimized_geometry_csv),
         "station_source_csv": str(optimized_geometry_csv),
         "twist_column_used": "twist_deg",
@@ -3661,19 +4215,63 @@ def result_summary_dict(result: DesignResult) -> dict[str, Any]:
         "valid_for_optimizer_summary": valid_for_optimizer_summary,
         "valid_for_bemt_summary": valid_for_bemt_summary,
         "valid_for_thesis_export": valid_for_thesis_export,
-        "validity_status": "thesis_valid" if valid_for_thesis_export else "diagnostic_only_not_thesis_valid",
+        "validity_status": validity_status_label(valid_for_thesis_export, failure_reasons),
         "failure_reason": primary_failure_reason(failure_reasons),
         "failure_reasons": failure_reasons,
+        "recommended_next_action": recommendations[0],
+        "recommended_next_actions": recommendations,
+        "required_design_freedom": [
+            action
+            for action in recommendations
+            if action
+            in {
+                RECOMMEND_REDUCE_THRUST,
+                RECOMMEND_INCREASE_RPM,
+                RECOMMEND_ALLOW_CHORD,
+                RECOMMEND_ALLOW_AIRFOIL,
+            }
+        ],
         "solver_mode": result.config.mode,
+        "preset": result.config.preset,
         "solver_mode_label": mode_label,
         "optimizer": result.optimizer_name,
+        "optimizer_fallback_used": result.optimizer_fallback_used,
+        "optimizer_fallback_reason": result.optimizer_fallback_reason,
         "spanload_type": result.config.spanload_type,
+        "requested_gmt_aggressiveness": result.requested_gmt_aggressiveness,
+        "achieved_gmt_aggressiveness": result.achieved_gmt_aggressiveness,
+        "target_tip_loading_fraction": loading_diag["target_tip_loading_fraction"],
+        "actual_tip_loading_fraction": loading_diag["actual_tip_loading_fraction"],
+        "target_inboard_loading_fraction": loading_diag["target_inboard_loading_fraction"],
+        "actual_inboard_loading_fraction": loading_diag["actual_inboard_loading_fraction"],
         "aero_calibration_used": aero_calibration_used,
         "aero_calibration_scale": result.aero_calibration_scale,
         "calibration_mode": calibration_mode,
         "chord_locked": result.config.lock_chord,
         "airfoil_locked": result.config.lock_airfoil,
         "optimize_twist_only": result.config.optimize_twist_only,
+        "free_design_enabled": free_design_enabled(result.config),
+        "reference_geometry_used_as_initial_guess": result.config.mode != "reproduce_reference",
+        "manufacturable_twist": result.config.manufacturable_twist,
+        "Cl clipping fraction": cl_limit_fraction_pct,
+        "Cl_clipping_fraction_pct": cl_limit_fraction_pct,
+        "alpha clipping fraction": alpha_limit_fraction_pct,
+        "alpha_clipping_fraction_pct": alpha_limit_fraction_pct,
+        "negative_loading_station_count": negative_station_count,
+        "max_alpha_deg": max_alpha_deg,
+        "min_alpha_deg": min_alpha_deg,
+        "max_Cl": max_cl,
+        "manufacturable_twist_pass": twist_diag["manufacturable_twist_pass"],
+        "airfoil_schedule_valid": bool(validity_metrics["airfoil_schedule_valid"]),
+        "allowed_airfoils": list(allowed_airfoils_for_config(result.config)),
+        "chord_bounds_in": {
+            "minimum": result.config.chord_min_in,
+            "maximum": result.config.chord_max_in,
+        },
+        "twist_bounds_deg": {
+            "minimum": result.config.twist_min_deg,
+            "maximum": result.config.twist_max_deg,
+        },
         "reference_geometry_source": result.reference_source,
         "reference_geometry_scaling": {
             "statement": SCALED_REFERENCE_STATEMENT,
@@ -3728,8 +4326,14 @@ def result_summary_dict(result: DesignResult) -> dict[str, Any]:
             "disk_area_definition": "full propeller disk area pi*R^2",
         },
         "gmt_tip_unloading_verification": {
-            "status": "not_evaluated_in_single_case_summary",
-            "statement": "Run theory_verification.py or the reference-vs-optimized comparison workflow to verify same thrust, lower torque, reduced tip loading, inboard-shifted cumulative loading, and acceptable Cl clipping fraction. Do not treat a single-case GMT target spanload as verified tip unloading when spanload error and Cl clipping are large.",
+            "status": "reported_from_single_case_loading_fractions",
+            "requested_gmt_aggressiveness": result.requested_gmt_aggressiveness,
+            "achieved_gmt_aggressiveness": result.achieved_gmt_aggressiveness,
+            "target_tip_loading_fraction": loading_diag["target_tip_loading_fraction"],
+            "actual_tip_loading_fraction": loading_diag["actual_tip_loading_fraction"],
+            "target_inboard_loading_fraction": loading_diag["target_inboard_loading_fraction"],
+            "actual_inboard_loading_fraction": loading_diag["actual_inboard_loading_fraction"],
+            "statement": "Do not claim ideal GMT tip unloading unless the actual integrated loading fractions match the target and all hard validity checks pass.",
         },
         "final_metrics": {
             "objective": result.objective,
@@ -3758,11 +4362,16 @@ def result_summary_dict(result: DesignResult) -> dict[str, Any]:
             "alpha_limit_station_fraction_pct": alpha_limit_fraction_pct,
             "high_alpha_station_fraction_pct": high_alpha_fraction_pct,
             "negative_loading_station_fraction_pct": negative_loading_fraction_pct,
+            "negative_loading_station_count": negative_station_count,
             "nonfinite_loading_station_fraction_pct": nonfinite_loading_fraction_pct,
             "max_alpha_deg": max_alpha_deg,
             "min_alpha_deg": min_alpha_deg,
             "max_Cl": max_cl,
             "clipped_station_count": cl_diag["clipped_station_count"],
+            "target_tip_loading_fraction": loading_diag["target_tip_loading_fraction"],
+            "actual_tip_loading_fraction": loading_diag["actual_tip_loading_fraction"],
+            "target_inboard_loading_fraction": loading_diag["target_inboard_loading_fraction"],
+            "actual_inboard_loading_fraction": loading_diag["actual_inboard_loading_fraction"],
         },
         "twist_manufacturability": twist_diag,
         "aero_validity": {
@@ -3774,6 +4383,7 @@ def result_summary_dict(result: DesignResult) -> dict[str, Any]:
             "clipped_station_count": cl_diag["clipped_station_count"],
             "high_alpha_station_fraction_pct": high_alpha_fraction_pct,
             "negative_loading_station_fraction_pct": negative_loading_fraction_pct,
+            "negative_loading_station_count": negative_station_count,
             "nonfinite_loading_station_fraction_pct": nonfinite_loading_fraction_pct,
             "cl_limit_threshold_pct": result.config.max_cl_limit_fraction_pct,
             "alpha_limit_threshold_pct": result.config.max_alpha_limit_fraction_pct,
@@ -3848,6 +4458,236 @@ def write_optimizer_plot_metadata(
     write_metadata_sidecar(output_dir / f"{stem}.png", metadata)
 
 
+def _airfoil_indices(stations: Sequence[StationResult]) -> tuple[list[int], list[str]]:
+    names = sorted({station.airfoil for station in stations})
+    index = {name: idx for idx, name in enumerate(names)}
+    return [index[station.airfoil] for station in stations], names
+
+
+def _median(values: Sequence[float]) -> float:
+    finite = sorted(abs(value) for value in values if math.isfinite(value))
+    if not finite:
+        return 0.0
+    middle = len(finite) // 2
+    if len(finite) % 2:
+        return finite[middle]
+    return 0.5 * (finite[middle - 1] + finite[middle])
+
+
+def write_gmt_jump_alignment_report(result: DesignResult, output_dir: Path) -> tuple[Path, Path]:
+    assert_geometry_output_path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    stations = list(result.stations)
+    fields: dict[str, list[float]] = {
+        "beta_deg": [station.twist_deg for station in stations],
+        "phi_deg": [station.phi_deg for station in stations],
+        "alpha_deg": [station.alpha_deg for station in stations],
+        "Cl": [station.cl for station in stations],
+        "Cd": [station.cd for station in stations],
+        "dT_N": [station.dthrust_n for station in stations],
+        "dQ_Nm": [station.dtorque_nm for station in stations],
+        "Re": [station.reynolds_number for station in stations],
+    }
+    field_thresholds: dict[str, float] = {}
+    for name, values in fields.items():
+        deltas = [right - left for left, right in zip(values[:-1], values[1:])]
+        absolute_floor = {
+            "beta_deg": 1.0,
+            "phi_deg": 1.0,
+            "alpha_deg": 1.0,
+            "Cl": 0.12,
+            "Cd": 0.0015,
+            "dT_N": 0.20,
+            "dQ_Nm": 0.006,
+            "Re": 5000.0,
+        }[name]
+        field_thresholds[name] = max(3.0 * _median(deltas), absolute_floor)
+
+    rows: list[dict[str, object]] = []
+    for idx, (left, right) in enumerate(zip(stations[:-1], stations[1:])):
+        row: dict[str, object] = {
+            "mu_left": f"{left.mu:.4f}",
+            "mu_right": f"{right.mu:.4f}",
+            "mu_mid": f"{0.5 * (left.mu + right.mu):.4f}",
+            "airfoil_change": left.airfoil != right.airfoil,
+            "airfoil_left": left.airfoil,
+            "airfoil_right": right.airfoil,
+            "cl_clipped_left": left.hit_cl_limit,
+            "cl_clipped_right": right.hit_cl_limit,
+            "clipping_adjacent": left.hit_cl_limit or right.hit_cl_limit,
+            "clmax_change": f"{right.cl_max - left.cl_max:.6f}",
+            "alpha_stall_change_deg": f"{right.alpha_stall_deg - left.alpha_stall_deg:.6f}",
+            "optimizer_knot_alignment": "none: global optimizer basis, no station knots",
+            "polar_boundary_alignment": "airfoil schedule change" if left.airfoil != right.airfoil else "none: reduced-order analytic polar",
+        }
+        sharp_fields: list[str] = []
+        biggest_field = ""
+        biggest_ratio = 0.0
+        for name, values in fields.items():
+            left_value = values[idx]
+            right_value = values[idx + 1]
+            delta = right_value - left_value
+            threshold = field_thresholds[name]
+            ratio = abs(delta) / max(threshold, 1.0e-12)
+            row[f"delta_{name}"] = f"{delta:.8g}"
+            row[f"sharp_{name}"] = ratio >= 1.0
+            if ratio >= 1.0:
+                sharp_fields.append(name)
+            if ratio > biggest_ratio:
+                biggest_ratio = ratio
+                biggest_field = name
+        row["sharp_fields"] = ";".join(sharp_fields)
+        row["biggest_jump_field"] = biggest_field
+        row["biggest_jump_ratio"] = f"{biggest_ratio:.3f}"
+        rows.append(row)
+
+    csv_path = output_dir / "gmt_jump_alignment_report.csv"
+    if rows:
+        with csv_path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(rows)
+    else:
+        csv_path.write_text("", encoding="utf-8")
+
+    sharp_rows = [row for row in rows if row.get("sharp_fields")]
+    payload = {
+        "case_name": _output_case_name(result),
+        "sharp_interval_count": len(sharp_rows),
+        "sharp_intervals": sharp_rows,
+        "field_thresholds": field_thresholds,
+        "interpolation_audit": {
+            "cubic_splines_found_in_geometry_optimizer": False,
+            "twist_alpha_cl_chord_interpolation": "none in optimizer; FEA/postprocess interpolation remains linear",
+            "optimizer_control_layout": "global smooth basis parameters, not discrete knots",
+        },
+    }
+    json_path = output_dir / "gmt_jump_alignment_report.json"
+    json_path.write_text(json.dumps(payload, indent=2, default=str) + "\n", encoding="utf-8")
+    return csv_path, json_path
+
+
+def plot_gmt_diagnostic_overlays(
+    plt,
+    result: DesignResult,
+    reference_stations: Sequence[ReferenceStation],
+    output_dir: Path,
+) -> None:
+    assert_geometry_output_path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    stations = list(result.stations)
+    mu = [station.mu for station in stations]
+    reference_twist = [station.twist_deg for station in reference_stations]
+
+    def mark_airfoil_changes(ax) -> None:
+        for left, right in zip(stations[:-1], stations[1:]):
+            if left.airfoil != right.airfoil:
+                ax.axvline(0.5 * (left.mu + right.mu), color="0.75", linestyle=":", linewidth=0.8)
+
+    fig, ax = plt.subplots(figsize=(5.2, 3.2))
+    ax.plot(mu, [station.twist_deg for station in stations], label="beta")
+    ax.plot(mu, [station.phi_deg for station in stations], label="phi")
+    ax.plot(mu, [station.alpha_deg for station in stations], label="alpha")
+    ax.plot(mu, reference_twist, color="0.55", linestyle="--", label="reference beta")
+    mark_airfoil_changes(ax)
+    ax.set_xlabel("r/R [-]")
+    ax.set_ylabel("angle [deg]")
+    style_matplotlib_axes(ax)
+    fig.tight_layout()
+    save_matplotlib_figure(fig, output_dir, "gmt_diagnostic_angles", overwrite=True)
+    plt.close(fig)
+
+    fig, ax_cl = plt.subplots(figsize=(5.2, 3.2))
+    ax_cd = ax_cl.twinx()
+    ax_cl.plot(mu, [station.cl for station in stations], label="Cl")
+    ax_cl.plot(mu, [station.cl_max for station in stations], color="0.35", linestyle="--", label="Cl_max")
+    ax_cl.plot(mu, [gmt_tip_target_cl(station.mu) if station.mu >= TIP_UNLOAD_START_MU else math.nan for station in stations], color="0.20", linestyle=":", label="target Cl tip")
+    ax_cd.plot(mu, [station.cd for station in stations], color="0.55", label="Cd")
+    mark_airfoil_changes(ax_cl)
+    ax_cl.set_xlabel("r/R [-]")
+    ax_cl.set_ylabel("Cl [-]")
+    ax_cd.set_ylabel("Cd [-]")
+    lines_a, labels_a = ax_cl.get_legend_handles_labels()
+    lines_b, labels_b = ax_cd.get_legend_handles_labels()
+    ax_cl.legend(lines_a + lines_b, labels_a + labels_b, frameon=False)
+    style_matplotlib_axes(ax_cl, legend=False)
+    fig.tight_layout()
+    save_matplotlib_figure(fig, output_dir, "gmt_diagnostic_cl_cd", overwrite=True)
+    plt.close(fig)
+
+    fig, ax_load = plt.subplots(figsize=(5.2, 3.2))
+    ax_re = ax_load.twinx()
+    ax_load.plot(mu, [station.dthrust_n for station in stations], label="dT")
+    ax_load.plot(mu, [station.dtorque_nm for station in stations], label="dQ")
+    ax_load.axhline(0.0, color="0.25", linestyle=":", linewidth=0.8)
+    ax_re.plot(mu, [station.reynolds_number for station in stations], color="0.55", label="Re")
+    mark_airfoil_changes(ax_load)
+    ax_load.set_xlabel("r/R [-]")
+    ax_load.set_ylabel("section contribution [N, N*m]")
+    ax_re.set_ylabel("Re [-]")
+    lines_a, labels_a = ax_load.get_legend_handles_labels()
+    lines_b, labels_b = ax_re.get_legend_handles_labels()
+    ax_load.legend(lines_a + lines_b, labels_a + labels_b, frameon=False)
+    style_matplotlib_axes(ax_load, legend=False)
+    fig.tight_layout()
+    save_matplotlib_figure(fig, output_dir, "gmt_diagnostic_loading_re", overwrite=True)
+    plt.close(fig)
+
+    airfoil_ids, airfoil_names = _airfoil_indices(stations)
+    fig, ax_airfoil = plt.subplots(figsize=(5.2, 3.2))
+    ax_stall = ax_airfoil.twinx()
+    ax_airfoil.step(mu, airfoil_ids, where="mid", label="airfoil ID")
+    ax_stall.plot(mu, [station.alpha_stall_deg for station in stations], color="0.45", label="alpha_stall")
+    ax_stall.plot(mu, [station.cl_max for station in stations], color="0.65", linestyle="--", label="Cl_max")
+    ax_airfoil.set_xlabel("r/R [-]")
+    ax_airfoil.set_ylabel("airfoil")
+    ax_airfoil.set_yticks(range(len(airfoil_names)), airfoil_names)
+    ax_stall.set_ylabel("alpha_stall [deg] / Cl_max")
+    lines_a, labels_a = ax_airfoil.get_legend_handles_labels()
+    lines_b, labels_b = ax_stall.get_legend_handles_labels()
+    ax_airfoil.legend(lines_a + lines_b, labels_a + labels_b, frameon=False)
+    style_matplotlib_axes(ax_airfoil, legend=False)
+    fig.tight_layout()
+    save_matplotlib_figure(fig, output_dir, "gmt_diagnostic_airfoil_schedule", overwrite=True)
+    plt.close(fig)
+
+    params = result.parameters
+    control_base = [params.base_alpha_deg for _ in mu]
+    inner = []
+    outer = []
+    curvature = []
+    tip = []
+    total = []
+    for station_mu in mu:
+        x = clamp((station_mu - result.config.hub_radius_fraction) / max(1.0 - result.config.hub_radius_fraction, 1.0e-9), 0.0, 1.0)
+        inner_shape = math.exp(-((x - 0.45) / 0.24) ** 2)
+        outer_linear = station_mu - 0.70
+        curvature_shape = (station_mu - 0.70) ** 2 - 0.035
+        tip_shape = -tip_unload_shape(station_mu, result.config.hub_radius_fraction)
+        inner.append(params.twist_bias_inner * inner_shape)
+        outer.append(params.twist_bias_outer * outer_linear)
+        curvature.append(params.twist_curvature * curvature_shape)
+        tip.append(params.tip_unload_strength * tip_shape)
+        total.append(twist_correction(station_mu, result.config.hub_radius_fraction, params))
+
+    fig, ax = plt.subplots(figsize=(5.2, 3.2))
+    ax.plot(mu, control_base, label="base alpha")
+    ax.plot(mu, inner, label="inner bias")
+    ax.plot(mu, outer, label="outer bias")
+    ax.plot(mu, curvature, label="curvature")
+    ax.plot(mu, tip, label="tip unload")
+    ax.plot(mu, total, color="black", linewidth=1.8, label="total correction")
+    mark_airfoil_changes(ax)
+    ax.set_xlabel("r/R [-]")
+    ax.set_ylabel("control contribution [deg]")
+    style_matplotlib_axes(ax)
+    fig.tight_layout()
+    save_matplotlib_figure(fig, output_dir, "gmt_diagnostic_optimizer_controls", overwrite=True)
+    plt.close(fig)
+
+    write_gmt_jump_alignment_report(result, output_dir)
+
+
 def plot_thesis_outputs(
     result: DesignResult,
     reference_stations: Sequence[ReferenceStation],
@@ -3859,7 +4699,7 @@ def plot_thesis_outputs(
     try:
         import matplotlib.pyplot as plt
     except Exception as exc:
-        return [f"matplotlib unavailable; plots were not generated ({exc})"]
+        return [f"matplotlib unavailable; plots were not generated ({exc}). Install with: python -m pip install matplotlib"]
 
     apply_matplotlib_style(plt)
 
@@ -3872,6 +4712,17 @@ def plot_thesis_outputs(
     actual_spanload = [station.actual_spanload_weight for station in result.stations]
     alpha = [station.alpha_deg for station in result.stations]
     cl = [station.cl for station in result.stations]
+    dthrust = [station.dthrust_n for station in result.stations]
+    dtorque = [station.dtorque_nm for station in result.stations]
+    cumulative_thrust: List[float] = []
+    cumulative_torque: List[float] = []
+    running_thrust = 0.0
+    running_torque = 0.0
+    for station in result.stations:
+        running_thrust += station.dthrust_n
+        running_torque += station.dtorque_nm
+        cumulative_thrust.append(running_thrust)
+        cumulative_torque.append(running_torque)
     dr_values = [station.dr_m for station in result.stations]
     mil_weights = normalized_section_weights(mu, dr_values, "minimum_induced_loss", result.config.hub_radius_fraction)
     reference_weights = normalized_reference_loading(reference_stations, dr_values)
@@ -3879,6 +4730,26 @@ def plot_thesis_outputs(
         reference.twist_deg + 2.0 * math.log(max(mil_weight, 1.0e-9) / max(reference_weight, 1.0e-9))
         for reference, mil_weight, reference_weight in zip(reference_stations, mil_weights, reference_weights)
     ]
+
+    single_run_plots = [
+        ("twist_distribution", optimized_twist, "twist [deg]"),
+        ("chord_distribution", optimized_chord, "c/R"),
+        ("Cl_distribution", cl, "Cl"),
+        ("alpha_distribution", alpha, "alpha [deg]"),
+        ("thrust_loading", dthrust, "dT [N]"),
+        ("torque_loading", dtorque, "dQ [N*m]"),
+        ("cumulative_thrust", cumulative_thrust, "cumulative thrust [N]"),
+        ("cumulative_torque", cumulative_torque, "cumulative torque [N*m]"),
+    ]
+    for stem, values, ylabel in single_run_plots:
+        fig = plt.figure()
+        plt.plot(mu, values)
+        plt.xlabel("r/R")
+        plt.ylabel(ylabel)
+        fig.tight_layout()
+        save_matplotlib_figure(fig, output_dir, stem, overwrite=True)
+        write_optimizer_plot_metadata(result, output_dir, stem, geometry_csv_path)
+        plt.close(fig)
 
     fig = plt.figure()
     plt.plot(mu, reference_twist, label="reference")
@@ -3888,7 +4759,7 @@ def plot_thesis_outputs(
     plt.ylabel("twist beta [deg]")
     plt.legend()
     fig.tight_layout()
-    save_matplotlib_figure(fig, output_dir, "twist_comparison")
+    save_matplotlib_figure(fig, output_dir, "twist_comparison", overwrite=True)
     write_optimizer_plot_metadata(result, output_dir, "twist_comparison", geometry_csv_path)
     plt.close(fig)
 
@@ -3899,7 +4770,7 @@ def plot_thesis_outputs(
     plt.ylabel("c/R")
     plt.legend()
     fig.tight_layout()
-    save_matplotlib_figure(fig, output_dir, "chord_comparison")
+    save_matplotlib_figure(fig, output_dir, "chord_comparison", overwrite=True)
     write_optimizer_plot_metadata(result, output_dir, "chord_comparison", geometry_csv_path)
     plt.close(fig)
 
@@ -3911,7 +4782,7 @@ def plot_thesis_outputs(
     plt.ylabel("normalized dT")
     plt.legend()
     fig.tight_layout()
-    save_matplotlib_figure(fig, output_dir, "spanload_comparison")
+    save_matplotlib_figure(fig, output_dir, "spanload_comparison", overwrite=True)
     write_optimizer_plot_metadata(result, output_dir, "spanload_comparison", geometry_csv_path)
     plt.close(fig)
 
@@ -3926,7 +4797,7 @@ def plot_thesis_outputs(
     lines_b, labels_b = ax_cl.get_legend_handles_labels()
     ax_alpha.legend(lines_a + lines_b, labels_a + labels_b)
     fig.tight_layout()
-    save_matplotlib_figure(fig, output_dir, "alpha_cl_distribution")
+    save_matplotlib_figure(fig, output_dir, "alpha_cl_distribution", overwrite=True)
     write_optimizer_plot_metadata(result, output_dir, "alpha_cl_distribution", geometry_csv_path)
     plt.close(fig)
 
@@ -3939,9 +4810,12 @@ def plot_thesis_outputs(
         plt.xlabel("iteration")
         plt.ylabel("objective")
         fig.tight_layout()
-        save_matplotlib_figure(fig, output_dir, "convergence_objective")
+        save_matplotlib_figure(fig, output_dir, "convergence_objective", overwrite=True)
         write_optimizer_plot_metadata(result, output_dir, "convergence_objective", geometry_csv_path)
         plt.close(fig)
+
+    if is_gmt_spanload_type(result.config.spanload_type):
+        plot_gmt_diagnostic_overlays(plt, result, reference_stations, output_dir / "diagnostics")
 
     return []
 
@@ -4017,6 +4891,11 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--preset", choices=PRESET_CHOICES, default=None)
     parser.add_argument("--spanload", choices=SPANLOAD_CHOICES, default=None)
     parser.add_argument("--mode", choices=MODE_CHOICES, default=None)
+    parser.add_argument(
+        "--gmt-aggressiveness",
+        default=None,
+        help="GMT spanload aggressiveness: numeric 0..1, or mild/moderate/aggressive.",
+    )
     parser.add_argument("--reference-geometry-csv", type=Path, default=None, help="Reference geometry CSV or XLSX.")
     parser.add_argument("--rpm", type=float, default=None)
     parser.add_argument("--thrust", type=float, default=None, help="Target total thrust in newtons.")
@@ -4027,6 +4906,9 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--hub-radius-fraction", type=float, default=None)
     parser.add_argument("--chord-min-in", type=float, default=None)
     parser.add_argument("--chord-max-in", type=float, default=None)
+    parser.add_argument("--twist-min-deg", type=float, default=None)
+    parser.add_argument("--twist-max-deg", type=float, default=None)
+    parser.add_argument("--allowed-airfoils", default=None, help="Comma-separated airfoil names allowed in free design mode.")
     parser.add_argument("--chord-blend", type=float, default=None, help="0 keeps the aero planform estimate, 1 keeps the reference chord.")
     parser.add_argument("--twist-blend", type=float, default=None, help="0 applies all twist correction, 1 keeps reference twist.")
     parser.add_argument("--smooth-passes", type=int, default=None)
@@ -4035,6 +4917,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--alpha-step", type=float, default=None, help="Legacy alpha-search step retained for compatibility.")
     parser.add_argument("--reference-csv", type=Path, default=None, help="Fallback reference geometry CSV or XLSX.")
     parser.add_argument("--output-dir", type=Path, default=None)
+    parser.add_argument("--figures-dir", type=Path, default=None)
     parser.add_argument("--lock-chord", action="store_true")
     parser.add_argument("--lock-airfoil", action="store_true")
     parser.add_argument("--optimize-twist-only", action="store_true")
@@ -4077,6 +4960,40 @@ def apply_defaults(args: argparse.Namespace) -> argparse.Namespace:
             args.thrust = 35.0
         if args.preset == "thesis_gmt_22_static" and args.blades is None:
             args.blades = 2
+
+    if args.preset in {"thesis_gmt_requirements_22", "thesis_gmt_22_free_design"}:
+        if args.diameter_in is None:
+            args.diameter_in = 22.0
+        if args.spanload is None:
+            args.spanload = "gmt_bell"
+        if args.mode is None:
+            args.mode = "gmt_requirements"
+        args.lock_chord = False
+        args.lock_airfoil = False
+        args.optimize_twist_only = False
+        args.manufacturable_twist = True
+        if args.smooth_passes is None:
+            args.smooth_passes = 8
+        if args.rpm is None:
+            args.rpm = 4000.0
+        if args.v_inf is None:
+            args.v_inf = 0.0
+        if args.thrust is None:
+            args.thrust = 35.0
+        if args.chord_blend is None:
+            args.chord_blend = 0.25
+        if args.twist_blend is None:
+            args.twist_blend = 0.05
+        if args.alpha_max is None:
+            args.alpha_max = 15.0
+        if args.chord_max_in is None:
+            args.chord_max_in = 3.4
+        if args.max_iterations is None:
+            args.max_iterations = 85
+        if args.optimizer is None:
+            args.optimizer = "auto"
+        if args.gmt_aggressiveness is None:
+            args.gmt_aggressiveness = "aggressive"
 
     if args.preset in {"thesis_gmt_22_manufacturable", "thesis_mil_22_manufacturable"}:
         args.manufacturable_twist = True
@@ -4122,6 +5039,8 @@ def apply_defaults(args: argparse.Namespace) -> argparse.Namespace:
         args.rpm = 4000.0
     if args.thrust is None:
         args.thrust = 35.0
+    if args.gmt_aggressiveness is None:
+        args.gmt_aggressiveness = "aggressive"
     if args.v_inf is None:
         args.v_inf = 0.0
     if args.diameter_in is None:
@@ -4137,6 +5056,10 @@ def apply_defaults(args: argparse.Namespace) -> argparse.Namespace:
     if args.chord_max_in is None:
         default_radius_m = diameter_in_to_radius_m(args.diameter_in)
         args.chord_max_in = max_chord_fraction * meters_to_inches(default_radius_m) * DEFAULT_REFERENCE_MAX_CHORD_MARGIN
+    if args.twist_min_deg is None:
+        args.twist_min_deg = 0.0
+    if args.twist_max_deg is None:
+        args.twist_max_deg = 65.0
     if args.chord_blend is None:
         args.chord_blend = 0.58
     if args.twist_blend is None:
@@ -4148,7 +5071,7 @@ def apply_defaults(args: argparse.Namespace) -> argparse.Namespace:
     if args.alpha_max is None:
         args.alpha_max = 18.0
     if args.alpha_step is None:
-        args.alpha_step = 0.5
+        args.alpha_step = 0.25 if args.spanload in GMT_SPANLOAD_TYPES else 0.5
     if args.reference_csv is None:
         args.reference_csv = reference_path
     if args.output_dir is None:
@@ -4167,9 +5090,9 @@ def apply_defaults(args: argparse.Namespace) -> argparse.Namespace:
     if args.max_positive_twist_bump is None:
         args.max_positive_twist_bump = 0.5
     if args.max_twist_gradient is None:
-        args.max_twist_gradient = 100.0
+        args.max_twist_gradient = 70.0 if args.spanload in GMT_SPANLOAD_TYPES else 100.0
     if args.max_twist_curvature is None:
-        args.max_twist_curvature = 1500.0
+        args.max_twist_curvature = 1500.0 if args.spanload in GMT_SPANLOAD_TYPES else 1500.0
     if args.max_cl_limit_fraction_pct is None:
         args.max_cl_limit_fraction_pct = 10.0
     if args.max_alpha_limit_fraction_pct is None:
@@ -4213,7 +5136,9 @@ def thrust_validity_sweep_row(result: DesignResult) -> dict[str, object]:
     twist_metrics = summary["twist_manufacturability"]
     return {
         "target_thrust_N": result.config.thrust_target_n,
+        "RPM": result.config.rpm,
         "actual_thrust_N": result.thrust_n,
+        "thrust_error_percent": 100.0 * result.normalized_thrust_error,
         "thrust_error_pct": 100.0 * result.normalized_thrust_error,
         "torque_Nm": result.torque_nm,
         "power_W": result.power_w,
@@ -4223,14 +5148,21 @@ def thrust_validity_sweep_row(result: DesignResult) -> dict[str, object]:
         "max_alpha_deg": final_metrics["max_alpha_deg"],
         "min_alpha_deg": final_metrics["min_alpha_deg"],
         "max_Cl": final_metrics["max_Cl"],
-        "cl_limit_station_fraction_pct": aero_validity["cl_limit_station_fraction_pct"],
-        "alpha_limit_station_fraction_pct": aero_validity["alpha_limit_station_fraction_pct"],
+        "Cl_clipping_fraction_pct": aero_validity["cl_limit_station_fraction_pct"],
+        "alpha_clipping_fraction_pct": aero_validity["alpha_limit_station_fraction_pct"],
+        "negative_loading_station_count": aero_validity["negative_loading_station_count"],
+        "tip_loading_fraction": summary["actual_tip_loading_fraction"],
+        "inboard_loading_fraction": summary["actual_inboard_loading_fraction"],
         "max_positive_twist_bump_deg": twist_metrics["max_positive_twist_bump_deg"],
         "max_abs_twist_gradient_deg_per_mu": twist_metrics["max_abs_twist_gradient_deg_per_mu"],
         "max_twist_curvature": twist_metrics["max_twist_curvature"],
         "manufacturable_twist_pass": twist_metrics["manufacturable_twist_pass"],
         "valid_for_thesis_export": summary["valid_for_thesis_export"],
+        "failure_reason": summary["failure_reason"],
         "failure_reasons": list(summary["failure_reasons"]),
+        "requested_gmt_aggressiveness": summary["requested_gmt_aggressiveness"],
+        "achieved_gmt_aggressiveness": summary["achieved_gmt_aggressiveness"],
+        "recommended_next_action": summary["recommended_next_action"],
     }
 
 
@@ -4240,8 +5172,13 @@ def run_thrust_validity_sweep(
     initial_warnings: Sequence[str],
     reference_source: str,
     targets: Sequence[float] = THRUST_VALIDITY_SWEEP_TARGETS_N,
+    rpms: Sequence[float] | None = None,
     audits_dir: Path | None = None,
+    figure_dir: Path | None = None,
+    make_plots: bool = False,
 ) -> dict[str, Any]:
+    if rpms is None:
+        rpms = THRUST_RPM_SWEEP_RPMS if tuple(targets) == THRUST_VALIDITY_SWEEP_TARGETS_N else (base_config.rpm,)
     output_dir = audits_dir or get_results_dir(
         "geometry_optimizer",
         model_source=MODEL_SOURCE_OPTIMIZER,
@@ -4252,41 +5189,64 @@ def run_thrust_validity_sweep(
 
     rows: List[dict[str, object]] = []
     results: List[DesignResult] = []
-    for target in targets:
-        target_label = str(target).replace(".", "p")
-        sweep_config = replace(
-            base_config,
-            thrust_target_n=float(target),
-            lock_chord=True,
-            lock_airfoil=True,
-            optimize_twist_only=True,
-            manufacturable_twist=True,
-            output_directory=output_dir / f"target_{target_label}N",
-        )
-        result = optimize_geometry(sweep_config, reference_stations, initial_warnings, reference_source)
-        results.append(result)
-        rows.append(thrust_validity_sweep_row(result))
+    for rpm in rpms:
+        for target in targets:
+            target_label = str(target).replace(".", "p")
+            rpm_label = str(rpm).replace(".", "p")
+            sweep_config = replace(
+                base_config,
+                thrust_target_n=float(target),
+                rpm=float(rpm),
+                output_directory=output_dir / f"rpm_{rpm_label}_target_{target_label}N",
+            )
+            result = optimize_geometry(sweep_config, reference_stations, initial_warnings, reference_source)
+            results.append(result)
+            rows.append(thrust_validity_sweep_row(result))
 
     valid_rows = [row for row in rows if bool(row["valid_for_thesis_export"])]
-    highest_valid = max(valid_rows, key=lambda row: float(row["target_thrust_N"]), default=None)
-    target_35_row = next((row for row in rows if abs(float(row["target_thrust_N"]) - 35.0) <= 1.0e-9), None)
-    feasible_35 = bool(target_35_row and target_35_row["valid_for_thesis_export"])
+    rows_at_4000 = [row for row in rows if abs(float(row["RPM"]) - 4000.0) <= 1.0e-9]
+    valid_rows_at_4000 = [row for row in rows_at_4000 if bool(row["valid_for_thesis_export"])]
+    highest_valid_4000 = max(valid_rows_at_4000, key=lambda row: float(row["actual_thrust_N"]), default=None)
+    target_35_rows = [row for row in rows if abs(float(row["target_thrust_N"]) - 35.0) <= 1.0e-9]
+    valid_target_35_rows = [row for row in target_35_rows if bool(row["valid_for_thesis_export"])]
+    lowest_rpm_35 = min(valid_target_35_rows, key=lambda row: float(row["RPM"]), default=None)
+    target_35_4000_row = next(
+        (
+            row
+            for row in target_35_rows
+            if abs(float(row["RPM"]) - 4000.0) <= 1.0e-9
+        ),
+        None,
+    )
+    feasible_35 = bool(target_35_4000_row and target_35_4000_row["valid_for_thesis_export"])
+    highest_valid = max(valid_rows, key=lambda row: (float(row["actual_thrust_N"]), -float(row["RPM"])), default=None)
     summary_payload: dict[str, Any] = {
         "generating_script": GENERATING_SCRIPT,
         "model_source": MODEL_SOURCE_OPTIMIZER,
-        "case_name": "thrust_validity_sweep",
+        "case_name": "thrust_rpm_feasibility_sweep",
         "targets_N": [float(target) for target in targets],
-        "locked_chord": True,
-        "locked_airfoil": True,
-        "optimize_twist_only": True,
-        "manufacturable_twist": True,
+        "rpms": [float(rpm) for rpm in rpms],
+        "chord_locked": base_config.lock_chord,
+        "airfoil_locked": base_config.lock_airfoil,
+        "optimize_twist_only": base_config.optimize_twist_only,
+        "free_design_enabled": free_design_enabled(base_config),
+        "manufacturable_twist": base_config.manufacturable_twist,
         "calibration_mode": calibration_mode_for_config(base_config),
         "aero_calibration_used": aero_calibration_used_for_config(base_config),
         "highest_valid_target_thrust_N": None if highest_valid is None else highest_valid["target_thrust_N"],
         "highest_valid_actual_thrust_N": None if highest_valid is None else highest_valid["actual_thrust_N"],
-        "thirty_five_N_feasible_under_locked_chord_airfoil_constraints": feasible_35,
+        "highest_valid_thrust_at_4000_rpm_N": None
+        if highest_valid_4000 is None
+        else highest_valid_4000["actual_thrust_N"],
+        "lowest_RPM_that_can_meet_35N": None if lowest_rpm_35 is None else lowest_rpm_35["RPM"],
+        "free_chord_or_airfoil_design_required": not feasible_35 and (
+            base_config.lock_chord or base_config.lock_airfoil or base_config.optimize_twist_only
+        ),
+        "thirty_five_N_feasible_under_locked_chord_airfoil_constraints": feasible_35
+        if base_config.lock_chord and base_config.lock_airfoil
+        else None,
         "target_35_valid_for_thesis_export": feasible_35,
-        "target_35_failure_reasons": [] if target_35_row is None else target_35_row["failure_reasons"],
+        "target_35_failure_reasons": [] if target_35_4000_row is None else target_35_4000_row["failure_reasons"],
         "rows": rows,
     }
     if not feasible_35:
@@ -4294,11 +5254,13 @@ def run_thrust_validity_sweep(
     else:
         summary_payload["target_35_status"] = "feasible_under_current_locked_constraints"
 
-    csv_path = output_dir / "thrust_validity_sweep.csv"
-    json_path = output_dir / "thrust_validity_sweep_summary.json"
+    csv_path = output_dir / "thrust_rpm_feasibility_sweep.csv"
+    json_path = output_dir / "thrust_rpm_feasibility_sweep_summary.json"
     fields = [
         "target_thrust_N",
+        "RPM",
         "actual_thrust_N",
+        "thrust_error_percent",
         "thrust_error_pct",
         "torque_Nm",
         "power_W",
@@ -4308,14 +5270,21 @@ def run_thrust_validity_sweep(
         "max_alpha_deg",
         "min_alpha_deg",
         "max_Cl",
-        "cl_limit_station_fraction_pct",
-        "alpha_limit_station_fraction_pct",
+        "Cl_clipping_fraction_pct",
+        "alpha_clipping_fraction_pct",
+        "negative_loading_station_count",
+        "tip_loading_fraction",
+        "inboard_loading_fraction",
         "max_positive_twist_bump_deg",
         "max_abs_twist_gradient_deg_per_mu",
         "max_twist_curvature",
         "manufacturable_twist_pass",
         "valid_for_thesis_export",
+        "failure_reason",
         "failure_reasons",
+        "requested_gmt_aggressiveness",
+        "achieved_gmt_aggressiveness",
+        "recommended_next_action",
     ]
     with csv_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
@@ -4327,10 +5296,18 @@ def run_thrust_validity_sweep(
     with json_path.open("w", encoding="utf-8") as handle:
         json.dump(summary_payload, handle, indent=2, default=_json_default)
         handle.write("\n")
+    plot_warnings: List[str] = []
+    if make_plots:
+        plot_warnings = plot_feasibility_sweep(rows, figure_dir or output_dir)
+        if plot_warnings:
+            summary_payload["plot_warnings"] = plot_warnings
+            with json_path.open("w", encoding="utf-8") as handle:
+                json.dump(summary_payload, handle, indent=2, default=_json_default)
+                handle.write("\n")
     write_metadata_sidecar(
         csv_path,
         _base_output_metadata(
-            case_name="thrust_validity_sweep",
+            case_name="thrust_rpm_feasibility_sweep",
             geometry_source_csv="",
             station_source_csv=csv_path,
             twist_column_used="twist_deg",
@@ -4340,7 +5317,7 @@ def run_thrust_validity_sweep(
     write_metadata_sidecar(
         json_path,
         _base_output_metadata(
-            case_name="thrust_validity_sweep",
+            case_name="thrust_rpm_feasibility_sweep",
             geometry_source_csv="",
             station_source_csv=csv_path,
             twist_column_used="twist_deg",
@@ -4352,12 +5329,126 @@ def run_thrust_validity_sweep(
         "csv_path": csv_path,
         "json_path": json_path,
         "results": results,
+        "plot_warnings": plot_warnings,
     }
+
+
+def plot_feasibility_sweep(rows: Sequence[dict[str, object]], output_dir: Path) -> List[str]:
+    assert_geometry_output_path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        import matplotlib.pyplot as plt
+    except Exception as exc:
+        return [
+            "matplotlib unavailable; feasibility plots were not generated "
+            f"({exc}). Install with: python -m pip install matplotlib"
+        ]
+
+    apply_matplotlib_style(plt)
+    valid_rows = [row for row in rows if bool(row.get("valid_for_thesis_export"))]
+    plot_rows = valid_rows or list(rows)
+
+    def series(field: str, source_rows: Sequence[dict[str, object]] = plot_rows) -> List[float]:
+        values: List[float] = []
+        for row in source_rows:
+            try:
+                values.append(float(row[field]))
+            except (KeyError, TypeError, ValueError):
+                values.append(math.nan)
+        return values
+
+    def save_scatter(stem: str, x_field: str, y_field: str, xlabel: str, ylabel: str) -> None:
+        fig = plt.figure()
+        plt.scatter(series(x_field), series(y_field))
+        plt.xlabel(xlabel)
+        plt.ylabel(ylabel)
+        fig.tight_layout()
+        save_matplotlib_figure(fig, output_dir, stem, overwrite=True)
+        write_metadata_sidecar(
+            output_dir / f"{stem}.png",
+            _base_output_metadata(
+                case_name="thrust_rpm_feasibility_sweep",
+                geometry_source_csv="",
+                station_source_csv="thrust_rpm_feasibility_sweep.csv",
+                twist_column_used="twist_deg",
+                aero_source=MODEL_SOURCE_OPTIMIZER,
+            ),
+        )
+        plt.close(fig)
+
+    save_scatter("valid_thrust_vs_RPM", "RPM", "actual_thrust_N", "RPM", "valid thrust [N]")
+    save_scatter("torque_vs_thrust", "actual_thrust_N", "torque_Nm", "thrust [N]", "torque [N*m]")
+    save_scatter("power_vs_thrust", "actual_thrust_N", "power_W", "thrust [N]", "power [W]")
+    save_scatter(
+        "Cl_clipping_fraction_vs_thrust",
+        "actual_thrust_N",
+        "Cl_clipping_fraction_pct",
+        "thrust [N]",
+        "Cl clipping fraction [%]",
+    )
+    save_scatter(
+        "alpha_clipping_fraction_vs_thrust",
+        "actual_thrust_N",
+        "alpha_clipping_fraction_pct",
+        "thrust [N]",
+        "alpha clipping fraction [%]",
+    )
+
+    fig = plt.figure()
+    validity = [1.0 if bool(row.get("valid_for_thesis_export")) else 0.0 for row in rows]
+    gmt = []
+    for row in rows:
+        try:
+            gmt.append(float(row["achieved_gmt_aggressiveness"]))
+        except (KeyError, TypeError, ValueError):
+            gmt.append(math.nan)
+    plt.scatter(gmt, validity)
+    plt.xlabel("achieved GMT aggressiveness")
+    plt.ylabel("validity flag")
+    fig.tight_layout()
+    save_matplotlib_figure(fig, output_dir, "GMT_aggressiveness_vs_validity", overwrite=True)
+    write_metadata_sidecar(
+        output_dir / "GMT_aggressiveness_vs_validity.png",
+        _base_output_metadata(
+            case_name="thrust_rpm_feasibility_sweep",
+            geometry_source_csv="",
+            station_source_csv="thrust_rpm_feasibility_sweep.csv",
+            twist_column_used="twist_deg",
+            aero_source=MODEL_SOURCE_OPTIMIZER,
+        ),
+    )
+    plt.close(fig)
+    return []
+
+
+def startup_dependency_warnings(args: argparse.Namespace) -> List[str]:
+    warnings: List[str] = []
+    if args.optimizer in {"auto", "scipy"}:
+        try:
+            import scipy.optimize  # noqa: F401
+        except Exception as exc:
+            warnings.append(
+                "scipy is unavailable; the solver will fall back to coordinate_search "
+                f"({exc}). Install with: python -m pip install scipy"
+            )
+    if args.make_plots:
+        try:
+            import matplotlib.pyplot  # noqa: F401
+        except Exception as exc:
+            warnings.append(
+                "matplotlib is unavailable; plots will be skipped "
+                f"({exc}). Install with: python -m pip install matplotlib"
+            )
+    return warnings
 
 
 def main() -> None:
     args = parse_args()
+    dependency_warnings = startup_dependency_warnings(args)
+    for warning in dependency_warnings:
+        print(warning)
     config = DesignInputs(
+        preset=args.preset or "",
         blades=args.blades,
         radius_m=diameter_in_to_radius_m(args.diameter_in),
         hub_radius_fraction=args.hub_radius_fraction,
@@ -4367,8 +5458,11 @@ def main() -> None:
         rho=args.rho,
         spanload_type=args.spanload,
         mode=args.mode,
+        gmt_aggressiveness=parse_gmt_aggressiveness(args.gmt_aggressiveness),
         chord_min_in=args.chord_min_in,
         chord_max_in=args.chord_max_in,
+        twist_min_deg=args.twist_min_deg,
+        twist_max_deg=args.twist_max_deg,
         chord_blend=args.chord_blend,
         twist_blend=args.twist_blend,
         smooth_passes=args.smooth_passes,
@@ -4391,6 +5485,7 @@ def main() -> None:
         max_twist_curvature_limit=args.max_twist_curvature,
         max_cl_limit_fraction_pct=args.max_cl_limit_fraction_pct,
         max_alpha_limit_fraction_pct=args.max_alpha_limit_fraction_pct,
+        allowed_airfoils=parse_allowed_airfoils(args.allowed_airfoils),
     )
     validate_user_inputs(config)
 
@@ -4401,17 +5496,23 @@ def main() -> None:
         fallback_reference_path,
         reference_variant,
     )
+    input_warnings = dedupe_warnings(list(input_warnings) + dependency_warnings)
     result = optimize_geometry(config, reference_stations, input_warnings, reference_source)
 
     optimized_name = optimized_case_name(config.spanload_type, config.manufacturable_twist)
     reference_name = reference_case_name(config.spanload_type)
     output_dir = config.output_directory
     assert_geometry_output_path(output_dir)
-    figure_dir = get_figures_dir(
-        "geometry_optimizer",
-        model_source=MODEL_SOURCE_OPTIMIZER,
-        case_name=optimized_name,
+    figure_dir = (
+        resolve_project_output_path(args.figures_dir)
+        if args.figures_dir is not None
+        else get_figures_dir(
+            "geometry_optimizer",
+            model_source=MODEL_SOURCE_OPTIMIZER,
+            case_name=optimized_name,
+        )
     )
+    assert_geometry_output_path(figure_dir)
     reference_dir = get_results_dir(
         "geometry_optimizer",
         model_source=MODEL_SOURCE_OPTIMIZER,
@@ -4461,7 +5562,10 @@ def main() -> None:
             reference_stations,
             input_warnings,
             reference_source,
+            rpms=THRUST_RPM_SWEEP_RPMS,
             audits_dir=audits_dir,
+            figure_dir=figure_dir / "feasibility_sweep",
+            make_plots=config.make_plots,
         )
     try:
         write_xlsx(result, reference_stations, optimized_xlsx)
@@ -4492,8 +5596,11 @@ def main() -> None:
     print(f"Wrote case solver summary JSON to: {case_summary_json}")
     print(f"Wrote methodology statement to: {methodology_txt}")
     if sweep_outputs is not None:
-        print(f"Wrote thrust validity sweep CSV to: {sweep_outputs['csv_path']}")
-        print(f"Wrote thrust validity sweep summary JSON to: {sweep_outputs['json_path']}")
+        print(f"Wrote thrust/RPM feasibility sweep CSV to: {sweep_outputs['csv_path']}")
+        print(f"Wrote thrust/RPM feasibility sweep summary JSON to: {sweep_outputs['json_path']}")
+        if sweep_outputs.get("plot_warnings"):
+            for warning in sweep_outputs["plot_warnings"]:
+                print(f"Plot warning: {warning}")
     if config.make_plots and not plot_warnings:
         print(f"Wrote thesis plots to: {figure_dir}")
 

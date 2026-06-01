@@ -135,7 +135,7 @@ def test_aero_run_does_not_overwrite_optimizer_geometry_csv(tmp_path: Path) -> N
             "geometry_csv_path": str(geometry_csv),
             "output_dir": str(tmp_path / "results" / "aero_postprocess" / "optimizer_station_data" / "optimized_gmt"),
             "figure_output_dir": str(
-                tmp_path / "figures_paper" / "aero_postprocess" / "optimizer_station_data" / "optimized_gmt"
+                tmp_path / "results" / "plots" / "aero_postprocess" / "optimizer_station_data" / "optimized_gmt"
             ),
             "diameter_m": 0.4,
             "radius_m": 0.2,

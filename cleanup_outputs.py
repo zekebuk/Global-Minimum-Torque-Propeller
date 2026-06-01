@@ -12,10 +12,7 @@ GENERATED_OUTPUT_DIRS = (
     PROJECT_ROOT / "results" / "aero_postprocess",
     PROJECT_ROOT / "results" / "verification",
     PROJECT_ROOT / "results" / "fea" / "beam_solver",
-    PROJECT_ROOT / "figures_paper" / "geometry_optimizer",
-    PROJECT_ROOT / "figures_paper" / "aero_postprocess",
-    PROJECT_ROOT / "figures_paper" / "verification",
-    PROJECT_ROOT / "figures_paper" / "fea",
+    PROJECT_ROOT / "results" / "plots",
 )
 
 
@@ -23,7 +20,6 @@ def _is_safe_target(path: Path) -> bool:
     resolved = path.resolve(strict=False)
     allowed_roots = [
         (PROJECT_ROOT / "results").resolve(strict=False),
-        (PROJECT_ROOT / "figures_paper").resolve(strict=False),
     ]
     return any(_is_relative_to(resolved, root) and resolved != root for root in allowed_roots)
 

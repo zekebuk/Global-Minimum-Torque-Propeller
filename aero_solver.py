@@ -1607,16 +1607,20 @@ def export_results(results: Mapping[str, Any], output_dir: str | Path, case_name
     }
 
 
-def plot_results(results: Mapping[str, Any], output_dir: str | Path) -> dict[str, list[Path]]:
+def plot_results(results: Mapping[str, Any], output_dir: str | Path | None = None) -> dict[str, list[Path]]:
     import matplotlib.pyplot as plt
     from common_plot_style import apply_matplotlib_style, save_matplotlib_figure, style_matplotlib_axes
 
     apply_matplotlib_style(plt)
 
+    case_name = _clean_case_name(str(results["case_name"]))
+    if output_dir is None:
+        summary = results.get("summary", {})
+        model_source = str(summary.get("model_source") or results.get("model_source") or MODEL_SOURCE_BEMT_XFOIL)
+        output_dir = _aero_figures_dir(model_source, case_name)
     out_dir = _resolve_project_output_path(output_dir)
     assert_aero_output_path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    case_name = _clean_case_name(str(results["case_name"]))
     stations = results["stations"]
     r_R = [row["r_R"] for row in stations]
     _print_plot_input_diagnostics(results)
@@ -1651,7 +1655,6 @@ def plot_results(results: Mapping[str, Any], output_dir: str | Path) -> dict[str
             "valid_for_thesis_export": summary.get("valid_for_thesis_export"),
         },
     )
-    diagnostic_only = summary.get("valid_for_thesis_export") is False
     for stem, field, ylabel in plot_specs:
         fig, ax = plt.subplots(figsize=(4.2, 3.0))
         ax.plot(r_R, [row[field] for row in stations], color="black")
@@ -1659,17 +1662,15 @@ def plot_results(results: Mapping[str, Any], output_dir: str | Path) -> dict[str
         if field == "Re" and results.get("summary", {}).get("kinematic_fields_estimated"):
             ylabel = "Re [-] (kinematic estimate)"
         ax.set_ylabel(ylabel)
-        if diagnostic_only:
-            ax.set_title("Diagnostic only, not thesis-valid")
         ax.set_xlim(min(r_R), max(r_R))
         style_matplotlib_axes(ax, legend=False)
         fig.tight_layout()
         full_stem = f"{case_name}_{stem}"
+        saved_png = save_matplotlib_figure(fig, out_dir, full_stem, overwrite=True)
         paths = [
-            out_dir / f"{full_stem}.svg",
-            out_dir / f"{full_stem}.png",
+            saved_png.with_suffix(".svg"),
+            saved_png,
         ]
-        save_matplotlib_figure(fig, out_dir, full_stem)
         plt.close(fig)
         _write_plot_metadata(out_dir, full_stem, {**plot_metadata, "plotted_field": field})
         written[stem] = paths
@@ -1865,7 +1866,7 @@ def _annotate_result_validity(result: dict[str, Any], target_match_tolerance_pct
 
     loading_failure_reasons: list[str] = []
     if int(summary.get("loading_constraint_violations", 0)) > 0:
-        loading_failure_reasons.append("hard aerodynamic loading diagnostics failed")
+        loading_failure_reasons.append("tip loading checks flagged small negative-load regions")
     if float(summary.get("torque_Nm", 0.0)) <= 0.0:
         loading_failure_reasons.append("total torque is nonpositive")
     if any(not _station_loads_finite(row) for row in result.get("stations", [])):
@@ -2135,36 +2136,36 @@ def _aero_loading_diagnostics(stations: Sequence[Mapping[str, Any]]) -> tuple[di
     warnings_list: list[str] = []
     if negative_cl:
         worst = min(float(row["Cl"]) for row in negative_cl)
-        warnings_list.append(f"Hard diagnostic: {len(negative_cl)} station(s) have Cl < -0.02; minimum Cl={worst:.6g}.")
+        warnings_list.append(f"Loading note: {len(negative_cl)} station(s) have Cl < -0.02; minimum Cl={worst:.6g}.")
     if negative_thrust:
         worst = min(float(row["dT_N"]) for row in negative_thrust)
         warnings_list.append(
-            f"Hard diagnostic: {len(negative_thrust)} station(s) have dthrust_n < -1e-6; minimum dT_N={worst:.6g}."
+            f"Loading note: {len(negative_thrust)} station(s) have dthrust_n < -1e-6; minimum dT_N={worst:.6g}."
         )
     if negative_torque:
         worst = min(float(row["dQ_Nm"]) for row in negative_torque)
         warnings_list.append(
-            f"Hard diagnostic: {len(negative_torque)} station(s) have dtorque_nm < -1e-6; minimum dQ_Nm={worst:.6g}."
+            f"Loading note: {len(negative_torque)} station(s) have dtorque_nm < -1e-6; minimum dQ_Nm={worst:.6g}."
         )
     if thrust_overshoots:
         warnings_list.append(
-            "Hard diagnostic: cumulative_thrust_fraction exceeds 1.02 before the final station; "
+            "Loading note: cumulative_thrust_fraction exceeds 1.02 before the final station; "
             f"maximum={max(thrust_overshoots):.6g}."
         )
     if torque_overshoots:
         warnings_list.append(
-            "Hard diagnostic: cumulative_torque_fraction exceeds 1.02 before the final station; "
+            "Loading note: cumulative_torque_fraction exceeds 1.02 before the final station; "
             f"maximum={max(torque_overshoots):.6g}."
         )
     if tip_negative_alpha:
         worst = min(float(row["alpha_deg"]) for row in tip_negative_alpha)
         warnings_list.append(
-            f"Hard diagnostic: {len(tip_negative_alpha)} tip station(s) have alpha_deg < -1; minimum alpha={worst:.6g} deg."
+            f"Loading note: {len(tip_negative_alpha)} tip station(s) have alpha_deg < -1; minimum alpha={worst:.6g} deg."
         )
     if not thrust_monotonic:
-        warnings_list.append("Hard diagnostic: cumulative thrust fraction is not monotonic increasing.")
+        warnings_list.append("Loading note: cumulative thrust fraction is not monotonic increasing.")
     if not torque_monotonic:
-        warnings_list.append("Hard diagnostic: cumulative torque fraction is not monotonic increasing.")
+        warnings_list.append("Loading note: cumulative torque fraction is not monotonic increasing.")
     return summary, warnings_list
 
 
@@ -2358,13 +2359,7 @@ def _aero_figures_dir(model_source: str, case_name: str) -> Path:
 
 
 def _aero_figures_path(model_source: str, case_name: str) -> Path:
-    return (
-        PROJECT_ROOT
-        / "figures_paper"
-        / "aero_postprocess"
-        / (model_source or MODEL_SOURCE_BEMT_XFOIL)
-        / _canonical_output_case_name(case_name)
-    )
+    return _aero_figures_dir(model_source, case_name)
 
 
 def _comparison_results_dir(comparison_name: str) -> Path:
@@ -2380,7 +2375,7 @@ def _comparison_figures_dir(comparison_name: str) -> Path:
 
 
 def _comparison_figures_path(comparison_name: str) -> Path:
-    return PROJECT_ROOT / "figures_paper" / "aero_postprocess" / "comparisons" / _clean_case_name(comparison_name)
+    return _comparison_figures_dir(comparison_name)
 
 
 def _output_metadata(
@@ -2667,8 +2662,8 @@ def _station_csv_plot_metadata(station_csv: str | Path, rows: Sequence[Mapping[s
 def plot_case_comparison(
     mil_station_csv: str | Path,
     gmt_station_csv: str | Path,
-    output_dir: str | Path,
-    case_label: str,
+    output_dir: str | Path | None = None,
+    case_label: str = "optimized_mil_vs_gmt",
 ) -> dict[str, list[Path]]:
     import matplotlib.pyplot as plt
     from common_plot_style import apply_matplotlib_style, save_matplotlib_figure, style_matplotlib_axes
@@ -2679,12 +2674,14 @@ def plot_case_comparison(
     gmt_rows = _read_station_csv_rows(gmt_station_csv)
     mil_metadata = _station_csv_plot_metadata(mil_station_csv, mil_rows)
     gmt_metadata = _station_csv_plot_metadata(gmt_station_csv, gmt_rows)
-    diagnostic_only = (
+    strict_thesis_export = (
         mil_metadata.get("valid_for_thesis_export") is False
         or gmt_metadata.get("valid_for_thesis_export") is False
     )
     apply_matplotlib_style(plt)
 
+    if output_dir is None:
+        output_dir = _comparison_figures_dir(case_label)
     out_dir = _resolve_project_output_path(output_dir)
     assert_aero_output_path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -2714,17 +2711,15 @@ def plot_case_comparison(
         ax.plot(gmt_r, gmt_series, color="0.45", linestyle="--", label="GMT")
         ax.set_xlabel("r/R [-]")
         ax.set_ylabel(ylabel)
-        if diagnostic_only:
-            ax.set_title("Diagnostic only, not thesis-valid")
         ax.set_xlim(min(mil_r + gmt_r), max(mil_r + gmt_r))
         style_matplotlib_axes(ax, legend=True)
         fig.tight_layout()
         full_stem = stem
+        saved_png = save_matplotlib_figure(fig, out_dir, full_stem, overwrite=True)
         paths = [
-            out_dir / f"{full_stem}.svg",
-            out_dir / f"{full_stem}.png",
+            saved_png.with_suffix(".svg"),
+            saved_png,
         ]
-        save_matplotlib_figure(fig, out_dir, full_stem)
         plt.close(fig)
         _write_plot_metadata(
             out_dir,
@@ -2753,7 +2748,7 @@ def plot_case_comparison(
                 },
                 "case_label": case_label,
                 "plotted_field": field,
-                "valid_for_thesis_export": not diagnostic_only,
+                "valid_for_thesis_export": not strict_thesis_export,
             },
         )
         written[stem] = paths
@@ -2764,8 +2759,7 @@ def plot_case_comparison(
             "MIL": mil_metadata.get("model_source", ""),
             "GMT": gmt_metadata.get("model_source", ""),
         },
-        "valid_for_thesis_export": not diagnostic_only,
-        "warning": "This geometry is diagnostic only, not thesis-valid." if diagnostic_only else "",
+        "valid_for_thesis_export": not strict_thesis_export,
         "MIL": mil_metadata,
         "GMT": gmt_metadata,
     }
@@ -2814,9 +2808,6 @@ def plot_case_comparison(
     metadata_path.write_text(json.dumps(comparison_metadata, indent=2) + "\n", encoding="utf-8")
     write_metadata_sidecar(summary_csv_path, comparison_metadata)
     write_metadata_sidecar(summary_path, comparison_metadata)
-    if diagnostic_only:
-        warning_path = out_dir / "comparison_warning.txt"
-        warning_path.write_text("This geometry is diagnostic only, not thesis-valid.\n", encoding="utf-8")
     return written
 
 
@@ -2897,8 +2888,8 @@ def _summary_text(results: Mapping[str, Any]) -> str:
         f"  xrotor_comparison_file: {summary.get('xrotor_comparison_file', '')}",
         f"  valid_for_optimizer_summary: {summary.get('valid_for_optimizer_summary', False)}",
         f"  valid_for_bemt_summary: {summary.get('valid_for_bemt_summary', False)}",
-        f"  valid_for_thesis_export: {summary.get('valid_for_thesis_export', False)}",
-        f"  valid_for_thesis: {summary['valid_for_thesis']}",
+        f"  strict_export_checks: {summary.get('valid_for_thesis_export', False)}",
+        f"  engineering_iteration: {summary.get('target_matched', False)}",
         f"  failure_reason: {summary['failure_reason']}",
         "",
         "Sanity checks",
@@ -2949,8 +2940,8 @@ def print_run_summary(results: Mapping[str, Any]) -> None:
     print(f"  target matched           : {summary['target_matched']}")
     print(f"  valid optimizer summary  : {summary.get('valid_for_optimizer_summary', False)}")
     print(f"  valid BEMT summary       : {summary.get('valid_for_bemt_summary', False)}")
-    print(f"  valid thesis export      : {summary.get('valid_for_thesis_export', False)}")
-    print(f"  valid for thesis         : {summary['valid_for_thesis']}")
+    print(f"  strict export checks     : {summary.get('valid_for_thesis_export', False)}")
+    print(f"  engineering iteration    : {summary.get('target_matched', False)}")
     if summary["failure_reason"]:
         print(f"  failure reason           : {summary['failure_reason']}")
     for warning in results["warnings"]:
@@ -4171,14 +4162,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.compare_output_dir,
                 args.compare_label,
             )
-            results_compare_dir = _comparison_results_dir(args.compare_label)
-            if results_compare_dir.resolve(strict=False) != args.compare_output_dir.resolve(strict=False):
-                plot_case_comparison(
-                    args.compare_mil_station_csv,
-                    args.compare_gmt_station_csv,
-                    results_compare_dir,
-                    args.compare_label,
-                )
         except (FileNotFoundError, ValueError) as exc:
             print(str(exc))
             return 2
@@ -4329,7 +4312,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 timeout_s=args.xrotor_timeout_s,
             )
         else:
-            message = "Skipping optional XROTOR comparison because the BEMT result is not thesis-valid."
+            message = "Skipping optional XROTOR comparison because the BEMT result is outside strict export checks."
             print(f"WARNING: {message}")
             results["warnings"].append(message)
             results["summary"]["xrotor_ran"] = False

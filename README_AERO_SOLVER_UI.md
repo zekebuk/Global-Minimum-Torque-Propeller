@@ -52,11 +52,12 @@ Xrotor7.55\Xrotor\xrotor.exe
 
 ## Output Structure
 
-- Geometry optimizer outputs: `results/geometry_optimizer/<case>/` and `figures_paper/geometry_optimizer/<case>/`.
-- Imported optimizer station data: `results/aero_postprocess/optimizer_station_data/<case>/` and `figures_paper/aero_postprocess/optimizer_station_data/<case>/`.
-- BEMT/XFOIL recomputation: `results/aero_postprocess/bemt_xfoil/<case>/` and `figures_paper/aero_postprocess/bemt_xfoil/<case>/`.
-- Theory verification: `results/verification/theory/` and `figures_paper/verification/theory/`.
-- FEA: `results/fea/beam_solver/<case>/`, `results/fea/abaqus_exports/`, `results/fea/comparisons/`, and matching `figures_paper/fea/...`.
+- Geometry optimizer data: `results/geometry_optimizer/<case>/`.
+- Imported optimizer station data: `results/aero_postprocess/optimizer_station_data/<case>/`.
+- BEMT/XFOIL recomputation data: `results/aero_postprocess/bemt_xfoil/<case>/`.
+- Theory verification data: `results/verification/theory/`.
+- FEA data: `results/fea/beam_solver/<case>/`, `results/fea/abaqus_exports/`, and `results/fea/comparisons/`.
+- Thesis-ready figures: `results/plots/...`. Regenerate available plots with `python scripts/generate_all_results_plots.py`.
 
 Figures are exported as PNG and SVG only. PDF export is disabled.
 
