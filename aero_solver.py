@@ -152,6 +152,7 @@ DEFAULT_THESIS_OPERATING_CONDITION = {
     "V_inf_m_s": 0.0,
     "target_thrust_N": 35.0,
     "hover_mode": True,
+    "inflow_model": "uniform_actuator_disk",
 }
 
 
@@ -199,6 +200,13 @@ MODEL_SOURCE_OPTIMIZER = "optimizer_reduced_order"
 MODEL_SOURCE_BEMT_XFOIL = "bemt_xfoil"
 MODEL_SOURCE_OPTIMIZER_STATION_DATA = "optimizer_station_data"
 MODEL_SOURCE_IMPORTED_CSV = MODEL_SOURCE_OPTIMIZER_STATION_DATA
+INFLOW_MODEL_UNIFORM_ACTUATOR_DISK = "uniform_actuator_disk"
+INFLOW_MODEL_STATIONWISE_PRANDTL = "stationwise_annular_momentum_with_prandtl_tip_loss"
+VALID_INFLOW_MODELS = (INFLOW_MODEL_UNIFORM_ACTUATOR_DISK, INFLOW_MODEL_STATIONWISE_PRANDTL)
+TIP_LOSS_FACTOR_FLOOR = 0.05
+INDUCED_VELOCITY_RELAXATION = 0.35
+MAX_INDUCED_VELOCITY_ITERATIONS = 80
+INDUCED_VELOCITY_TOL_M_S = 1.0e-5
 IMPORTED_KINEMATIC_NOTE = (
     "Station aero values are imported from optimizer station data. "
     "Reynolds and inflow fields are kinematic estimates."
@@ -240,6 +248,11 @@ STATION_EXPORT_COLUMNS = [
     "Cl_clipped",
     "omega_rad_s",
     "Vi_m_s",
+    "inflow_model",
+    "actuator_disk_initial_Vi_m_s",
+    "tip_loss_factor",
+    "induced_velocity_converged",
+    "induced_velocity_iterations",
     "Vt_m_s",
     "Va_m_s",
     "Vrel_m_s",
@@ -253,6 +266,8 @@ STATION_EXPORT_COLUMNS = [
     "qz_N_per_m",
     "qy_tangential_N_per_m",
     "torque_loading_Nm_per_m",
+    "cumulative_thrust_N",
+    "cumulative_torque_Nm",
     "cumulative_thrust_fraction",
     "cumulative_torque_fraction",
 ]
@@ -270,6 +285,7 @@ class OperatingCondition:
     V_inf_m_s: float = 0.0
     target_thrust_N: float | None = 35.0
     hover_mode: bool = True
+    inflow_model: str = INFLOW_MODEL_UNIFORM_ACTUATOR_DISK
 
 
 @dataclass
@@ -975,6 +991,11 @@ def evaluate_station(
         "Cl_clipped": bool(polar_result["Cl_clipped"]),
         "omega_rad_s": kinematics["omega_rad_s"],
         "Vi_m_s": induced_velocity_m_s,
+        "inflow_model": op.inflow_model,
+        "actuator_disk_initial_Vi_m_s": "",
+        "tip_loss_factor": "",
+        "induced_velocity_converged": "",
+        "induced_velocity_iterations": "",
         "Vt_m_s": kinematics["Vt_m_s"],
         "Va_m_s": kinematics["Va_m_s"],
         "Vrel_m_s": kinematics["Vrel_m_s"],
@@ -995,6 +1016,71 @@ def evaluate_station(
         "polar_alpha_clipped": bool(polar_result["alpha_clipped"]),
         "cl_clipped": bool(polar_result["Cl_clipped"]),
     }
+
+
+def prandtl_tip_loss_factor(blade_count: int, r_R: float, phi_rad: float) -> float:
+    sin_phi = max(abs(math.sin(phi_rad)), 1.0e-6)
+    argument = 0.5 * blade_count * (1.0 - r_R) / max(r_R * sin_phi, 1.0e-9)
+    if argument >= 50.0:
+        return 1.0
+    exponential = max(0.0, min(1.0, math.exp(-argument)))
+    return max(TIP_LOSS_FACTOR_FLOOR, min(1.0, (2.0 / math.pi) * math.acos(exponential)))
+
+
+def evaluate_station_stationwise_prandtl(
+    station: Mapping[str, Any],
+    operating_condition: OperatingCondition | Mapping[str, Any],
+    polar: AirfoilPolar,
+    dr_m: float | None = None,
+    initial_induced_velocity_m_s: float = 0.0,
+    collective_twist_offset_deg: float = 0.0,
+) -> dict[str, Any]:
+    op = _normalize_operating_condition(operating_condition)
+    station_dr_m = float(station["dr_m"] if dr_m is None else dr_m)
+    r_m = float(station["r_m"])
+    r_R = float(station["r_R"])
+    vi = max(initial_induced_velocity_m_s, 0.0)
+    converged = False
+    iterations = 0
+
+    for iterations in range(1, MAX_INDUCED_VELOCITY_ITERATIONS + 1):
+        row = evaluate_station(
+            station,
+            op,
+            polar,
+            dr_m=station_dr_m,
+            induced_velocity_m_s=vi,
+            collective_twist_offset_deg=collective_twist_offset_deg,
+        )
+        tip_loss = prandtl_tip_loss_factor(op.blade_count, r_R, math.radians(float(row["phi_deg"])))
+        d_t = max(float(row["dT_N"]), 0.0)
+        if d_t <= 0.0:
+            target_vi = 0.0
+        else:
+            denominator = 4.0 * math.pi * op.rho * tip_loss * max(r_m, 1.0e-9) * max(station_dr_m, 1.0e-9)
+            target_vi = math.sqrt(d_t / max(denominator, 1.0e-12))
+        next_vi = (1.0 - INDUCED_VELOCITY_RELAXATION) * vi + INDUCED_VELOCITY_RELAXATION * target_vi
+        if abs(next_vi - vi) <= INDUCED_VELOCITY_TOL_M_S:
+            vi = next_vi
+            converged = True
+            break
+        vi = next_vi
+
+    row = evaluate_station(
+        station,
+        op,
+        polar,
+        dr_m=station_dr_m,
+        induced_velocity_m_s=vi,
+        collective_twist_offset_deg=collective_twist_offset_deg,
+    )
+    tip_loss = prandtl_tip_loss_factor(op.blade_count, r_R, math.radians(float(row["phi_deg"])))
+    row["inflow_model"] = INFLOW_MODEL_STATIONWISE_PRANDTL
+    row["actuator_disk_initial_Vi_m_s"] = initial_induced_velocity_m_s
+    row["tip_loss_factor"] = tip_loss
+    row["induced_velocity_converged"] = converged
+    row["induced_velocity_iterations"] = iterations
+    return row
 
 
 def evaluate_propeller(
@@ -1030,20 +1116,44 @@ def evaluate_propeller(
         if op.hover_mode and abs(op.V_inf_m_s) <= 1.0e-12 and op.target_thrust_N is not None and op.target_thrust_N >= 0.0
         else 0.0
     )
-    if induced_velocity_m_s is None:
-        induced_velocity_m_s = _induced_velocity_for_case(stations, op, polar, collective_twist_offset_deg, disk_area)
+    initial_induced_velocity_m_s = (
+        induced_velocity_m_s
+        if induced_velocity_m_s is not None
+        else _induced_velocity_for_case(stations, op, polar, collective_twist_offset_deg, disk_area)
+    )
 
-    station_results = [
-        evaluate_station(
-            station,
-            op,
-            polar,
-            dr_m=float(station["dr_m"]),
-            induced_velocity_m_s=induced_velocity_m_s,
-            collective_twist_offset_deg=collective_twist_offset_deg,
+    if op.inflow_model == INFLOW_MODEL_STATIONWISE_PRANDTL:
+        station_results = [
+            evaluate_station_stationwise_prandtl(
+                station,
+                op,
+                polar,
+                dr_m=float(station["dr_m"]),
+                initial_induced_velocity_m_s=initial_induced_velocity_m_s,
+                collective_twist_offset_deg=collective_twist_offset_deg,
+            )
+            for station in stations
+        ]
+        vi_values = [float(row["Vi_m_s"]) for row in station_results]
+        induced_velocity_m_s = sum(vi_values) / max(len(vi_values), 1)
+        induced_velocity_nonconverged_count = sum(
+            not _parse_bool(row.get("induced_velocity_converged", False)) for row in station_results
         )
-        for station in stations
-    ]
+    else:
+        induced_velocity_m_s = initial_induced_velocity_m_s
+        station_results = [
+            evaluate_station(
+                station,
+                op,
+                polar,
+                dr_m=float(station["dr_m"]),
+                induced_velocity_m_s=induced_velocity_m_s,
+                collective_twist_offset_deg=collective_twist_offset_deg,
+            )
+            for station in stations
+        ]
+        vi_values = [float(induced_velocity_m_s) for _ in station_results]
+        induced_velocity_nonconverged_count = 0
 
     totals = _bemt_propeller_totals(station_results, rpm=op.rpm, rho=op.rho, diameter_m=op.diameter_m)
     thrust_N = totals["thrust_N"]
@@ -1061,10 +1171,16 @@ def evaluate_propeller(
         else 0.0
     )
 
+    cumulative_thrust_values = _cumulative_values([row["dT_N"] for row in station_results])
+    cumulative_torque_values = _cumulative_values([row["dQ_Nm"] for row in station_results])
     cumulative_thrust = _cumulative_fraction([row["dT_N"] for row in station_results])
     cumulative_torque = _cumulative_fraction([row["dQ_Nm"] for row in station_results])
-    for row, thrust_fraction, torque_fraction in zip(station_results, cumulative_thrust, cumulative_torque):
+    for row, thrust_value, torque_value, thrust_fraction, torque_fraction in zip(
+        station_results, cumulative_thrust_values, cumulative_torque_values, cumulative_thrust, cumulative_torque
+    ):
         row["case_name"] = op.case_name
+        row["cumulative_thrust_N"] = thrust_value
+        row["cumulative_torque_Nm"] = torque_value
         row["cumulative_thrust_fraction"] = thrust_fraction
         row["cumulative_torque_fraction"] = torque_fraction
 
@@ -1118,7 +1234,12 @@ def evaluate_propeller(
         "target_thrust_N": target_thrust,
         "thrust_error_pct": thrust_error_pct,
         "collective_twist_offset_deg": collective_twist_offset_deg,
+        "inflow_model": op.inflow_model,
         "induced_velocity_m_s": induced_velocity_m_s,
+        "mean_induced_velocity_m_s": induced_velocity_m_s,
+        "min_induced_velocity_m_s": min(vi_values, default=induced_velocity_m_s),
+        "max_induced_velocity_m_s": max(vi_values, default=induced_velocity_m_s),
+        "induced_velocity_nonconverged_count": induced_velocity_nonconverged_count,
         "Vi_target_m_s": vi_target_m_s,
         "Vi_computed_from_result_m_s": vi_computed_from_result_m_s,
         "Vi_difference_m_s": vi_computed_from_result_m_s - vi_target_m_s,
@@ -1699,6 +1820,7 @@ def _normalize_operating_condition(
         V_inf_m_s=float(data["V_inf_m_s"]),
         target_thrust_N=None if data.get("target_thrust_N") is None else float(data["target_thrust_N"]),
         hover_mode=bool(data["hover_mode"]),
+        inflow_model=str(data.get("inflow_model", INFLOW_MODEL_UNIFORM_ACTUATOR_DISK)),
     )
     _require_positive_finite("diameter_m", op.diameter_m)
     _require_positive_finite("radius_m", op.radius_m)
@@ -1709,6 +1831,9 @@ def _normalize_operating_condition(
     _require_finite("V_inf_m_s", op.V_inf_m_s)
     if op.target_thrust_N is not None:
         _require_finite("target_thrust_N", op.target_thrust_N)
+    if op.inflow_model not in VALID_INFLOW_MODELS:
+        valid = ", ".join(VALID_INFLOW_MODELS)
+        raise ValueError(f"inflow_model must be one of {valid}; got {op.inflow_model!r}")
     return op
 
 
@@ -2083,6 +2208,15 @@ def _cumulative_fraction(values: Sequence[float]) -> list[float]:
     if fractions:
         fractions[-1] = 1.0
     return fractions
+
+
+def _cumulative_values(values: Sequence[float]) -> list[float]:
+    running = 0.0
+    cumulative: list[float] = []
+    for value in values:
+        running += value
+        cumulative.append(running)
+    return cumulative
 
 
 def _aero_loading_diagnostics(stations: Sequence[Mapping[str, Any]]) -> tuple[dict[str, Any], list[str]]:
@@ -3358,6 +3492,7 @@ def get_default_aero_config() -> dict[str, Any]:
         "V_inf_m_s": DEFAULT_THESIS_OPERATING_CONDITION["V_inf_m_s"],
         "target_thrust_N": DEFAULT_THESIS_OPERATING_CONDITION["target_thrust_N"],
         "hover_mode": DEFAULT_THESIS_OPERATING_CONDITION["hover_mode"],
+        "inflow_model": DEFAULT_THESIS_OPERATING_CONDITION["inflow_model"],
         "match_target": False,
         "prefer_imported_station_aero": True,
         "tolerance_pct": 1.0,
@@ -3556,6 +3691,9 @@ def validate_aero_config(config: Mapping[str, Any], require_polars: bool = True)
         missing_polars = find_missing_xfoil_polar_csvs(airfoil_dir)
         if missing_polars:
             errors.append("Missing XFOIL-generated polar CSVs: " + ", ".join(missing_polars))
+    inflow_model = str(config.get("inflow_model", INFLOW_MODEL_UNIFORM_ACTUATOR_DISK))
+    if inflow_model not in VALID_INFLOW_MODELS:
+        errors.append("Inflow model must be one of: " + ", ".join(VALID_INFLOW_MODELS))
     return errors
 
 
@@ -3573,6 +3711,7 @@ def _operating_condition_from_config(config: Mapping[str, Any]) -> dict[str, Any
         "V_inf_m_s": float(config.get("V_inf_m_s", DEFAULT_THESIS_OPERATING_CONDITION["V_inf_m_s"])),
         "target_thrust_N": float(config.get("target_thrust_N", DEFAULT_THESIS_OPERATING_CONDITION["target_thrust_N"])),
         "hover_mode": bool(config.get("hover_mode", DEFAULT_THESIS_OPERATING_CONDITION["hover_mode"])),
+        "inflow_model": str(config.get("inflow_model", DEFAULT_THESIS_OPERATING_CONDITION["inflow_model"])),
     }
 
 
@@ -4102,6 +4241,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--v-inf-m-s", type=float, default=DEFAULT_THESIS_OPERATING_CONDITION["V_inf_m_s"])
     parser.add_argument("--target-thrust-N", type=float, default=DEFAULT_THESIS_OPERATING_CONDITION["target_thrust_N"])
     parser.add_argument("--hover-mode", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--inflow-model", choices=VALID_INFLOW_MODELS, default=DEFAULT_THESIS_OPERATING_CONDITION["inflow_model"])
     parser.add_argument("--match-target", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--prefer-imported-station-aero", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--tolerance-pct", type=float, default=1.0)
@@ -4137,6 +4277,7 @@ def _operating_condition_from_args(args: argparse.Namespace) -> dict[str, Any]:
         "V_inf_m_s": args.v_inf_m_s,
         "target_thrust_N": args.target_thrust_N,
         "hover_mode": args.hover_mode,
+        "inflow_model": args.inflow_model,
     }
 
 

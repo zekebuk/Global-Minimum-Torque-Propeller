@@ -232,8 +232,16 @@ def _sidebar_config(base_config: dict[str, Any]) -> dict[str, Any]:
             value=float(config.get("target_thrust_N", 35.0)),
         )
         hover_mode = st.checkbox("Hover mode", value=bool(config.get("hover_mode", True)))
+        inflow_model_options = list(aero_solver.VALID_INFLOW_MODELS)
+        inflow_model = st.selectbox(
+            "Inflow model",
+            inflow_model_options,
+            index=inflow_model_options.index(str(config.get("inflow_model", aero_solver.INFLOW_MODEL_UNIFORM_ACTUATOR_DISK)))
+            if str(config.get("inflow_model", aero_solver.INFLOW_MODEL_UNIFORM_ACTUATOR_DISK)) in inflow_model_options
+            else 0,
+        )
         if hover_mode and abs(v_inf) <= 1.0e-12:
-            st.info("Static hover: actuator-disk induced velocity is active in the backend.")
+            st.info(f"Static hover: `{inflow_model}` induced velocity is active in the backend.")
 
     with st.sidebar.expander("Solver Options", expanded=True):
         match_target = st.checkbox(
@@ -338,6 +346,7 @@ def _sidebar_config(base_config: dict[str, Any]) -> dict[str, Any]:
         "V_inf_m_s": v_inf,
         "target_thrust_N": target_thrust,
         "hover_mode": hover_mode,
+        "inflow_model": inflow_model,
         "match_target": match_target,
         "prefer_imported_station_aero": prefer_imported_station_aero,
         "tolerance_pct": tolerance_pct,

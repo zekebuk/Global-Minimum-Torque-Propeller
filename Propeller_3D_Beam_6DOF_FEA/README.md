@@ -136,14 +136,22 @@ For the usual clamped root, `Ur = 0`.
 
 ## Running
 
-Run the default static case:
+Run the final locked MIL/GMT static and modal cases:
 
 ```matlab
 cd Propeller_3D_Beam_6DOF_FEA
 main_propeller_3d_beam_fea
 ```
 
-Run MIL vs GMT comparison:
+The main driver reads:
+
+- `../../results/FINAL_THESIS_USE_THESE/01_geometry/final_mil_geometry.csv`
+- `../../results/FINAL_THESIS_USE_THESE/01_geometry/final_gmt_geometry.csv`
+- `../../results/FINAL_THESIS_USE_THESE/02_aero_validation/mil_bemt_validation_LOCKED.csv`
+- `../../results/FINAL_THESIS_USE_THESE/02_aero_validation/gmt_bemt_validation_LOCKED.csv`
+- `../../results/FINAL_THESIS_USE_THESE/02_aero_validation/locked_aero_summary.json`
+
+Run the older reference/optimized MIL vs GMT comparison:
 
 ```matlab
 run_mil_gmt_comparison
@@ -195,15 +203,18 @@ Plots and CSV files are written under:
 ../../results/plots/fea/
 ```
 
-The main solver writes one clean, stable folder:
+The main solver writes clean, stable final locked folders:
 
 ```text
-../../results/fea/beam_solver/reference_gmt
-../../results/plots/fea/beam_solver/reference_gmt
+../../results/fea/beam_solver/final_locked_mil_gmt/final_locked_mil
+../../results/fea/beam_solver/final_locked_mil_gmt/final_locked_gmt
+../../results/fea/beam_solver/final_locked_mil_gmt/final_locked_mil_gmt_fea_summary.csv
+../../results/plots/fea/beam_solver/final_locked_mil
+../../results/plots/fea/beam_solver/final_locked_gmt
 ```
 
-That folder is cleared at the start of each run, then rewritten with the
-latest CSVs and plots. The MIL/GMT comparison script rewrites two folders:
+Each case folder is cleared at the start of each run, then rewritten with
+the latest CSVs and plots. The older MIL/GMT comparison script rewrites two folders:
 
 ```text
 ../../results/fea/comparisons/reference_mil_vs_gmt

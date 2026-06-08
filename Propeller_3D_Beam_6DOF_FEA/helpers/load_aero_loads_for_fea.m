@@ -21,7 +21,7 @@ end
 
 station_table = readtable(aero_station_csv,'VariableNamingRule','preserve');
 summary_payload = jsondecode(fileread(aero_summary_json));
-summary = extract_summary(summary_payload);
+summary = extract_summary(summary_payload,station_table,aero_station_csv);
 
 required_columns = {'r_R','r_m','qz_N_per_m'};
 validate_columns(station_table,required_columns,aero_station_csv);
@@ -198,7 +198,7 @@ values = double(values(:));
 
 end
 
-function summary = extract_summary(payload)
+function summary = extract_summary(payload,station_table,aero_station_csv)
 
 if isstruct(payload) && isfield(payload,'summary') && isstruct(payload.summary)
     summary = payload.summary;
@@ -209,8 +209,94 @@ if isstruct(payload) && isfield(payload,'summary') && isstruct(payload.summary)
             summary.(name) = payload.(name);
         end
     end
+elseif is_locked_final_summary(payload)
+    summary = extract_locked_final_case_summary(payload,station_table,aero_station_csv);
 else
     summary = payload;
+end
+
+end
+
+function tf = is_locked_final_summary(payload)
+
+tf = isstruct(payload) && isfield(payload,'operating_point') && ...
+    (isfield(payload,'mil') || isfield(payload,'gmt'));
+
+end
+
+function summary = extract_locked_final_case_summary(payload,station_table,aero_station_csv)
+
+case_key = infer_case_key(station_table,aero_station_csv);
+if ~isfield(payload,case_key)
+    error('Locked aero summary JSON does not contain inferred case key "%s".',case_key);
+end
+
+case_payload = payload.(case_key);
+operating_point = payload.operating_point;
+
+summary = struct();
+summary.case_name = text_field(case_payload,'case_label',upper(case_key));
+if isfield(case_payload,'case_label')
+    summary.case_label = case_payload.case_label;
+end
+summary.thrust_N = numeric_field(case_payload,'total_thrust_N',NaN);
+summary.torque_Nm = numeric_field(case_payload,'total_torque_Nm',NaN);
+summary.power_W = numeric_field(case_payload,'power_W',NaN);
+summary.rpm = numeric_field(operating_point,'rpm',NaN);
+summary.omega_rad_s = summary.rpm*2*pi/60;
+summary.target_thrust_N = numeric_field(operating_point,'target_thrust_N',NaN);
+summary.thrust_error_pct = numeric_field(case_payload,'thrust_error_pct',NaN);
+summary.target_matched = isfinite(summary.thrust_error_pct) && abs(summary.thrust_error_pct) < 0.1;
+summary.valid_for_thesis = logical_field(field_or_empty(payload,'validation'), ...
+    'locked_summary_matches_expected',true);
+summary.polar_is_placeholder = false;
+summary.warnings = text_field(case_payload,'warnings','');
+
+end
+
+function case_key = infer_case_key(station_table,aero_station_csv)
+
+case_key = '';
+if has_column(station_table,'case_label')
+    values = string(station_table.('case_label'));
+    values = values(strlength(strtrim(values)) > 0);
+    if ~isempty(values)
+        case_key = lower(char(values(1)));
+    end
+end
+if isempty(case_key) && has_column(station_table,'case_name')
+    values = string(station_table.('case_name'));
+    values = values(strlength(strtrim(values)) > 0);
+    if ~isempty(values)
+        text = lower(char(values(1)));
+        if contains(text,'mil')
+            case_key = 'mil';
+        elseif contains(text,'gmt')
+            case_key = 'gmt';
+        end
+    end
+end
+if isempty(case_key)
+    [~,stem] = fileparts(aero_station_csv);
+    text = lower(stem);
+    if contains(text,'mil')
+        case_key = 'mil';
+    elseif contains(text,'gmt')
+        case_key = 'gmt';
+    end
+end
+if ~any(strcmp(case_key,{'mil','gmt'}))
+    error('Could not infer MIL/GMT case from aero station CSV: %s',aero_station_csv);
+end
+
+end
+
+function value = field_or_empty(s,name)
+
+if isstruct(s) && isfield(s,name)
+    value = s.(name);
+else
+    value = struct();
 end
 
 end
