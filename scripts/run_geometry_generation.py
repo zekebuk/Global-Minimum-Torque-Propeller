@@ -1,4 +1,4 @@
-"""Export and audit the locked MIL/GMT geometry used by the thesis workflow."""
+"""Generate and audit the locked MIL/GMT geometry used by the thesis workflow."""
 
 from __future__ import annotations
 
@@ -6,22 +6,20 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-from prandtl_prop import config, geometry
+from scripts.helpers import geometry_generation, paths
 
 
 def main() -> int:
-    """Copy locked geometry to outputs and write a geometry audit report."""
+    """Export locked geometry and write a geometry audit report."""
 
-    exported = geometry.export_locked_geometry(config.OUTPUT_GEOMETRY_DIR)
-    audit = geometry.write_geometry_audit(config.OUTPUT_REPORTS_DIR / "geometry_audit.md")
+    exported, audit = geometry_generation.run_geometry_workflow()
     print("Locked geometry export complete")
     for path in exported:
-        print(f"  {path.relative_to(config.PROJECT_ROOT)}")
-    print(f"  {audit.relative_to(config.PROJECT_ROOT)}")
+        print(f"  {paths.relative(path)}")
+    print(f"  {paths.relative(audit)}")
     return 0
 
 

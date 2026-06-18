@@ -14,7 +14,7 @@ The primary locked inputs are station-based propeller geometry files for the MIL
 
 ## Main Workflow
 
-The workflow starts with station-based geometry, performs BEMT aerodynamic postprocessing, compares integrated thrust and torque, and generates thesis-ready plots and tables. Optional structural and XROTOR comparison artifacts are included for context where available.
+The workflow starts with station-based geometry, performs BEMT aerodynamic postprocessing, compares integrated thrust and torque, writes optional external-solver reports, and generates thesis-ready plots and tables. The documented final workflow entry points live in `scripts/`, with helper functions organized under `scripts/helpers/`.
 
 ## Geometry Generation
 
@@ -30,15 +30,19 @@ The BEMT implementation computes local inflow quantities, angle of attack, Reyno
 
 ## XROTOR Comparison
 
-XROTOR-related files are included where available as external-solver comparison artifacts. These files are treated as supporting numerical context, not as experimental validation. Reproducing XROTOR runs requires a local XROTOR executable and the associated input workflow.
+XROTOR-related files are included where available as external-solver comparison artifacts. These files are treated as supporting numerical context, not as experimental validation. Reproducing XROTOR runs requires a local XROTOR executable and the associated input workflow. The documented launcher is `scripts/run_xrotor_headless.py`.
 
 ## Structural Screening
 
-Structural screening files include reduced-order beam/frame FEA tooling and selected Abaqus-derived artifacts. These outputs support qualitative and comparative structural evaluation. They should not be interpreted as a full certification-grade structural validation.
+Structural screening files include reduced-order beam/frame FEA tooling and selected Abaqus-derived artifacts. These outputs support qualitative and comparative structural evaluation. They should not be interpreted as a full certification-grade structural validation. The documented report launcher is `scripts/run_matlab_fea.py`.
 
 ## Plot and Table Generation
 
-The clean workflow regenerates final figures and tables through `scripts/make_thesis_figures.py` and the associated wrapper scripts. Figure generation uses consistent labels, units, line styles, grids, and export locations.
+The clean workflow regenerates final figures and tables through `scripts/run_geometry_generation.py`, `scripts/run_aero_postprocessing.py`, and `scripts/make_thesis_figures.py`. Figure generation uses consistent labels, units, line styles, grids, and export locations.
+
+## Interactive Tools
+
+Interactive GUI launchers are kept under `scripts/gui/` for the Streamlit aero UI and MATLAB FEA viewer. These tools are useful for reviewing solver setup and structural visualizations, but they are not part of the locked reproducible thesis workflow.
 
 ## Output Files
 

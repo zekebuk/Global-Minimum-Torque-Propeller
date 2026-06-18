@@ -25,10 +25,4 @@ Outputs are written to `outputs/figures/` as PNG and PDF files where possible.
 - `fig_cumulative_torque_distribution.png`
 - `fig_mil_gmt_summary_bar.png`
 
-## Optional Comparison Figures
-
-- `fig_xrotor_bemt_comparison.png` when compatible XROTOR summary data are present.
-- `fig_structural_von_mises_envelope.png` when compatible structural summary data are present.
-- `fig_structural_displacement_envelope.png` when compatible structural summary data are present.
-
-The optional figures should be interpreted as supporting numerical context, not as experimental validation.
+XROTOR and MATLAB FEA context are documented through the workflow reports in `outputs/reports/`. The locked figure-generation script does not cite archived plotting scripts as final methodology.

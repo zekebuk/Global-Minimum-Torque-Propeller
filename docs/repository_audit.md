@@ -2,13 +2,22 @@
 
 ## Final Workflow Surface
 
-- Final scripts: `scripts/run_geometry_generation.py`, `scripts/run_bemt_comparison.py`, `scripts/run_xrotor_comparison.py`, `scripts/run_structural_screening.py`, and `scripts/make_thesis_figures.py`.
-- Final source package: `src/prandtl_prop/`.
+- Final scripts: `scripts/run_geometry_generation.py`, `scripts/run_aero_postprocessing.py`, `scripts/run_xrotor_headless.py`, `scripts/run_matlab_fea.py`, and `scripts/make_thesis_figures.py`.
+- Final helper modules: `scripts/helpers/`.
+- Retained source package and tested modules: `src/prandtl_prop/`.
 - Final locked data: `data/geometry/` and `data/processed/`.
 - Final regenerated outputs: `outputs/geometry_exports/`, `outputs/tables/`, `outputs/figures/`, and `outputs/reports/`.
 - Final tests: `tests/`.
 
 These are the only code paths cited by the README and workflow docs as the reproducible thesis workflow.
+
+## Interactive GUI Surface
+
+- GUI launchers: `scripts/gui/start_streamlit_aero_ui.py` and `scripts/gui/start_matlab_fea_ui.py`.
+- Streamlit entry point: `scripts/gui/streamlit_aero_ui.py`.
+- MATLAB viewer entry point: `scripts/gui/start_matlab_fea_ui.m`.
+
+The GUI launchers are for inspection and development convenience. They are deliberately excluded from the locked quick-start workflow.
 
 ## Archive Boundary
 
