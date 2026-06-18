@@ -1,15 +1,53 @@
-﻿__pycache__/
-*.pyc
+# Python
+__pycache__/
+*.py[cod]
 .pytest_cache/
-pytest_tmp*/
+.coverage
+htmlcov/
+
+# Environments
 .venv/
+venv/
+env/
+.codex-venv/
+.env
+
+# Local scratch
+pytest_tmp*/
+.pytest_tmp*/
+.ipynb_checkpoints/
+*.tmp
+*.bak
 *.log
-outputs/pipeline_validation/
-results/geometry_optimizer/
-results/aero_postprocess/
-results/verification/
-results/fea/beam_solver/
-figures_paper/geometry_optimizer/
-figures_paper/aero_postprocess/
-figures_paper/verification/
-figures_paper/fea/
+*.lck
+Thumbs.db
+.DS_Store
+
+# Generated thesis outputs that can be regenerated
+outputs/tmp/
+outputs/scratch/
+outputs/reports/*.tmp
+outputs/**/*.metadata.json
+
+# Solver scratch and large binary intermediates
+*.odb
+*.sim
+*.prt
+*.sta
+*.msg
+*.dat
+*.com
+*.lck
+*.ipm
+*.mdl
+*.stt
+*.SMABulk
+*.cae
+*.jnl
+
+# External tool build products
+external/**/build/
+external/**/bin/
+external/**/obj/
+
+# Keep small locked CSV/JSON data and thesis-ready output manifests tracked.

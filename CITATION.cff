@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use this thesis research code, please cite it using the metadata below."
+type: software
+title: "Aerodynamic Design and Structural Evaluation of a Global Minimum Torque Multirotor Propeller"
+authors:
+  - family-names: Bukovansky
+    given-names: Zeke
+    affiliation: "California Polytechnic State University, San Luis Obispo"
+year: 2026
+license: MIT
+keywords:
+  - propeller
+  - BEMT
+  - Prandtl
+  - multirotor
+  - thesis research code
+abstract: "Thesis research code for geometry generation, aerodynamic postprocessing, structural screening, and visualization of MIL and GMT-inspired 22-inch multirotor propeller geometries."
+institution: "California Polytechnic State University, San Luis Obispo"

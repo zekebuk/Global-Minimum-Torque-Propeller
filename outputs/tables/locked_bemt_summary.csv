@@ -1,0 +1,3 @@
+case,thrust_N,torque_Nm,power_W,notes
+MIL,35.0000001697,0.859265776418,359.928406757,Baseline matched case
+GMT,34.9999943456,0.846403074217,354.540490658,GMT-inspired matched case

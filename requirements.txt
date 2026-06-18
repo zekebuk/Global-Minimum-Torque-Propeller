@@ -3,5 +3,7 @@ pandas
 scipy
 matplotlib
 pytest
-streamlit
 openpyxl
+streamlit
+black
+ruff
