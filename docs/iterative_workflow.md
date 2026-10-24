@@ -157,6 +157,32 @@ stiffening parameter N L^2 / EI is about 14, so a large effect is expected. Peak
 reported outside a one-root-chord clamp zone, because the clamp's stress singularity is a modelling
 artefact.
 
+CalculiX runs single-threaded by default (`fea.threads`). Its multithreaded SPOOLES factorization
+gave 0.4% run-to-run eigenvalue scatter on identical decks, and occasionally a spurious negative
+eigenvalue (a false "0 Hz mode"). Single-threaded results are bit-identical.
+
+## Campbell diagram (`modal`)
+
+`prandtl run designs/gmt.yaml --stages modal` runs prestressed modal analyses at
+`fea.campbell_rpm_fractions` x design rpm (default 0, 0.5, 1.0, 1.2). Each one is a static NLGEOM
+step under CENTRIF, then a `*FREQUENCY` perturbation step with CENTRIF repeated. That captures both
+centrifugal stiffening and spin softening; Coriolis coupling is neglected. Modes are classified as
+flap, lag, or torsion from the tip motion, and each mode's margin to the nearest 1P..4P line at
+design rpm is reported. A warning fires below `fea.frequency_margin` (10%).
+
+Validation on a prismatic NACA 0012 cantilever: non-rotating first flap is within 1% of
+`1.8751^2/(2 pi) sqrt(EI / (rho A L^4))`, second flap within 0.6%, and first lag within 0.9%.
+Rotating, the Southwell coefficient (f^2 = f0^2 + K n^2) is K_flap = 1.49, the expected value for a
+hub offset r0/L = 0.2. The spin softening appears as K_flap - K_lag = 0.99, with about 1 expected.
+Each modal run also fits K across its rpm points and warns on a misfit above 2%. That check caught
+the multithreading defect above.
+
+Smoke-blade result (aluminium, NACA 4410 stand-ins; re-run with the real airfoils): the first flap
+mode is 123.8 Hz at rest and 150.0 Hz at 4000 rpm, with K = 1.61 and a fit error of 0.03%. That is
+an 11.1% margin above 2P (133.3 Hz) at design speed. Solving f(n) = 2n puts the **2P crossing at
+about 4800 rpm (1.2x design)**, which the 4800 rpm analysis confirms (160.03 Hz vs 160.0 Hz). Check
+this against the operating envelope once the real geometry and material are in.
+
 ## OpenFOAM hover CFD (`cfd`)
 
 - Steady incompressible `simpleFoam`, k-omega SST with wall functions, and an MRF cylinder zone
@@ -196,7 +222,24 @@ with its aero and cfd run keys. The factors absorb every BEMT-vs-CFD difference 
 tip/root effects, polar error, and *mesh error*), so they are only as good as the CFD mesh. Run a
 mesh study on the final geometry before trusting them.
 
-{{LOOP_RESULTS}}
+### Loop demonstration (coarse mesh; plumbing only)
+
+`prandtl loop designs/gmt.yaml --set-file designs/smoke_overrides.txt --set-file designs/cfd_smoke_overrides.txt`
+uses an analytic polar, NACA 4410 stand-in sections, and a 41k-cell mesh on which the blade is 1-2
+cells thick. It took 11 minutes on 4 cores:
+
+| Iteration | Collective | CFD thrust | Error vs 35 N | CFD torque |
+| --- | --- | --- | --- | --- |
+| 0 (uncorrected BEMT trim) | -1.31 deg | 27.80 N | -20.6% | 1.090 N*m |
+| 1 | +0.95 deg | 34.28 N | -2.1% | 1.564 N*m |
+| 2 | +1.17 deg | 34.72 N | -0.80% | 1.599 N*m |
+| 3 | +1.26 deg | 34.87 N | **-0.37%** (converged) | 1.620 N*m |
+
+After the first correction, the error falls about 2.5x per iteration. The factors are fitted at one
+collective and drift slightly as the blade re-pitches, which gives this linear convergence. Wall and
+far-field thrust agreed to 0.4% on every run. The calibrated drag factors (about 4x) and the torque
+well above BEMT are the coarse mesh's numerical drag, not physics. On a resolved mesh, expect a far
+smaller first correction.
 
 ## Next steps
 
@@ -208,5 +251,6 @@ mesh study on the final geometry before trusting them.
 3. Feed the calibrated BEMT back into the GMT twist inverse design
    (`archive/legacy_scripts/geometry/operating_point_inverse_design.py`), so the design itself, not
    only the collective, responds to CFD.
-4. Add a modal stage (CalculiX `*FREQUENCY` with the NLGEOM prestress) for a Campbell diagram
-   against 1P and 2P at 4000 rpm.
+4. Re-run `--stages modal` with the real airfoils and material. If the 2P crossing stays near
+   1.2x design rpm, consider stiffening the flap direction (thicker inboard sections) or changing
+   the material.

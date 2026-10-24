@@ -104,7 +104,12 @@ class FeaSpec:
     mesh_size_m: float = 0.003
     nlgeom: bool = True
     ccx_executable: str | None = None
+    threads: int = 1
     timeout_s: int = 3600
+    modes: int = 6
+    campbell_rpm_fractions: tuple[float, ...] = (0.0, 0.5, 1.0, 1.2)
+    excitation_harmonics: int = 4
+    frequency_margin: float = 0.10
 
 
 @dataclass(frozen=True)
@@ -276,6 +281,7 @@ def _validate(design: DesignCase) -> None:
         (design.structure.material.E_Pa > 0.0 and design.structure.material.density_kg_m3 > 0.0, "material E and density must be positive"),
         (design.airfoils.points_per_side >= 20, "airfoils.points_per_side must be >= 20"),
         (design.fea.mesh_size_m > 0.0, "fea.mesh_size_m must be positive"),
+        (1.0 in tuple(design.fea.campbell_rpm_fractions), "fea.campbell_rpm_fractions must include 1.0 (the design rpm)"),
         (design.cfd.iterations >= 1 and design.cfd.snapshots >= 1, "cfd.iterations and cfd.snapshots must be >= 1"),
         (design.cfd.surface_refinement_min <= design.cfd.surface_refinement_max, "cfd.surface_refinement_min must be <= max"),
     ]

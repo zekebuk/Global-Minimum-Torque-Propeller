@@ -92,3 +92,27 @@ def test_strip_distribution_reproduces_force_and_moment(prismatic) -> None:
         moment = np.cross(arm, forces[strip]).sum(axis=0)
         expected = np.array([getattr(loads, name)[index] for name in ("f_x", "f_y", "f_z", "m_x", "m_y", "m_z")]) * weights[index]
         np.testing.assert_allclose(np.concatenate([force, moment]), expected, atol=1.0e-9)
+
+
+def test_modal_frequencies_match_beam_theory_and_capture_spin_effects(prismatic) -> None:
+    """Non-rotating first flap f1 = 1.8751^2/(2 pi) sqrt(EI / (rho A L^4)); rotating: Southwell stiffening
+    raises flap frequencies, and spin softening makes the lag coefficient about 1 lower than the flap one."""
+
+    from prandtl_prop.structures import calculix
+
+    folder, _, sections, mesh, _ = prismatic
+    props = section_plane_properties(sections[0])
+    span = R1 - R0
+    expected = 1.8751**2 / (2.0 * np.pi) * np.sqrt(E * props.I_ss_m4 / (RHO * props.area_m2 * span**4))
+    results = {}
+    for rpm in (0.0, 4000.0):
+        deck = calculix.write_modal_deck(
+            folder / f"modal{int(rpm)}.inp", mesh, E_Pa=E, nu=NU, density_kg_m3=RHO, omega_rad_s=rpm * np.pi / 30.0, root_x_m=R0, modes=3
+        )
+        results[rpm] = {mode.kind: mode.frequency_hz for mode in reversed(calculix.run_modal(deck, mesh))}
+    assert results[0.0]["flap"] == pytest.approx(expected, rel=2.0e-2)
+    rev = 4000.0 / 60.0
+    k_flap = (results[4000.0]["flap"] ** 2 - results[0.0]["flap"] ** 2) / rev**2
+    k_lag = (results[4000.0]["lag"] ** 2 - results[0.0]["lag"] ** 2) / rev**2
+    assert 1.2 < k_flap < 1.8
+    assert k_flap - k_lag == pytest.approx(1.0, abs=0.1)

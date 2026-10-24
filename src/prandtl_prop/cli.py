@@ -33,6 +33,7 @@ HEADLINE = {
         "tip_deflection_z_ratio_fea_over_beam",
         "root_centrifugal_ratio_fea_over_beam",
     ),
+    "modal": ("mode1_flap_hz", "mode1_margin", "min_frequency_margin"),
     "cfd": (
         "cell_count",
         "thrust_N",

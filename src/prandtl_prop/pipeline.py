@@ -23,13 +23,14 @@ from prandtl_prop.cad.sections import BladeSection, build_sections, section_tabl
 from prandtl_prop.design import DesignCase, resolve_path
 from prandtl_prop.runs import RunStore, StageRun, stage_key
 
-STAGES = ("aero", "sections", "cad", "beam", "fea", "cfd")
+STAGES = ("aero", "sections", "cad", "beam", "fea", "modal", "cfd")
 STAGE_UPSTREAM = {
     "aero": (),
     "sections": ("aero",),
     "cad": ("aero", "sections"),
     "beam": ("aero", "sections"),
     "fea": ("aero", "sections", "cad", "beam"),
+    "modal": ("cad",),
     "cfd": ("aero", "cad"),
 }
 STAGE_MODULES = {
@@ -38,6 +39,7 @@ STAGE_MODULES = {
     "cad": ("prandtl_prop.cad.step", "prandtl_prop.pipeline"),
     "beam": ("prandtl_prop.structures.loads", "prandtl_prop.structures.beam", "prandtl_prop.pipeline"),
     "fea": ("prandtl_prop.structures.loads", "prandtl_prop.structures.calculix", "prandtl_prop.pipeline"),
+    "modal": ("prandtl_prop.structures.calculix", "prandtl_prop.pipeline"),
     "cfd": ("prandtl_prop.cfd.openfoam", "prandtl_prop.pipeline"),
 }
 
@@ -243,7 +245,9 @@ def _stage_fea(design: DesignCase, run: StageRun, upstream: dict[str, StageRun])
         root_x_m=root_x,
         nlgeom=design.fea.nlgeom,
     )
-    result = calculix.run_calculix(deck, ccx_executable=design.fea.ccx_executable, timeout_s=design.fea.timeout_s)
+    result = calculix.run_calculix(
+        deck, ccx_executable=design.fea.ccx_executable, threads=design.fea.threads, timeout_s=design.fea.timeout_s
+    )
     metrics, rows = calculix.summarize(mesh, result, sections, allowable_stress_Pa=material.allowable_stress_Pa)
     beam = upstream["beam"].metrics
     metrics["applied_aero_force_N"] = forces.sum(axis=0).tolist()
@@ -259,6 +263,85 @@ def _stage_fea(design: DesignCase, run: StageRun, upstream: dict[str, StageRun])
     if metrics["margin_of_safety_outside_clamp_zone"] < 0.0:
         warnings.append("Negative margin of safety outside the clamp zone")
     return metrics, warnings
+
+
+def _stage_modal(design: DesignCase, run: StageRun, upstream: dict[str, StageRun]) -> tuple[dict[str, Any], list[str]]:
+    """Campbell diagram: prestressed modes at several rotor speeds, checked against per-rev excitation."""
+
+    from prandtl_prop.structures import calculix
+
+    material = design.structure.material
+    spec = design.fea
+    op = _operating_point(design)
+    mesh = calculix.mesh_solid(upstream["cad"].output("blade_m.brep"), spec.mesh_size_m)
+    root_x = float(mesh.nodes[:, 0].min())
+    rows: list[dict[str, Any]] = []
+    design_modes: list[calculix.Mode] = []
+    for fraction in sorted(set(spec.campbell_rpm_fractions)):
+        rpm = op.rpm * fraction
+        deck = calculix.write_modal_deck(
+            run.path(f"modal_{int(round(rpm)):05d}rpm.inp"),
+            mesh,
+            E_Pa=material.E_Pa,
+            nu=material.nu,
+            density_kg_m3=material.density_kg_m3,
+            omega_rad_s=rpm * 2.0 * math.pi / 60.0,
+            root_x_m=root_x,
+            modes=spec.modes,
+        )
+        modes = calculix.run_modal(deck, mesh, ccx_executable=spec.ccx_executable, threads=spec.threads, timeout_s=spec.timeout_s)
+        for mode in modes:
+            rows.append({"rpm": rpm, "mode": mode.number, "kind": mode.kind, "frequency_hz": mode.frequency_hz})
+        if fraction == 1.0:
+            design_modes = modes
+        for path in run.directory.glob("modal_*"):
+            if path.suffix not in (".inp", ".dat", ".log"):
+                path.unlink()
+    _write_csv(run.path("campbell.csv"), rows)
+    rev_hz = op.rpm / 60.0
+    southwell = _southwell_check(rows)
+    metrics: dict[str, Any] = {"design_rpm": op.rpm, "one_per_rev_hz": rev_hz}
+    warnings: list[str] = []
+    worst = math.inf
+    for mode in design_modes:
+        nearest = min(range(1, spec.excitation_harmonics + 1), key=lambda k: abs(mode.frequency_hz - k * rev_hz))
+        margin = abs(mode.frequency_hz - nearest * rev_hz) / mode.frequency_hz
+        metrics[f"mode{mode.number}_{mode.kind}_hz"] = mode.frequency_hz
+        metrics[f"mode{mode.number}_nearest_excitation"] = f"{nearest}P"
+        metrics[f"mode{mode.number}_margin"] = margin
+        worst = min(worst, margin)
+        if margin < spec.frequency_margin:
+            warnings.append(
+                f"Mode {mode.number} ({mode.kind}, {mode.frequency_hz:.1f} Hz) is within {margin:.1%} of {nearest}P at design rpm"
+            )
+    metrics["min_frequency_margin"] = worst
+    metrics.update({f"southwell_{key}": value for key, value in southwell.items()})
+    if southwell.get("first_flap_fit_max_error_fraction", 0.0) > 0.02:
+        warnings.append("First flap mode does not follow f^2 = f0^2 + K n^2 across rpm (>2% misfit): check the modal results")
+    return metrics, warnings
+
+
+def _southwell_check(rows: list[dict[str, Any]]) -> dict[str, float]:
+    """Fit f^2 = f0^2 + K n^2 to the first flap mode over rpm; a large misfit flags a bad eigen-solution."""
+
+    import numpy as np
+
+    points = []
+    for rpm in sorted({row["rpm"] for row in rows}):
+        flap = [row["frequency_hz"] for row in rows if row["rpm"] == rpm and row["kind"] == "flap"]
+        if flap:
+            points.append((rpm / 60.0, min(flap)))
+    if len(points) < 3:
+        return {}
+    n, f = np.array(points).T
+    design = np.column_stack([np.ones_like(n), n**2])
+    (f0_squared, k), *_ = np.linalg.lstsq(design, f**2, rcond=None)
+    fitted = np.sqrt(np.maximum(design @ np.array([f0_squared, k]), 0.0))
+    return {
+        "first_flap_f0_hz": float(np.sqrt(max(f0_squared, 0.0))),
+        "first_flap_coefficient": float(k),
+        "first_flap_fit_max_error_fraction": float(np.max(np.abs(fitted - f) / f)),
+    }
 
 
 def _stage_cfd(design: DesignCase, run: StageRun, upstream: dict[str, StageRun]) -> tuple[dict[str, Any], list[str]]:
@@ -372,6 +455,7 @@ STAGE_FUNCTIONS: dict[str, Callable[[DesignCase, StageRun, dict[str, StageRun]],
     "cad": _stage_cad,
     "beam": _stage_beam,
     "fea": _stage_fea,
+    "modal": _stage_modal,
     "cfd": _stage_cfd,
 }
 
@@ -381,6 +465,7 @@ STAGE_DESIGN_INPUTS = {
     "cad": ("geometry", "cad", "operating_point", "structure"),
     "beam": ("operating_point", "structure"),
     "fea": ("operating_point", "structure", "fea"),
+    "modal": ("operating_point", "structure", "fea"),
     "cfd": ("operating_point", "cfd"),
 }
 
