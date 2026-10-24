@@ -19,6 +19,7 @@ dependencies = [
 
 [project.optional-dependencies]
 cad = ["cadquery>=2.4"]
+fea = ["gmsh>=4.11"]
 gui = ["streamlit", "pandas", "openpyxl"]
 dev = ["pytest>=8", "ruff>=0.5"]
 

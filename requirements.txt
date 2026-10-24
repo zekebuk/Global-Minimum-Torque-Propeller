@@ -1,2 +1,2 @@
 # Convenience install of everything, including optional CAD and GUI extras.
--e .[cad,gui,dev]
+-e .[cad,fea,gui,dev]

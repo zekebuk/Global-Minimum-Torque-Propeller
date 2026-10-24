@@ -22,13 +22,20 @@ from prandtl_prop.cad.sections import BladeSection, build_sections, section_tabl
 from prandtl_prop.design import DesignCase, resolve_path
 from prandtl_prop.runs import RunStore, StageRun, stage_key
 
-STAGES = ("aero", "sections", "cad", "beam")
-STAGE_UPSTREAM = {"aero": (), "sections": ("aero",), "cad": ("aero", "sections"), "beam": ("aero", "sections")}
+STAGES = ("aero", "sections", "cad", "beam", "fea")
+STAGE_UPSTREAM = {
+    "aero": (),
+    "sections": ("aero",),
+    "cad": ("aero", "sections"),
+    "beam": ("aero", "sections"),
+    "fea": ("aero", "sections", "cad", "beam"),
+}
 STAGE_MODULES = {
     "aero": ("prandtl_prop.aero.bemt", "prandtl_prop.aero.polars", "prandtl_prop.pipeline"),
     "sections": ("prandtl_prop.cad.airfoils", "prandtl_prop.cad.sections", "prandtl_prop.pipeline"),
     "cad": ("prandtl_prop.cad.step", "prandtl_prop.pipeline"),
     "beam": ("prandtl_prop.structures.loads", "prandtl_prop.structures.beam", "prandtl_prop.pipeline"),
+    "fea": ("prandtl_prop.structures.loads", "prandtl_prop.structures.calculix", "prandtl_prop.pipeline"),
 }
 
 
@@ -192,11 +199,66 @@ def _stage_beam(design: DesignCase, run: StageRun, upstream: dict[str, StageRun]
     return result.metrics, warnings
 
 
+def _stage_fea(design: DesignCase, run: StageRun, upstream: dict[str, StageRun]) -> tuple[dict[str, Any], list[str]]:
+    import numpy as np
+
+    from prandtl_prop.structures import calculix
+    from prandtl_prop.structures.loads import map_station_loads
+
+    material = design.structure.material
+    op = _operating_point(design)
+    sections = design_sections(design, upstream["aero"])
+    station_rows = _read_csv(upstream["aero"].output("stations.csv"))
+    # Centrifugal load is applied exactly by CENTRIF, so only aerodynamic line loads are mapped.
+    aero_loads = map_station_loads(
+        station_rows,
+        sections,
+        blade_count=op.blade_count,
+        omega_rad_s=op.omega_rad_s,
+        rho_air_kg_m3=op.rho_kg_m3,
+        material_density_kg_m3=material.density_kg_m3,
+        include_centrifugal=False,
+        include_pitching_moment=design.structure.include_aero_pitching_moment,
+    )
+    mesh = calculix.mesh_solid(upstream["cad"].output("blade_m.brep"), design.fea.mesh_size_m)
+    root_x = float(mesh.nodes[:, 0].min())
+    weights = np.array([float(row["dr_m"]) for row in station_rows])
+    forces = calculix.strip_nodal_forces(mesh, sections, aero_loads, weights, root_x_m=root_x)
+    deck = calculix.write_input_deck(
+        run.path("blade.inp"),
+        mesh,
+        E_Pa=material.E_Pa,
+        nu=material.nu,
+        density_kg_m3=material.density_kg_m3,
+        omega_rad_s=op.omega_rad_s if design.structure.include_centrifugal else 0.0,
+        nodal_forces=forces,
+        root_x_m=root_x,
+        nlgeom=design.fea.nlgeom,
+    )
+    result = calculix.run_calculix(deck, ccx_executable=design.fea.ccx_executable, timeout_s=design.fea.timeout_s)
+    metrics, rows = calculix.summarize(mesh, result, sections, allowable_stress_Pa=material.allowable_stress_Pa)
+    beam = upstream["beam"].metrics
+    metrics["applied_aero_force_N"] = forces.sum(axis=0).tolist()
+    metrics["tip_deflection_z_ratio_fea_over_beam"] = metrics["tip_deflection_z_m"] / beam["tip_deflection_z_m"]
+    metrics["root_centrifugal_ratio_fea_over_beam"] = -metrics["root_reaction_x_N"] / beam["root_centrifugal_force_N"]
+    _write_csv(run.path("fea_station_stress.csv"), rows)
+    for name in ("blade.dat", "blade.sta", "blade.cvg", "spooles.out"):
+        if run.path(name).exists() and name != "blade.dat":
+            run.path(name).unlink()
+    warnings = []
+    if mesh.min_quality < 0.05:
+        warnings.append(f"Poor mesh quality (min SICN {mesh.min_quality:.3f}); refine fea.mesh_size_m")
+    if metrics["margin_of_safety_outside_clamp_zone"] < 0.0:
+        warnings.append("Negative margin of safety outside the clamp zone")
+    return metrics, warnings
+
+
 STAGE_FUNCTIONS: dict[str, Callable[[DesignCase, StageRun, dict[str, StageRun]], tuple[dict[str, Any], list[str]]]] = {
     "aero": _stage_aero,
     "sections": _stage_sections,
     "cad": _stage_cad,
     "beam": _stage_beam,
+    "fea": _stage_fea,
 }
 
 STAGE_DESIGN_INPUTS = {
@@ -204,6 +266,7 @@ STAGE_DESIGN_INPUTS = {
     "sections": ("geometry", "airfoils", "cad.apply_trim_offset"),
     "cad": ("geometry", "cad", "operating_point", "structure"),
     "beam": ("operating_point", "structure"),
+    "fea": ("operating_point", "structure", "fea"),
 }
 
 

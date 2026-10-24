@@ -25,6 +25,14 @@ HEADLINE = {
     "sections": ("section_count", "substituted_airfoil_count"),
     "cad": ("blade_mass_kg", "blade_solid_valid", "loft_vs_section_quadrature_volume_ratio"),
     "beam": ("max_von_mises_Pa", "margin_of_safety", "tip_deflection_z_m", "tip_elastic_twist_deg", "root_centrifugal_force_N"),
+    "fea": (
+        "element_count",
+        "max_von_mises_outside_clamp_zone_Pa",
+        "margin_of_safety_outside_clamp_zone",
+        "tip_deflection_z_m",
+        "tip_deflection_z_ratio_fea_over_beam",
+        "root_centrifugal_ratio_fea_over_beam",
+    ),
 }
 
 

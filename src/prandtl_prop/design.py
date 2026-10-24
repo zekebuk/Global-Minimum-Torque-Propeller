@@ -99,6 +99,14 @@ class CadSpec:
 
 
 @dataclass(frozen=True)
+class FeaSpec:
+    mesh_size_m: float = 0.003
+    nlgeom: bool = True
+    ccx_executable: str | None = None
+    timeout_s: int = 3600
+
+
+@dataclass(frozen=True)
 class DesignCase:
     name: str
     geometry: GeometrySpec
@@ -108,6 +116,7 @@ class DesignCase:
     airfoils: AirfoilSpec = field(default_factory=AirfoilSpec)
     structure: StructureSpec = field(default_factory=StructureSpec)
     cad: CadSpec = field(default_factory=CadSpec)
+    fea: FeaSpec = field(default_factory=FeaSpec)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -226,6 +235,7 @@ _NESTED: dict[tuple[type, str], type] = {
     (DesignCase, "airfoils"): AirfoilSpec,
     (DesignCase, "structure"): StructureSpec,
     (DesignCase, "cad"): CadSpec,
+    (DesignCase, "fea"): FeaSpec,
     (AeroSpec, "polar"): PolarSpec,
     (StructureSpec, "material"): MaterialSpec,
 }
@@ -242,6 +252,7 @@ def _validate(design: DesignCase) -> None:
         (not design.aero.trim_to_target_thrust or op.target_thrust_N is not None, "trim_to_target_thrust needs target_thrust_N"),
         (design.structure.material.E_Pa > 0.0 and design.structure.material.density_kg_m3 > 0.0, "material E and density must be positive"),
         (design.airfoils.points_per_side >= 20, "airfoils.points_per_side must be >= 20"),
+        (design.fea.mesh_size_m > 0.0, "fea.mesh_size_m must be positive"),
     ]
     for ok, message in checks:
         if not ok:
