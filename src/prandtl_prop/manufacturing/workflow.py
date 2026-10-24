@@ -91,6 +91,7 @@ def optimize_for_molding(
         "rpm_band": [rpm_band[0] * base.operating_point.rpm, rpm_band[1] * base.operating_point.rpm],
         "frequency_margin": margin,
         "model_cushion": model_cushion,
+        "higher_mode_cushion": problem.other_margin - margin,
         "max_section_thickness_m": max_section_thickness_m,
         "trailing_edge_thickness_m": trailing_edge_thickness_m,
         "min_thickness_scale": min_scale,

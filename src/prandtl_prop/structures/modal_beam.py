@@ -86,6 +86,22 @@ def concat_arrays(*parts: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     return {key: np.concatenate([part[key] for part in parts]) for key in parts[0]}
 
 
+def blade_arrays(sections: Sequence[BladeSection], root_geometry=None) -> dict[str, np.ndarray]:
+    """Section properties for the modal beam, clamped where the hub grips the blade.
+
+    With a root tab (``prandtl_prop.cad.root.RootGeometry``), the beam starts at the tab's outer clamp
+    edge and runs through the transition outlines before the aero stations. Clamping at the first
+    aero station instead overestimated flap 1 by ~14% against CalculiX (159 vs 139 Hz).
+    """
+
+    data = section_arrays(sections)
+    if root_geometry is None:
+        return data
+    from prandtl_prop.cad.root import root_outlines
+
+    return concat_arrays(outline_arrays(root_outlines(sections[0], root_geometry)[1:]), data)
+
+
 def rotating_modes(
     sections: Sequence[BladeSection] | dict[str, np.ndarray],
     *,

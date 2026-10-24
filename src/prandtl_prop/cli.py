@@ -35,6 +35,7 @@ HEADLINE = {
         "root_centrifugal_ratio_fea_over_beam",
     ),
     "modal": ("mode1_flap_hz", "mode1_margin", "min_frequency_margin", "min_frequency_margin_over_band"),
+    "mold": ("core_valid", "cavity_valid", "impression_over_part_volume", "part_volume_fraction_in_cavity_half", "clearance_ok"),
     "cfd": (
         "cell_count",
         "thrust_N",

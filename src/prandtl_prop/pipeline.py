@@ -176,7 +176,7 @@ def _stage_dfm(design: DesignCase, run: StageRun, upstream: dict[str, StageRun])
     """Injection-molding checks plus a fast rotating-beam Campbell check over the operating rpm band."""
 
     from prandtl_prop.manufacturing.injection import MoldingRules, check_molding
-    from prandtl_prop.structures.modal_beam import campbell, excitation_margin
+    from prandtl_prop.structures.modal_beam import blade_arrays, campbell, excitation_margin
 
     spec = design.molding
     rules = MoldingRules(
@@ -211,7 +211,8 @@ def _stage_dfm(design: DesignCase, run: StageRun, upstream: dict[str, StageRun])
     material = design.structure.material
     lo, hi = spec.operating_rpm_fractions
     rpm_values = list(np.linspace(lo, hi, 9) * design.operating_point.rpm)
-    modes = campbell(sections, E_Pa=material.E_Pa, density_kg_m3=material.density_kg_m3, rpm_values=rpm_values, count=3)
+    beam = blade_arrays(sections, design.root.geometry() if design.root.enabled else None)
+    modes = campbell(beam, E_Pa=material.E_Pa, density_kg_m3=material.density_kg_m3, rpm_values=rpm_values, count=3)
     report["operating_rpm_range"] = [rpm_values[0], rpm_values[-1]]
     report["beam_flap1_hz_over_band"] = [m[0].frequency_hz for m in modes]
     report["beam_excitation_margin_over_band"] = excitation_margin(modes, rpm_values)
@@ -364,12 +365,20 @@ def _stage_fea(design: DesignCase, run: StageRun, upstream: dict[str, StageRun])
     for name in ("blade.dat", "blade.sta", "blade.cvg", "spooles.out"):
         if run.path(name).exists() and name != "blade.dat":
             run.path(name).unlink()
-    warnings = []
-    if mesh.min_quality < 0.01:  # curved C3D10 at a sharp trailing edge typically reach ~0.03 with no inverted elements
-        warnings.append(f"Poor mesh quality (min SICN {mesh.min_quality:.3f}); refine fea.mesh_size_m")
+    metrics["mesh_curved_elements"] = mesh.curved
+    warnings = _mesh_warnings(mesh)
     if metrics["margin_of_safety_outside_clamp_zone"] < 0.0:
         warnings.append("Negative margin of safety outside the clamp zone")
     return metrics, warnings
+
+
+def _mesh_warnings(mesh) -> list[str]:
+    warnings = []
+    if mesh.min_quality < 0.01:  # curved C3D10 at a sharp trailing edge typically reach ~0.03 with no inverted elements
+        warnings.append(f"Poor mesh quality (min SICN {mesh.min_quality:.3f}); refine fea.mesh_size_m")
+    if not mesh.curved:
+        warnings.append("gmsh's high-order optimiser aborted; meshed with straight-sided C3D10 (geometry faceted at element size)")
+    return warnings
 
 
 def _root_boundary(design: DesignCase, sections: list[BladeSection], mesh) -> tuple[np.ndarray | None, float | None, float | None]:
@@ -453,7 +462,7 @@ def _stage_modal(design: DesignCase, run: StageRun, upstream: dict[str, StageRun
     rev_hz = op.rpm / 60.0
     southwell = _southwell_check(rows)
     metrics: dict[str, Any] = {"design_rpm": op.rpm, "one_per_rev_hz": rev_hz}
-    warnings: list[str] = []
+    warnings: list[str] = _mesh_warnings(mesh)
     worst = math.inf
     for mode in design_modes:
         nearest = min(range(1, spec.excitation_harmonics + 1), key=lambda k: abs(mode.frequency_hz - k * rev_hz))
@@ -466,6 +475,7 @@ def _stage_modal(design: DesignCase, run: StageRun, upstream: dict[str, StageRun
             warnings.append(
                 f"Mode {mode.number} ({mode.kind}, {mode.frequency_hz:.1f} Hz) is within {margin:.1%} of {nearest}P at design rpm"
             )
+    metrics["mesh_curved_elements"] = mesh.curved
     metrics["min_frequency_margin"] = worst
     # Over the operating band, using every Campbell speed that falls inside it (include the band edges in
     # fea.campbell_rpm_fractions to check them).

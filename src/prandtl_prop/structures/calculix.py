@@ -45,6 +45,7 @@ class TetMesh:
     elements: np.ndarray  # (m, 10) zero-based node indices, CalculiX order
     surface_nodes: np.ndarray  # zero-based indices of nodes on the boundary surface
     min_quality: float  # worst element signed inverse condition number (gmsh SICN; <= 0 is invalid)
+    curved: bool = True  # False: straight-sided C3D10 (fallback when gmsh's high-order optimiser aborts)
 
 
 @dataclass(frozen=True)
@@ -57,12 +58,8 @@ class CalculixResult:
     log: str
 
 
-def mesh_solid(brep_path: Path, size_m: float, *, min_size_m: float | None = None) -> TetMesh:
-    """Mesh a BREP solid with second-order tetrahedra.
-
-    Meshing is single-threaded on purpose: multithreaded 3D meshing is not reproducible, and the
-    pipeline's cache assumes identical inputs give identical results.
-    """
+def _mesh_solid(brep_path: Path, size_m: float, min_size_m: float | None, curved: bool) -> TetMesh:
+    """Mesh a BREP solid with second-order tetrahedra (see ``mesh_solid``)."""
 
     import gmsh
 
@@ -78,7 +75,8 @@ def mesh_solid(brep_path: Path, size_m: float, *, min_size_m: float | None = Non
         gmsh.option.setNumber("Mesh.MeshSizeMin", min_size_m if min_size_m is not None else size_m / 4.0)
         gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 12)
         gmsh.option.setNumber("Mesh.ElementOrder", 2)
-        gmsh.option.setNumber("Mesh.HighOrderOptimize", 1)
+        gmsh.option.setNumber("Mesh.SecondOrderLinear", 0 if curved else 1)
+        gmsh.option.setNumber("Mesh.HighOrderOptimize", 1 if curved else 0)
         gmsh.model.mesh.generate(3)
         tags, coords, _ = gmsh.model.mesh.getNodes()
         index_of = {int(tag): i for i, tag in enumerate(tags)}
@@ -95,7 +93,30 @@ def mesh_solid(brep_path: Path, size_m: float, *, min_size_m: float | None = Non
     if len(tets) == 0:
         raise RuntimeError(f"gmsh produced no tetrahedra for {brep_path}")
     surface = np.array(sorted(index_of[tag] for tag in surface_tags))
-    return TetMesh(nodes, tets[:, GMSH_TO_CCX_TET10], surface, float(np.min(quality)))
+    return TetMesh(nodes, tets[:, GMSH_TO_CCX_TET10], surface, float(np.min(quality)), curved)
+
+
+def mesh_solid(brep_path: Path, size_m: float, *, min_size_m: float | None = None) -> TetMesh:
+    """Mesh a BREP solid with second-order tetrahedra, in a child process.
+
+    Meshing is single-threaded on purpose: multithreaded 3D meshing is not reproducible, and the
+    pipeline's cache assumes identical inputs give identical results. gmsh's high-order optimiser
+    can abort the whole process (an uncaught C++ exception, "Failed to reach critical value ...
+    ScaledJac") on thin trailing edges, so the mesh is made in a spawned child; if it dies, the mesh
+    is remade with straight-sided C3D10 (mid-edge nodes on the chords, which cannot invert).
+    """
+
+    import multiprocessing
+    from concurrent.futures import ProcessPoolExecutor
+    from concurrent.futures.process import BrokenProcessPool
+
+    context = multiprocessing.get_context("spawn")
+    try:
+        with ProcessPoolExecutor(1, mp_context=context) as pool:
+            return pool.submit(_mesh_solid, Path(brep_path), size_m, min_size_m, True).result()
+    except BrokenProcessPool:
+        with ProcessPoolExecutor(1, mp_context=context) as pool:
+            return pool.submit(_mesh_solid, Path(brep_path), size_m, min_size_m, False).result()
 
 
 def strip_nodal_forces(

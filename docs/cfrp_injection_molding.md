@@ -107,7 +107,121 @@ check measured margins against the blade frequency instead of the excitation (so
 and the Campbell check covered only the design speed. Option B sat at 9.6% at the band edge without
 the cushion.
 
+## Full blade (option A) with the clamped root
+
+`designs/gmt_peek_cf30.yaml` is option A with `root.enabled: true`. `prandtl run ... --stages cad`
+lofts the whole part: a flat superellipse tab (28 x 8.5 mm, r = 14-34 mm) that the hub plates clamp,
+two 5.3 mm bolt holes along z at r = 20 and 29 mm, a smoothstep transition (chordwise position,
+thickness, and pitch all blend with zero slope at both ends) into the first aero station at
+r = 55.9 mm, then the optimised aero sections to the tip. Every outline has the same point count,
+correspondence, and 0.6 mm blunt TE, and the DFM stage checks all of them for undercuts (undercut-free
+for pulls of 0-9 deg; best 2 deg). Volume 52.7 cm^3, 74 g in PEEK-CF30.
+
+CalculiX on the full blade, with only the tab's top and bottom faces clamped (smoke inputs):
+
+| | Full blade, tab clamp | Earlier confirmation, clamp at first aero station |
+| --- | --- | --- |
+| Peak von Mises outside the clamp zone (NLGEOM) | 12.7 MPa (MoS 7.2 vs 104 MPa) | 10.8 MPa |
+| Tip flap deflection | 2.0 mm | 1.7 mm |
+| First flap at 0 / 4000 rpm | 111.8 / 138.8 Hz | 130.6 / 158.7 Hz |
+| Smallest separation over 3600-4400 rpm | **2.0% (fails the 10% target)** | 11.7% |
+
+Bolts (all radial force through the bolts, double shear): bolt shear 17.2 MPa, tab bearing 16.8 MPa,
+net section 7.9 MPa, shear-out 7.4 MPa; margin 3.4 after knockdowns of 3 on net section (hole stress
+concentration) and 2 on shear-out. The inner bolt's edge distance is only 1.13 D. Short-fibre CFRP
+practice wants at least 2-3 D, so extend the tab inward (tab_inner_radius_m about 0.009) if the hub allows.
+
+**The clamp location moves the first flap frequency by 14%, and option A no longer clears 2P.** The
+optimiser's beam model clamped the blade at the first aero station. The hub actually grips the tab
+inside r = 34 mm, so the free length grows from 223 to 245 mm (f ~ 1/L^2 predicts 0.83x; CalculiX
+gives 0.86x). The beam model now starts at the tab clamp edge and includes the transition outlines
+when `root.enabled` is set, and it matches CalculiX to 1.4% (140.7 vs 138.8 Hz). The optimiser
+uses a 2% cushion for these designs.
+
+Re-optimising with the root modelled (9 mm thickness cap, 10% margin over 0.9-1.1 x rpm):
+
+- **PEEK-CF30, stiff 2P-3P: infeasible.** The window narrows to f0 = 139-141 Hz, and the thickness cap
+  binds at the root. With option A's thickness, moving the hub grip out to r = 48 mm still gives only
+  7% from 2P (beam model).
+- **PEEK-CF30, soft 1P-2P: feasible**, with the tip sections 37% thicker. Flap 1 is 106-117 Hz over
+  the band, at +0.66% torque (a 0.17% share of that is the blunt TE alone), 52 g, 31 MPa, and a 4.9 mm
+  tip deflection.
+- **PA6-CF30, soft 1P-2P (option C, `designs/gmt_pa6_cf30.yaml`): feasible with no thickening.** The
+  root's flexibility moves the as-designed blade into the soft window by itself: flap 1 is 99-111 Hz
+  over the band, at +0.17% torque (the 0.6 mm blunt TE only), 46 g, 28.6 MPa (allowable 60 MPa), and
+  a 7.5 mm beam tip deflection. It crosses 2P on spin-up, like option B.
+  CalculiX on the full blade with the tab clamp confirms flap 1 at 97.9 / 103.7 / 109.8 Hz at
+  3600 / 4000 / 4400 rpm (beam within 1.2%, at least 18% from 2P). But **flap mode 2 sits 8.7% from 4P at
+  4400 rpm** (319 vs 293 Hz), because the beam read it 3.7% high. The optimiser now gives modes above
+  flap 1 a 5% cushion (Euler-Bernoulli neglects shear and rotary inertia, an error that grows with
+  mode number). Re-optimised with that cushion, `designs/gmt_pa6_cf30.yaml` makes
+  the root 12% thicker (scales 1.12 / 1.0 / 1.0 / 1.0) for +0.18% torque. Its CalculiX confirmation is
+  in progress.
+
+So with a realistic root, the stiff design needs one of these:
+
+1. A hub grip reaching about the first aero station, plus a cored or ribbed root thicker than 9 mm.
+2. A stiffer material: long-fibre or continuous-fibre overmolded spar, or a higher-modulus grade.
+3. Accepting the soft window and a 2P crossing on spin-up, as option B already did.
+
+The mold below is built for option A as specified. The mold stage regenerates it for any of these
+choices in one command.
+
+## Two-plate mold
+
+```bash
+prandtl run designs/gmt_peek_cf30.yaml --stages cad,mold   # about 30 min; STEP in mm under runs/<design>/mold/<key>/
+```
+
+![Full blade](images/gmt_peek_cf30_full_blade.png)
+
+![Mold, exploded](images/gmt_peek_cf30_mold.png)
+
+Outputs: `mold_core.step`, `mold_cavity.step`, `part_shrink_compensated.step` (mm, for SolidWorks or
+CAM), STL copies in metres, and `mold_render.png`. Settings are under `mold:` in the design file
+(`MoldDesign` in `src/prandtl_prop/manufacturing/mold.py`).
+
+- **Opening direction +z (the thrust axis).** The bolt-hole core pins are parallel to the pull, and
+  the DFM stage confirms every section is undercut-free at that pull.
+- **Parting surface.** Inside each section it follows the mid-line between the upper and lower
+  surfaces, which always stays inside the section; a chord-line split exits a cambered section near
+  the TE and traps steel. At the LE it leaves through the extreme-y point, where the wall is parallel
+  to the pull. On the 0.6 mm blunt TE it leaves through the flat, 20% of the way from the drafted
+  corner, which chamfers that corner by at most 0.12 mm. Outside the part it eases to horizontal
+  over 3 mm.
+- **Construction.** Each half is lofted directly from per-section profiles (parting line, then the
+  part's upper or lower surface, then parting line, then the insert face), through the same section
+  stations as the part. No boolean against the part is needed. Exact booleans of the lofted part
+  against a parting region were tried first and failed silently near the silhouette.
+- **Shrinkage.** 0.2% along the flow (span) and 0.8% across (y, z), applied about the rotor axis, so
+  section pitch angles are unchanged. Warpage from orientation-dependent shrinkage is not modelled.
+- **Features.** Bolt-hole core pins from both halves meeting at the parting surface; a 6 mm
+  full-round runner on the parting surface into a 3 mm gate at the tab's inner end (spanwise fill,
+  so fibres align with the span); 4 mm ejector pins in the core on the tab and runner (off the aero
+  surfaces); 12 mm leader-pin bores; three 8 mm spanwise cooling channels per half.
+
+Checks on the option A mold (smoke inputs):
+
+| Check | Result |
+| --- | --- |
+| Core and cavity valid solids (OpenCascade) | yes / yes |
+| Impression volume / shrink-compensated part volume | 1.0002 |
+| Part volume in the cavity half | 50.0% |
+| Core blank + cavity blank / insert block | 0.999994 (one shared parting surface) |
+| Insert size | 321 x 105 x 72 mm |
+| Steel, cooling channel to part / to ejector pins | 8.0 mm / 4.0 mm (>= 3 mm required) |
+
+Before cutting steel, also: add the sprue bushing, the locating ring, and the ejector plate to suit
+the press; vent the tip and the TE (last to fill); confirm the gate size and cooling layout with a
+fill/pack/warp simulation; and apply its warpage compensation on top of the linear shrink factors.
+
 ## Recommendation
+
+**Updated after modelling the clamped root (see "Full blade" above):** a stiff 2P-3P design is no
+longer reachable in PEEK-CF30 within the molding limits. Of the root-aware designs, **option C
+(PA6-CF30, as-designed thickness, soft 1P-2P)** costs the least: +0.17% torque, 46 g. It passes 2P on
+every spin-up, so the airframe and spin-up rate decide whether that is acceptable. The notes below
+date from before the root was modelled.
 
 - **Option A (PEEK-CF30, stiff)** is the conservative choice. No 1P/2P crossing inside the band, low
   stress, small deflection, and the GMT aero advantage survives (+0.30% torque against a GMT-MIL
@@ -127,4 +241,5 @@ the cushion.
 3. Run a mold-filling and warpage simulation (Moldflow or Moldex3D). Anisotropic shrinkage
    (about 0.2-0.4% along the flow, 0.8-1.2% across) can change twist, the quantity this design
    optimises. Compensate the mold geometry for it.
-4. Design the root/hub interface (insert, bolt pattern), which is outside this model.
+4. Match the root tab to the real hub. The grip radius sets the first flap frequency (see "Full
+   blade" above), and the inner bolt's edge distance should reach 2-3 D.

@@ -30,7 +30,7 @@ from prandtl_prop.cad.sections import BladeSection
 from prandtl_prop.manufacturing.injection import MoldingRules, check_molding, hoerner_form_factor, molded_sections, thickness_schedule
 from prandtl_prop.structures.beam import solve_beam
 from prandtl_prop.structures.loads import map_station_loads
-from prandtl_prop.structures.modal_beam import BeamMode, concat_arrays, outline_arrays, rotating_modes, section_arrays
+from prandtl_prop.structures.modal_beam import BeamMode, blade_arrays, rotating_modes
 
 CONTROL_R_R = (0.2, 0.45, 0.7, 1.0)
 
@@ -102,6 +102,7 @@ class ThicknessProblem:
         control_r_R: Sequence[float] = CONTROL_R_R,
         radius_m: float,
         model_cushion: float = 0.01,
+        higher_mode_cushion: float = 0.05,
         root_geometry=None,
     ) -> None:
         self.base = list(base_sections)
@@ -114,6 +115,9 @@ class ThicknessProblem:
         # cushion: the optimiser targets margin + cushion and the solid model confirms at least margin.
         self.margin, self.sf, self.max_tip = margin + model_cushion, stress_safety_factor, max_tip_deflection_m
         self.required_margin = margin
+        # Euler-Bernoulli neglects shear and rotary inertia, an error that grows with mode number: the
+        # second flap mode reads 2-4% high against CalculiX (lag ~25%), so higher modes get more cushion.
+        self.other_margin = margin + higher_mode_cushion
         self.control = list(control_r_R)
         self.r_R = np.array([s.r_m for s in self.base]) / radius_m
         self.base_tc = np.array([s.airfoil.max_thickness for s in self.base])
@@ -135,19 +139,7 @@ class ThicknessProblem:
         self._cache: dict[tuple[float, ...], Evaluation] = {}
 
     def beam_arrays(self, sections: Sequence[BladeSection]) -> dict[str, np.ndarray]:
-        """Section properties for the modal beam, clamped where the hub grips the blade.
-
-        With a root tab, the beam starts at the tab's outer clamp edge and runs through the transition
-        outlines (which blend into the thickened root airfoil) before the aero stations. Clamping at
-        the first aero station instead overestimated flap 1 by ~14% against CalculiX (159 vs 139 Hz).
-        """
-
-        data = section_arrays(sections)
-        if self.root_geometry is None:
-            return data
-        from prandtl_prop.cad.root import root_outlines
-
-        return concat_arrays(outline_arrays(root_outlines(sections[0], self.root_geometry)[1:]), data)
+        return blade_arrays(sections, self.root_geometry)
 
     def schedule(self, control_scales: np.ndarray) -> np.ndarray:
         return thickness_schedule(self.r_R, list(zip(self.control, control_scales, strict=True)))
@@ -211,7 +203,7 @@ class ThicknessProblem:
             [
                 e.flap1_hz / (k * n) - (1.0 + self.margin),
                 (1.0 - self.margin) - e.flap1_hz / ((k + 1) * n),
-                [e.other_modes_margin - self.margin],
+                [e.other_modes_margin - self.other_margin],
                 [1.0 - e.max_stress_Pa / allowable],
                 [1.0 - e.tip_deflection_m / self.max_tip],
                 1.0 - t_max / self.rules.max_section_thickness_m,
