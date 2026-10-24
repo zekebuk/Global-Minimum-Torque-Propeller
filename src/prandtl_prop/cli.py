@@ -34,7 +34,7 @@ HEADLINE = {
         "tip_deflection_z_ratio_fea_over_beam",
         "root_centrifugal_ratio_fea_over_beam",
     ),
-    "modal": ("mode1_flap_hz", "mode1_margin", "min_frequency_margin"),
+    "modal": ("mode1_flap_hz", "mode1_margin", "min_frequency_margin", "min_frequency_margin_over_band"),
     "cfd": (
         "cell_count",
         "thrust_N",
@@ -89,6 +89,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--rpm-band", type=float, nargs=2, default=(0.9, 1.1), metavar=("LO", "HI"), help="Operating rpm band as fractions of design rpm."
     )
     molding.add_argument("--margin", type=float, default=0.10, help="Minimum frequency separation from kP lines.")
+    molding.add_argument(
+        "--model-cushion", type=float, default=0.01, help="Extra margin for beam-vs-solid-model error (CalculiX confirms the plain margin)."
+    )
     molding.add_argument("--max-thickness-mm", type=float, default=6.5, help="Largest solid section thickness the molder accepts.")
     molding.add_argument("--te-mm", type=float, default=0.6, help="Minimum blunt trailing-edge thickness.")
     molding.add_argument(
@@ -189,6 +192,7 @@ def _optimize_molding(args: argparse.Namespace, store: RunStore, overrides: list
             trailing_edge_thickness_m=args.te_mm / 1000.0,
             min_scale=args.min_scale,
             output=args.output,
+            model_cushion=args.model_cushion,
         )
     except (FileNotFoundError, ValueError, KeyError, ImportError) as exc:
         print(f"optimize-molding failed: {exc}", file=sys.stderr)

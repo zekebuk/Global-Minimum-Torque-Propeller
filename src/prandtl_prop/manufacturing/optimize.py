@@ -101,6 +101,7 @@ class ThicknessProblem:
         max_tip_deflection_m: float,
         control_r_R: Sequence[float] = CONTROL_R_R,
         radius_m: float,
+        model_cushion: float = 0.01,
     ) -> None:
         self.base = list(base_sections)
         self.rows = list(station_rows)
@@ -108,7 +109,10 @@ class ThicknessProblem:
         self.material, self.rules = material, rules
         self.te = trailing_edge_thickness_m
         self.rpm_values = np.linspace(rpm_band[0], rpm_band[1], 7) * rpm
-        self.margin, self.sf, self.max_tip = margin, stress_safety_factor, max_tip_deflection_m
+        # The beam model and CalculiX differ by up to ~1% on flap modes, so frequency constraints carry a
+        # cushion: the optimiser targets margin + cushion and the solid model confirms at least margin.
+        self.margin, self.sf, self.max_tip = margin + model_cushion, stress_safety_factor, max_tip_deflection_m
+        self.required_margin = margin
         self.control = list(control_r_R)
         self.r_R = np.array([s.r_m for s in self.base]) / radius_m
         self.base_tc = np.array([s.airfoil.max_thickness for s in self.base])

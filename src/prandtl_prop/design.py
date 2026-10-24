@@ -126,7 +126,7 @@ class FeaSpec:
     threads: int = 1
     timeout_s: int = 3600
     modes: int = 6
-    campbell_rpm_fractions: tuple[float, ...] = (0.0, 0.5, 1.0, 1.2)
+    campbell_rpm_fractions: tuple[float, ...] = (0.0, 0.5, 0.9, 1.0, 1.1, 1.2)
     excitation_harmonics: int = 4
     frequency_margin: float = 0.10
 

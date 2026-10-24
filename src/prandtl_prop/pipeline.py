@@ -378,6 +378,22 @@ def _stage_modal(design: DesignCase, run: StageRun, upstream: dict[str, StageRun
                 f"Mode {mode.number} ({mode.kind}, {mode.frequency_hz:.1f} Hz) is within {margin:.1%} of {nearest}P at design rpm"
             )
     metrics["min_frequency_margin"] = worst
+    # Over the operating band, using every Campbell speed that falls inside it (include the band edges in
+    # fea.campbell_rpm_fractions to check them).
+    lo, hi = design.molding.operating_rpm_fractions
+    band_rows = [row for row in rows if lo * op.rpm - 1e-6 <= row["rpm"] <= hi * op.rpm + 1e-6 and row["rpm"] > 0]
+    band_margin = min(
+        (
+            abs(row["frequency_hz"] - k * row["rpm"] / 60.0) / (k * row["rpm"] / 60.0)
+            for row in band_rows
+            for k in range(1, spec.excitation_harmonics + 1)
+        ),
+        default=float("nan"),
+    )
+    metrics["min_frequency_margin_over_band"] = band_margin
+    metrics["band_rpm_checked"] = sorted({row["rpm"] for row in band_rows})
+    if band_margin == band_margin and band_margin < spec.frequency_margin:
+        warnings.append(f"A mode is within {band_margin:.1%} of a per-rev line inside the operating band {lo:.2f}-{hi:.2f} x rpm")
     metrics.update({f"southwell_{key}": value for key, value in southwell.items()})
     if southwell.get("first_flap_fit_max_error_fraction", 0.0) > 0.02:
         warnings.append("First flap mode does not follow f^2 = f0^2 + K n^2 across rpm (>2% misfit): check the modal results")

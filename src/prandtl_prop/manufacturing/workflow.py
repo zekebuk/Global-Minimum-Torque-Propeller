@@ -44,6 +44,7 @@ def optimize_for_molding(
     trailing_edge_thickness_m: float = 0.0006,
     min_scale: float = 1.0,
     output: Path | None = None,
+    model_cushion: float = 0.01,
 ) -> MoldingOptimisation:
     store = store or RunStore()
     data = yaml.safe_load(Path(design_file).read_text(encoding="utf-8")) or {}
@@ -75,6 +76,7 @@ def optimize_for_molding(
         stress_safety_factor=base.molding.stress_safety_factor,
         max_tip_deflection_m=base.molding.max_tip_deflection_fraction * base.operating_point.radius_m,
         radius_m=base.operating_point.radius_m,
+        model_cushion=model_cushion,
     )
     result = optimise(problem, bounds=(min_scale, 2.0))
 
@@ -87,6 +89,7 @@ def optimize_for_molding(
         "material": props,
         "rpm_band": [rpm_band[0] * base.operating_point.rpm, rpm_band[1] * base.operating_point.rpm],
         "frequency_margin": margin,
+        "model_cushion": model_cushion,
         "max_section_thickness_m": max_section_thickness_m,
         "trailing_edge_thickness_m": trailing_edge_thickness_m,
         "min_thickness_scale": min_scale,
