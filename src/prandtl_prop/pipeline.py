@@ -133,7 +133,8 @@ def _stage_cad(design: DesignCase, run: StageRun, upstream: dict[str, StageRun])
 
     sections = design_sections(design, upstream["aero"])
     blade = step.blade_solid(sections, design.geometry.hub_radius_m)
-    step.export_step(blade, run.path("blade.step"))
+    step.export_step(blade, run.path("blade.step"))  # millimetres, for SolidWorks and other CAD
+    blade.exportBrep(str(run.path("blade_m.brep")))  # metres, for meshing (CalculiX)
     report = step.report(blade)
     areas = np.array([section.properties().area_m2 for section in sections])
     radii = np.array([section.r_m for section in sections])
@@ -147,10 +148,14 @@ def _stage_cad(design: DesignCase, run: StageRun, upstream: dict[str, StageRun])
         "loft_vs_section_quadrature_volume_ratio": report.volume_m3 / quadrature_volume if design.geometry.hub_radius_m is None else None,
     }
     if design.cad.export_stl:
-        step.export_stl(blade, run.path("blade.stl"), design.cad.stl_tolerance_m)
+        step.export_stl(blade, run.path("blade_m.stl"), design.cad.stl_tolerance_m)
+    if design.cad.export_solidworks_curves:
+        curves = step.write_solidworks_curves(sections, run.path("solidworks_curves"))
+        metrics["solidworks_curve_count"] = len(curves)
     if design.cad.export_rotor:
         rotor = step.rotor_solid(blade, design.operating_point.blade_count, design.geometry.hub_radius_m)
         step.export_step(rotor, run.path("rotor.step"))
+        step.export_stl(rotor, run.path("rotor_m.stl"), design.cad.stl_tolerance_m)  # metres, for OpenFOAM
         metrics["rotor_volume_m3"] = step.report(rotor).volume_m3
     warnings = [] if report.is_valid else ["Blade solid failed OpenCascade validity check"]
     return metrics, warnings

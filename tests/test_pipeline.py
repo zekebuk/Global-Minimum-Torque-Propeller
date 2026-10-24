@@ -81,7 +81,26 @@ def test_cad_stage_exports_valid_step(tmp_path) -> None:
     cad = outcomes["cad"].run
     assert cad.metrics["blade_solid_valid"] is True
     assert cad.metrics["loft_vs_section_quadrature_volume_ratio"] == pytest.approx(1.0, abs=2.0e-3)
-    assert cad.output("blade.step").read_text(encoding="utf-8", errors="replace").startswith("ISO-10303-21")
+    step_text = cad.output("blade.step").read_text(encoding="utf-8", errors="replace")
+    assert step_text.startswith("ISO-10303-21") and "SI_UNIT(.MILLI.,.METRE.)" in step_text
+
+
+def test_step_is_true_size_in_millimetres_for_solidworks(tmp_path) -> None:
+    """Regression: the STEP header says mm, so coordinates must be mm (they were metres, 1000x too small)."""
+
+    pytest.importorskip("cadquery")
+    from prandtl_prop.cad import step
+
+    outcomes = run_design(_smoke(extra=["cad.export_stl=false", "cad.export_rotor=false"]), ["cad"], store=RunStore(tmp_path))
+    cad = outcomes["cad"].run
+    imported = step.import_step_m(cad.output("blade.step"))
+    assert step.report(imported).volume_m3 == pytest.approx(cad.metrics["blade_volume_m3"], rel=1.0e-6)
+    box = imported.BoundingBox()
+    assert box.xmax == pytest.approx(config.DESIGN_RADIUS_M * 0.9997, rel=1.0e-4)
+    curves = sorted((cad.final_directory / "solidworks_curves").glob("section_*.sldcrv"))
+    assert len(curves) == 37
+    first = [float(value) for value in curves[0].read_text(encoding="utf-8").splitlines()[0].split()]
+    assert first[0] == pytest.approx(0.2 * config.DESIGN_RADIUS_M * 1000.0, rel=1.0e-6)  # mm
 
 
 def test_missing_polars_fail_with_instructions(tmp_path, capsys) -> None:

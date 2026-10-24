@@ -91,13 +91,28 @@ def report(shape, relative_tolerance: float = 1.0e-9) -> SolidReport:
 
 
 def export_step(shape, path: Path) -> Path:
+    """Write STEP at true size in millimetres.
+
+    The model is built in metres, but OpenCascade's STEP writer labels the file in millimetres, so
+    the shape is scaled by 1000 first. SolidWorks and other CAD tools then import it at true size.
+    """
+
     cq = _cq()
     path.parent.mkdir(parents=True, exist_ok=True)
-    cq.exporters.export(cq.Workplane().add(shape), str(path), exportType=cq.exporters.ExportTypes.STEP)
+    cq.exporters.export(cq.Workplane().add(shape.scale(1000.0)), str(path), exportType=cq.exporters.ExportTypes.STEP)
     return path
 
 
+def import_step_m(path: Path):
+    """Read a STEP written by ``export_step`` back into metres."""
+
+    cq = _cq()
+    return cq.importers.importStep(str(path)).val().scale(1.0e-3)
+
+
 def export_stl(shape, path: Path, tolerance_m: float = 1.0e-4) -> Path:
+    """Write STL in metres (STL carries no units; OpenFOAM and CalculiX use SI)."""
+
     cq = _cq()
     path.parent.mkdir(parents=True, exist_ok=True)
     cq.exporters.export(
@@ -108,3 +123,29 @@ def export_stl(shape, path: Path, tolerance_m: float = 1.0e-4) -> Path:
         angularTolerance=math.radians(5.0),
     )
     return path
+
+
+def write_solidworks_curves(sections: Sequence[BladeSection], directory: Path) -> list[Path]:
+    """Write one closed XYZ curve per section, plus LE and TE guide curves, in millimetres.
+
+    SolidWorks: Insert > Curve > Curve Through XYZ Points > Browse (one file per curve), then
+    Lofted Boss/Base through the section curves in order, with the LE/TE curves as guides.
+    """
+
+    directory.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    leading: list[np.ndarray] = []
+    trailing: list[np.ndarray] = []
+    for index, section in enumerate(sections):
+        points = section.points_3d() * 1000.0
+        leading.append(points[len(section.airfoil.x) - 1])
+        trailing.append(0.5 * (points[0] + points[-1]))
+        closed = np.vstack([points, points[:1]])
+        path = directory / f"section_{index:02d}_r{section.r_m * 1000.0:07.2f}mm.sldcrv"
+        path.write_text("".join(f"{x:.6f}\t{y:.6f}\t{z:.6f}\n" for x, y, z in closed), encoding="utf-8")
+        written.append(path)
+    for name, points in (("guide_leading_edge", leading), ("guide_trailing_edge", trailing)):
+        path = directory / f"{name}.sldcrv"
+        path.write_text("".join(f"{x:.6f}\t{y:.6f}\t{z:.6f}\n" for x, y, z in points), encoding="utf-8")
+        written.append(path)
+    return written

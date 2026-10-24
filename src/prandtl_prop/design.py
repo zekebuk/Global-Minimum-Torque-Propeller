@@ -94,6 +94,7 @@ class CadSpec:
     apply_trim_offset: bool = True
     export_rotor: bool = True
     export_stl: bool = True
+    export_solidworks_curves: bool = True
     stl_tolerance_m: float = 1.0e-4
 
 
