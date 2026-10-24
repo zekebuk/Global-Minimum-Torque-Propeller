@@ -66,31 +66,52 @@ stiff blade crosses 3P and 4P (usually weaker excitation).
 | Option | Thickness scales at r/R 0.2 / 0.45 / 0.7 / 1.0 | Torque penalty | Mass | Flap 1 over band | Stress | Tip deflection | Max thickness |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Baseline (sharp TE), aluminium | 1 / 1 / 1 / 1 | - | 88 g | 147-156 Hz | 45 MPa | 1.8 mm | 5.7 mm |
-| **A: PEEK-CF30, stiff 2P-3P** | 1.59 / 1.14 / 1.0 / 1.0 | **+0.29%** | 59 g | 151-161 Hz | 15 MPa | 2.8 mm | 8.8 mm (root) |
-| A': PEEK-CF30, 8.5 mm cap | 1.54 / 1.17 / 1.0 / 1.0 | +0.31% | 59 g | 151-161 Hz | 16 MPa | 2.7 mm | 8.5 mm |
-| **B: PA6-CF30, soft 1P-2P** | 1.0 / 1.0 / 1.0 / 1.05 | **+0.23%** | 46 g | 108-120 Hz | 29 MPa | 7.5 mm | 5.9 mm |
+| **A: PEEK-CF30, stiff 2P-3P** | 1.61 / 1.15 / 1.0 / 1.0 | **+0.30%** | 60 g | 153-163 Hz | 15 MPa | 2.7 mm | 8.9 mm (root) |
+| **B: PA6-CF30, soft 1P-2P** | 1.0 / 1.0 / 1.0 / 1.17 | **+0.38%** | 46 g | 107-119 Hz | 29 MPa | 7.6 mm | 5.9 mm |
 | PEEK-CF30 with the 6.5 mm cap | - | infeasible | | | | | |
 | PA6-CF30, stiff 2P-3P | - | infeasible even with a 10 mm cap (E/rho too low) | | | | | |
 
 Notes:
 
+- Results are with the default 1% model cushion (the optimiser targets an 11% margin; CalculiX must
+  confirm at least 10%). Without the cushion, the optima were +0.29% (A) and +0.23% (B), but B then
+  fell to 9.6% in CalculiX.
 - Uniform thickening to reach 2P-3P in PEEK costs +2.0% torque. Tapering the extra thickness to
   the root (where flap stiffness comes from) while leaving the outboard light reaches the same
-  frequency for +0.29%, roughly 7x less.
-- Option B lowers the frequency into the soft window by adding a little tip mass instead of
-  removing material. It crosses 2P near 0.75 x design rpm during spin-up and deflects 7.5 mm at the tip.
+  frequency for +0.30%, roughly 7x less.
+- A tighter 8.5 mm root cap is still feasible for PEEK (about +0.31% before the cushion).
+- Option B lowers the frequency into the soft window by adding tip mass (tip sections 17% thicker)
+  instead of removing material. It crosses 2P near 0.75 x design rpm during spin-up and deflects
+  7.6 mm at the tip (beam, without centrifugal stiffening).
 - All options pass every molding check, including undercut-free release at a pull angle of about
   9 deg from the thrust axis.
 
 ### CalculiX confirmation
 
-_Pending: solid FEA and Campbell runs of options A and B are in progress._
+Solid C3D10 models of the optimised geometry: NLGEOM static under aero plus CENTRIF, and
+prestressed Campbell analyses at 0, 0.9, 1.0, and 1.1 x design rpm.
+
+| | A: PEEK-CF30 | B: PA6-CF30 |
+| --- | --- | --- |
+| First flap at 0 / 3600 / 4000 / 4400 rpm (CalculiX) | 130.6 / 153.8 / 158.7 / 163.9 Hz | 75.9 / 107.2 / 113.2 / 119.4 Hz |
+| Smallest separation over the band (CalculiX) | **11.7%** (from 2P at 4400 rpm) | **10.7%** (from 2P at 3600 rpm) |
+| Beam model vs CalculiX, first flap | within 1% | within 1% |
+| Peak von Mises outside the clamp zone (NLGEOM) | 10.8 MPa (allowable 104) | 10.6 MPa (allowable 60) |
+| Tip flap deflection (NLGEOM) | 1.7 mm | 3.1 mm |
+| Centrifugal root force, FEA vs beam | 0.999 | 1.000 |
+| Molding checks (TE, thickness, gradient, flow, undercut, draft) | all pass, pull 9 deg | all pass, pull 2.5 deg |
+
+Static values come from the first confirmation round; the geometry changed by under 1% in thickness
+when the cushion was added. The first round also caught two defects, both now fixed: the molding
+check measured margins against the blade frequency instead of the excitation (so 10% read as 9.1%),
+and the Campbell check covered only the design speed. Option B sat at 9.6% at the band edge without
+the cushion.
 
 ## Recommendation
 
 - **Option A (PEEK-CF30, stiff)** is the conservative choice. No 1P/2P crossing inside the band, low
-  stress, small deflection, and the GMT aero advantage survives (+0.29% torque against a GMT-MIL
-  difference of about 1%). The 8.8 mm root exceeds the 6.5 mm general solid-section guideline: plan
+  stress, small deflection, and the GMT aero advantage survives (+0.30% torque against a GMT-MIL
+  difference of about 1%). The 8.9 mm root exceeds the 6.5 mm general solid-section guideline: plan
   for a cored or ribbed root under a skin, gas assist, or accept the longer cycle. Ask the molder.
 - **Option B (PA6-CF30, soft)** is cheaper and lighter, but it passes 2P on every spin-up and
   absorbs moisture (the conditioned modulus was used). Use it only if spin-up is fast and the
