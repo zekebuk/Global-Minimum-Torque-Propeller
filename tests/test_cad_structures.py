@@ -149,3 +149,14 @@ def test_rotating_beam_modes_match_theory_and_calculix_benchmarks() -> None:
     assert k_flap == pytest.approx(1.49, abs=0.03)
     assert k_flap - k_lag == pytest.approx(1.0, abs=0.05)
     assert 0.0 < excitation_margin([spinning], [4000.0]) < 1.0
+
+
+def test_outline_arrays_match_section_arrays() -> None:
+    from prandtl_prop.structures.modal_beam import concat_arrays, outline_arrays, section_arrays
+
+    r, sections = _prismatic(count=5, beta_deg=12.0, code="NACA4412")
+    from_sections = section_arrays(sections)
+    from_outlines = outline_arrays([section.points_3d() for section in sections])
+    for key, values in from_sections.items():
+        np.testing.assert_allclose(from_outlines[key], values, rtol=1e-12, atol=0.0)
+    assert len(concat_arrays(from_sections, from_outlines)["r"]) == 10

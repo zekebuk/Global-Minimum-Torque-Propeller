@@ -77,6 +77,7 @@ def optimize_for_molding(
         max_tip_deflection_m=base.molding.max_tip_deflection_fraction * base.operating_point.radius_m,
         radius_m=base.operating_point.radius_m,
         model_cushion=model_cushion,
+        root_geometry=base.root.geometry() if base.root.enabled else None,
     )
     result = optimise(problem, bounds=(min_scale, 2.0))
 

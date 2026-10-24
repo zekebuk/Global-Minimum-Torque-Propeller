@@ -59,6 +59,7 @@ prandtl run designs/gmt.yaml --stages modal                   # Campbell diagram
 prandtl run designs/gmt.yaml --stages cfd                     # OpenFOAM MRF hover CFD
 prandtl loop designs/gmt.yaml                                 # BEMT -> CAD -> CFD -> calibrate -> re-trim
 prandtl optimize-molding designs/gmt.yaml --material peek-cf30   # thickness schedule for injection-molded CFRP
+prandtl run designs/gmt_peek_cf30.yaml --stages cad,mold      # full blade (root tab, bolt holes) + core/cavity mold STEP
 prandtl compare designs/mil.yaml designs/gmt.yaml --stages aero,beam
 prandtl run designs/gmt.yaml --set operating_point.rpm=4200   # iterate on any design value
 prandtl run designs/gmt.yaml --set-file designs/smoke_overrides.txt   # smoke test without thesis data

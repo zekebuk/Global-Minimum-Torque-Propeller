@@ -30,7 +30,7 @@ from prandtl_prop.cad.sections import BladeSection
 from prandtl_prop.manufacturing.injection import MoldingRules, check_molding, hoerner_form_factor, molded_sections, thickness_schedule
 from prandtl_prop.structures.beam import solve_beam
 from prandtl_prop.structures.loads import map_station_loads
-from prandtl_prop.structures.modal_beam import BeamMode, rotating_modes, section_arrays
+from prandtl_prop.structures.modal_beam import BeamMode, concat_arrays, outline_arrays, rotating_modes, section_arrays
 
 CONTROL_R_R = (0.2, 0.45, 0.7, 1.0)
 
@@ -102,6 +102,7 @@ class ThicknessProblem:
         control_r_R: Sequence[float] = CONTROL_R_R,
         radius_m: float,
         model_cushion: float = 0.01,
+        root_geometry=None,
     ) -> None:
         self.base = list(base_sections)
         self.rows = list(station_rows)
@@ -130,7 +131,23 @@ class ThicknessProblem:
                 for row in self.rows
             ]
         )
+        self.root_geometry = root_geometry
         self._cache: dict[tuple[float, ...], Evaluation] = {}
+
+    def beam_arrays(self, sections: Sequence[BladeSection]) -> dict[str, np.ndarray]:
+        """Section properties for the modal beam, clamped where the hub grips the blade.
+
+        With a root tab, the beam starts at the tab's outer clamp edge and runs through the transition
+        outlines (which blend into the thickened root airfoil) before the aero stations. Clamping at
+        the first aero station instead overestimated flap 1 by ~14% against CalculiX (159 vs 139 Hz).
+        """
+
+        data = section_arrays(sections)
+        if self.root_geometry is None:
+            return data
+        from prandtl_prop.cad.root import root_outlines
+
+        return concat_arrays(outline_arrays(root_outlines(sections[0], self.root_geometry)[1:]), data)
 
     def schedule(self, control_scales: np.ndarray) -> np.ndarray:
         return thickness_schedule(self.r_R, list(zip(self.control, control_scales, strict=True)))
@@ -143,7 +160,7 @@ class ThicknessProblem:
         sections = molded_sections(self.base, scales, self.te)
         new_tc = np.array([s.airfoil.max_thickness for s in sections])
         penalty = float(np.sum(self.drag_weight * (hoerner_form_factor(new_tc) / hoerner_form_factor(self.base_tc) - 1.0)))
-        data = section_arrays(sections)
+        data = self.beam_arrays(sections)
         E, rho = float(self.material["E_Pa"]), float(self.material["density_kg_m3"])
         modes_by_rpm = [
             rotating_modes(data, E_Pa=E, density_kg_m3=rho, omega_rad_s=rpm * math.pi / 30.0, count=3) for rpm in self.rpm_values
@@ -234,7 +251,7 @@ def optimise(problem: ThicknessProblem, *, bounds: tuple[float, float] = (1.0, 2
     baseline = problem.evaluate(np.ones(count))
     material = problem.material
     still = rotating_modes(
-        section_arrays(baseline.sections),
+        problem.beam_arrays(baseline.sections),
         E_Pa=float(material["E_Pa"]),
         density_kg_m3=float(material["density_kg_m3"]),
         omega_rad_s=0.0,

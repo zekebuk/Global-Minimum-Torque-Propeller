@@ -23,6 +23,7 @@ from typing import Any, get_type_hints
 import yaml
 
 from prandtl_prop import config
+from prandtl_prop.manufacturing.mold import MoldDesign
 
 
 @dataclass(frozen=True)
@@ -65,6 +66,27 @@ class AeroSpec:
     tip_loss: bool = True
     trim_to_target_thrust: bool = True
     corrections_csv: str | None = None
+
+
+@dataclass(frozen=True)
+class RootSpec:
+    """Clamped root tab and transition (see prandtl_prop.cad.root). Off by default: the blade then starts at the first BEMT station."""
+
+    enabled: bool = False
+    tab_inner_radius_m: float = 0.014
+    tab_outer_radius_m: float = 0.034
+    tab_width_m: float = 0.028
+    tab_thickness_m: float = 0.0085
+    corner_exponent: float = 4.0
+    tab_pitch_deg: float = 0.0
+    transition_sections: int = 10
+    bolt_diameter_m: float = 0.0053
+    bolt_radii_m: tuple[float, ...] = (0.020, 0.029)
+
+    def geometry(self):
+        from prandtl_prop.cad.root import RootGeometry
+
+        return RootGeometry(**{key: value for key, value in self.__dict__.items() if key != "enabled"})
 
 
 @dataclass(frozen=True)
@@ -164,6 +186,8 @@ class DesignCase:
     fea: FeaSpec = field(default_factory=FeaSpec)
     cfd: CfdSpec = field(default_factory=CfdSpec)
     molding: MoldingSpec = field(default_factory=MoldingSpec)
+    root: RootSpec = field(default_factory=RootSpec)
+    mold: MoldDesign = field(default_factory=MoldDesign)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -285,6 +309,8 @@ _NESTED: dict[tuple[type, str], type] = {
     (DesignCase, "fea"): FeaSpec,
     (DesignCase, "cfd"): CfdSpec,
     (DesignCase, "molding"): MoldingSpec,
+    (DesignCase, "root"): RootSpec,
+    (DesignCase, "mold"): MoldDesign,
     (AeroSpec, "polar"): PolarSpec,
     (StructureSpec, "material"): MaterialSpec,
 }

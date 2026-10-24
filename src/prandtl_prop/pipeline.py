@@ -25,7 +25,7 @@ from prandtl_prop.cad.sections import BladeSection, build_sections, section_tabl
 from prandtl_prop.design import DesignCase, resolve_path
 from prandtl_prop.runs import RunStore, StageRun, stage_key
 
-STAGES = ("aero", "sections", "dfm", "cad", "beam", "fea", "modal", "cfd")
+STAGES = ("aero", "sections", "dfm", "cad", "beam", "fea", "modal", "mold", "cfd")
 DEFAULT_STAGES = ("aero", "sections", "dfm", "cad", "beam")  # seconds; fea, modal, and cfd take minutes to hours
 STAGE_UPSTREAM = {
     "aero": (),
@@ -34,7 +34,8 @@ STAGE_UPSTREAM = {
     "cad": ("aero", "sections"),
     "beam": ("aero", "sections"),
     "fea": ("aero", "sections", "cad", "beam"),
-    "modal": ("cad",),
+    "modal": ("aero", "cad"),
+    "mold": ("aero", "cad"),
     "cfd": ("aero", "cad"),
 }
 STAGE_MODULES = {
@@ -46,11 +47,18 @@ STAGE_MODULES = {
         "prandtl_prop.pipeline",
     ),
     "sections": ("prandtl_prop.cad.airfoils", "prandtl_prop.cad.sections", "prandtl_prop.manufacturing.injection", "prandtl_prop.pipeline"),
-    "dfm": ("prandtl_prop.manufacturing.injection", "prandtl_prop.structures.modal_beam", "prandtl_prop.pipeline"),
-    "cad": ("prandtl_prop.cad.step", "prandtl_prop.cad.render", "prandtl_prop.pipeline"),
+    "dfm": ("prandtl_prop.manufacturing.injection", "prandtl_prop.structures.modal_beam", "prandtl_prop.cad.root", "prandtl_prop.pipeline"),
+    "cad": ("prandtl_prop.cad.step", "prandtl_prop.cad.render", "prandtl_prop.cad.root", "prandtl_prop.pipeline"),
     "beam": ("prandtl_prop.structures.loads", "prandtl_prop.structures.beam", "prandtl_prop.pipeline"),
     "fea": ("prandtl_prop.structures.loads", "prandtl_prop.structures.calculix", "prandtl_prop.pipeline"),
     "modal": ("prandtl_prop.structures.calculix", "prandtl_prop.pipeline"),
+    "mold": (
+        "prandtl_prop.manufacturing.mold",
+        "prandtl_prop.cad.step",
+        "prandtl_prop.cad.root",
+        "prandtl_prop.cad.render",
+        "prandtl_prop.pipeline",
+    ),
     "cfd": ("prandtl_prop.cfd.openfoam", "prandtl_prop.pipeline"),
 }
 
@@ -180,6 +188,26 @@ def _stage_dfm(design: DesignCase, run: StageRun, upstream: dict[str, StageRun])
     )
     sections = design_sections(design, upstream["aero"])
     report = check_molding(sections, rules, spec.pull_angle_deg)
+    if design.root.enabled:  # the root tab and transition must release with the same pull
+        from prandtl_prop.cad.root import full_blade_outlines
+        from prandtl_prop.manufacturing.injection import best_pull_angle, pull_check_outlines
+
+        outlines = full_blade_outlines(sections, design.root.geometry())
+        pull = (
+            pull_check_outlines(outlines, spec.pull_angle_deg, rules)
+            if spec.pull_angle_deg is not None
+            else best_pull_angle(outlines, rules)
+        )
+        report.update(
+            {
+                "pull_angle_deg": pull.pull_angle_deg,
+                "undercut_sections": pull.undercut_sections,
+                "min_draft_deg": pull.min_draft_deg,
+                "min_draft_section": pull.worst_section,
+            }
+        )
+        report["checks"]["undercut_free"] = not pull.undercut_sections
+        report["checks"]["draft"] = pull.min_draft_deg >= rules.min_draft_deg
     material = design.structure.material
     lo, hi = spec.operating_rpm_fractions
     rpm_values = list(np.linspace(lo, hi, 9) * design.operating_point.rpm)
@@ -202,7 +230,15 @@ def _stage_cad(design: DesignCase, run: StageRun, upstream: dict[str, StageRun])
     from prandtl_prop.cad import step
 
     sections = design_sections(design, upstream["aero"])
-    blade = step.blade_solid(sections, design.geometry.hub_radius_m)
+    if design.root.enabled:
+        from prandtl_prop.cad.root import full_blade_outlines
+
+        blade = step.full_blade_solid(sections, design.root.geometry())
+        run.write_json(
+            "root_outlines.json", {"outlines_m": [o.round(9).tolist() for o in full_blade_outlines(sections, design.root.geometry())]}
+        )
+    else:
+        blade = step.blade_solid(sections, design.geometry.hub_radius_m)
     step.export_step(blade, run.path("blade.step"))  # millimetres, for SolidWorks and other CAD
     blade.exportBrep(str(run.path("blade_m.brep")))  # metres, for meshing (CalculiX)
     report = step.report(blade)
@@ -215,7 +251,9 @@ def _stage_cad(design: DesignCase, run: StageRun, upstream: dict[str, StageRun])
         "blade_center_of_mass_m": list(report.center_of_mass_m),
         "blade_bounding_box_m": list(report.bounding_box_m),
         "blade_solid_valid": report.is_valid,
-        "loft_vs_section_quadrature_volume_ratio": report.volume_m3 / quadrature_volume if design.geometry.hub_radius_m is None else None,
+        "loft_vs_section_quadrature_volume_ratio": report.volume_m3 / quadrature_volume
+        if design.geometry.hub_radius_m is None and not design.root.enabled
+        else None,
     }
     if design.cad.export_stl:
         step.export_stl(blade, run.path("blade_m.stl"), design.cad.stl_tolerance_m)
@@ -295,8 +333,9 @@ def _stage_fea(design: DesignCase, run: StageRun, upstream: dict[str, StageRun])
     )
     mesh = calculix.mesh_solid(upstream["cad"].output("blade_m.brep"), design.fea.mesh_size_m)
     root_x = float(mesh.nodes[:, 0].min())
+    clamp, inner_edge, clamp_zone_end = _root_boundary(design, sections, mesh)
     weights = np.array([float(row["dr_m"]) for row in station_rows])
-    forces = calculix.strip_nodal_forces(mesh, sections, aero_loads, weights, root_x_m=root_x)
+    forces = calculix.strip_nodal_forces(mesh, sections, aero_loads, weights, root_x_m=root_x, inner_edge_m=inner_edge)
     deck = calculix.write_input_deck(
         run.path("blade.inp"),
         mesh,
@@ -307,11 +346,16 @@ def _stage_fea(design: DesignCase, run: StageRun, upstream: dict[str, StageRun])
         nodal_forces=forces,
         root_x_m=root_x,
         nlgeom=design.fea.nlgeom,
+        clamp_nodes=clamp,
     )
     result = calculix.run_calculix(
         deck, ccx_executable=design.fea.ccx_executable, threads=design.fea.threads, timeout_s=design.fea.timeout_s
     )
-    metrics, rows = calculix.summarize(mesh, result, sections, allowable_stress_Pa=material.allowable_stress_Pa)
+    metrics, rows = calculix.summarize(
+        mesh, result, sections, allowable_stress_Pa=material.allowable_stress_Pa, clamp_zone_end_m=clamp_zone_end
+    )
+    if design.root.enabled:
+        metrics.update(_bolt_checks(design, -metrics["root_reaction_x_N"]))
     beam = upstream["beam"].metrics
     metrics["applied_aero_force_N"] = forces.sum(axis=0).tolist()
     metrics["tip_deflection_z_ratio_fea_over_beam"] = metrics["tip_deflection_z_m"] / beam["tip_deflection_z_m"]
@@ -328,6 +372,49 @@ def _stage_fea(design: DesignCase, run: StageRun, upstream: dict[str, StageRun])
     return metrics, warnings
 
 
+def _root_boundary(design: DesignCase, sections: list[BladeSection], mesh) -> tuple[np.ndarray | None, float | None, float | None]:
+    """Clamp nodes, first aero-strip inner edge, and clamp-zone end for the full blade (None for a plain blade)."""
+
+    if not design.root.enabled:
+        return None, None, None
+    from prandtl_prop.cad.root import bolt_centres
+    from prandtl_prop.structures import calculix
+
+    root = design.root
+    z_centre = bolt_centres(sections, root.geometry())[0][2]
+    clamp = calculix.tab_clamp_nodes(mesh, root.tab_outer_radius_m, root.tab_thickness_m, z_centre)
+    inner_edge = sections[0].r_m - 0.5 * (sections[1].r_m - sections[0].r_m)
+    return clamp, inner_edge, root.tab_outer_radius_m + root.tab_width_m
+
+
+def _bolt_checks(design: DesignCase, radial_force_N: float) -> dict[str, float]:
+    """Root bolts carrying the radial (centrifugal) load: bolt shear, bearing on the tab, net tension, and shear-out.
+
+    The hub plates clamp the tab top and bottom; conservatively the bolts take all of the radial force,
+    shared equally, each in double shear.
+    """
+
+    root = design.root
+    d, t, w = root.bolt_diameter_m, root.tab_thickness_m, root.tab_width_m
+    count = len(root.bolt_radii_m)
+    per_bolt = radial_force_N / count
+    edge = min(root.bolt_radii_m) - root.tab_inner_radius_m
+    allowable = design.structure.material.allowable_stress_Pa
+    checks = {
+        "bolt_count": count,
+        "bolt_double_shear_stress_Pa": per_bolt / (2.0 * math.pi * (0.5 * d) ** 2),
+        "tab_bearing_stress_Pa": per_bolt / (d * t),
+        "tab_net_section_stress_Pa": radial_force_N / ((w - d) * t),
+        "tab_shear_out_stress_Pa": per_bolt / (2.0 * edge * t),
+        "tab_edge_distance_over_diameter": edge / d,
+    }
+    checks["tab_min_margin_vs_allowable"] = (
+        allowable / max(checks["tab_bearing_stress_Pa"], 3.0 * checks["tab_net_section_stress_Pa"], 2.0 * checks["tab_shear_out_stress_Pa"])
+        - 1.0
+    )
+    return checks
+
+
 def _stage_modal(design: DesignCase, run: StageRun, upstream: dict[str, StageRun]) -> tuple[dict[str, Any], list[str]]:
     """Campbell diagram: prestressed modes at several rotor speeds, checked against per-rev excitation."""
 
@@ -338,6 +425,7 @@ def _stage_modal(design: DesignCase, run: StageRun, upstream: dict[str, StageRun
     op = _operating_point(design)
     mesh = calculix.mesh_solid(upstream["cad"].output("blade_m.brep"), spec.mesh_size_m)
     root_x = float(mesh.nodes[:, 0].min())
+    clamp = _root_boundary(design, design_sections(design, upstream["aero"]), mesh)[0] if design.root.enabled else None
     rows: list[dict[str, Any]] = []
     design_modes: list[calculix.Mode] = []
     for fraction in sorted(set(spec.campbell_rpm_fractions)):
@@ -351,6 +439,7 @@ def _stage_modal(design: DesignCase, run: StageRun, upstream: dict[str, StageRun
             omega_rad_s=rpm * 2.0 * math.pi / 60.0,
             root_x_m=root_x,
             modes=spec.modes,
+            clamp_nodes=clamp,
         )
         modes = calculix.run_modal(deck, mesh, ccx_executable=spec.ccx_executable, threads=spec.threads, timeout_s=spec.timeout_s)
         for mode in modes:
@@ -421,6 +510,42 @@ def _southwell_check(rows: list[dict[str, Any]]) -> dict[str, float]:
         "first_flap_coefficient": float(k),
         "first_flap_fit_max_error_fraction": float(np.max(np.abs(fitted - f) / f)),
     }
+
+
+def _stage_mold(design: DesignCase, run: StageRun, upstream: dict[str, StageRun]) -> tuple[dict[str, Any], list[str]]:
+    """Two-plate core/cavity inserts (prandtl_prop.manufacturing.mold), STEP in mm, plus an exploded render."""
+
+    from prandtl_prop.cad.render import render_mold
+    from prandtl_prop.manufacturing.mold import build_mold, export_mold
+
+    sections = design_sections(design, upstream["aero"])
+    if design.root.enabled:
+        from prandtl_prop.cad.root import bolt_centres, full_blade_outlines
+
+        geometry = design.root.geometry()
+        result = build_mold(
+            full_blade_outlines(sections, geometry), bolt_centres(sections, geometry), geometry.bolt_diameter_m, design.mold
+        )
+    else:
+        result = build_mold([section.points_3d() for section in sections], design=design.mold)
+    paths = export_mold(result, run.directory)
+    lift = 0.6 * (result.metrics["insert_size_mm"][2] / 1000.0)
+    render_mold(
+        [
+            (paths["cavity_stl"], (0.62, 0.64, 0.68), (0.0, 0.0, -lift)),
+            (paths["part_stl"], (0.20, 0.22, 0.25), (0.0, 0.0, 0.0)),
+            (paths["core_stl"], (0.80, 0.55, 0.30), (0.0, 0.0, lift)),
+        ],
+        run.path("mold_render.png"),
+        title=f"{design.name}: two-plate mold, cavity (bottom, fixed) and core (top, moving)",
+    )
+    metrics = dict(result.metrics)
+    warnings = []
+    if not (metrics["core_valid"] and metrics["cavity_valid"]):
+        warnings.append("Mold insert failed OpenCascade validity check")
+    if not metrics["clearance_ok"]:
+        warnings.append("Cooling channel steel clearance below 3 mm")
+    return metrics, warnings
 
 
 def _stage_cfd(design: DesignCase, run: StageRun, upstream: dict[str, StageRun]) -> tuple[dict[str, Any], list[str]]:
@@ -536,17 +661,19 @@ STAGE_FUNCTIONS: dict[str, Callable[[DesignCase, StageRun, dict[str, StageRun]],
     "beam": _stage_beam,
     "fea": _stage_fea,
     "modal": _stage_modal,
+    "mold": _stage_mold,
     "cfd": _stage_cfd,
 }
 
 STAGE_DESIGN_INPUTS = {
     "aero": ("operating_point", "geometry", "aero", "airfoils.thickness_scale", "airfoils.trailing_edge_thickness_m"),
     "sections": ("geometry", "airfoils", "cad.apply_trim_offset"),
-    "dfm": ("operating_point", "structure", "molding"),
-    "cad": ("geometry", "cad", "operating_point", "structure"),
+    "dfm": ("operating_point", "structure", "molding", "root"),
+    "cad": ("geometry", "cad", "operating_point", "structure", "root"),
     "beam": ("operating_point", "structure"),
     "fea": ("operating_point", "structure", "fea"),
     "modal": ("operating_point", "structure", "fea"),
+    "mold": ("mold", "root"),
     "cfd": ("operating_point", "cfd"),
 }
 

@@ -85,14 +85,20 @@ class PullCheck:
 def pull_check(sections: Sequence[BladeSection], pull_angle_deg: float, rules: MoldingRules | None = None) -> PullCheck:
     """Undercut and draft check for a mold opening along d = (-sin(psi), cos(psi)) in the y-z plane."""
 
+    return pull_check_outlines([section.points_3d() for section in sections], pull_angle_deg, rules)
+
+
+def pull_check_outlines(outlines: Sequence[np.ndarray], pull_angle_deg: float, rules: MoldingRules | None = None) -> PullCheck:
+    """Same check on explicit 3D outlines (x = const each), e.g. including the root transition."""
+
     rules = rules or MoldingRules()
     psi = math.radians(pull_angle_deg)
     d = np.array([-math.sin(psi), math.cos(psi)])
     e = np.array([math.cos(psi), math.sin(psi)])
     undercut: list[int] = []
     worst, worst_index = math.inf, 0
-    for index, section in enumerate(sections):
-        outline = section.points_3d()[:, 1:]
+    for index, points in enumerate(outlines):
+        outline = np.asarray(points)[:, 1:]
         a, h = outline @ e, outline @ d
         start, end = int(np.argmin(a)), int(np.argmax(a))
         count = len(a)
@@ -119,11 +125,17 @@ def pull_check(sections: Sequence[BladeSection], pull_angle_deg: float, rules: M
     return PullCheck(pull_angle_deg, sorted(set(undercut)), worst, worst_index)
 
 
-def best_pull_angle(sections: Sequence[BladeSection], rules: MoldingRules | None = None, search_deg: float = 45.0) -> PullCheck:
-    """Scan pull angles (0.5 deg steps) for the undercut-free direction with the largest minimum draft."""
+def best_pull_angle(
+    sections: Sequence[BladeSection] | Sequence[np.ndarray], rules: MoldingRules | None = None, search_deg: float = 45.0
+) -> PullCheck:
+    """Scan pull angles (0.5 deg steps) for the undercut-free direction with the largest minimum draft.
+
+    Accepts blade sections or explicit 3D outlines.
+    """
 
     rules = rules or MoldingRules()
-    candidates = [pull_check(sections, float(angle), rules) for angle in np.arange(-search_deg, search_deg + 0.25, 0.5)]
+    outlines = [s.points_3d() if isinstance(s, BladeSection) else np.asarray(s) for s in sections]
+    candidates = [pull_check_outlines(outlines, float(angle), rules) for angle in np.arange(-search_deg, search_deg + 0.25, 0.5)]
     valid = [c for c in candidates if not c.undercut_sections]
     pool = valid or candidates
     return max(pool, key=lambda c: (c.min_draft_deg, -abs(c.pull_angle_deg)))

@@ -21,7 +21,7 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.linalg import eigh
 
-from prandtl_prop.cad.sections import BladeSection
+from prandtl_prop.cad.sections import BladeSection, polygon_properties
 from prandtl_prop.structures.loads import section_plane_properties
 
 
@@ -67,6 +67,23 @@ def section_arrays(sections: Sequence[BladeSection]) -> dict[str, np.ndarray]:
         "I_zz": np.array([p.I_tt_m4 for p in props]),
         "I_yz": np.array([p.I_st_m4 for p in props]),
     }
+
+
+def outline_arrays(outlines: Sequence[np.ndarray]) -> dict[str, np.ndarray]:
+    """Same as ``section_arrays`` for explicit 3D outlines at constant x (e.g. the root tab and transition)."""
+
+    props = [polygon_properties(np.asarray(outline)[:, 1:]) for outline in outlines]
+    return {
+        "r": np.array([float(outline[0, 0]) for outline in outlines]),
+        "A": np.array([p.area_m2 for p in props]),
+        "I_yy": np.array([p.I_ss_m4 for p in props]),
+        "I_zz": np.array([p.I_tt_m4 for p in props]),
+        "I_yz": np.array([p.I_st_m4 for p in props]),
+    }
+
+
+def concat_arrays(*parts: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    return {key: np.concatenate([part[key] for part in parts]) for key in parts[0]}
 
 
 def rotating_modes(

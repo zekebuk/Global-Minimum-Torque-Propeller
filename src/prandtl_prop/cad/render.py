@@ -28,7 +28,8 @@ def _shade(triangles: np.ndarray, light: np.ndarray, base_rgb: Sequence[float], 
     normals /= np.maximum(np.linalg.norm(normals, axis=1, keepdims=True), 1.0e-300)
     light = light / np.linalg.norm(light)
     diffuse = np.abs(normals @ light)
-    colour = np.outer(0.25 + 0.75 * diffuse, np.asarray(base_rgb))
+    base = np.asarray(base_rgb, dtype=float)
+    colour = (0.25 + 0.75 * diffuse)[:, None] * (base if base.ndim == 2 else base[None, :])
     if view is not None:
         half = light + view / np.linalg.norm(view)
         half /= np.linalg.norm(half)
@@ -46,10 +47,33 @@ def _camera(elevation_deg: float, azimuth_deg: float) -> tuple[np.ndarray, np.nd
     return right, np.cross(toward, right), toward
 
 
+def subdivide(triangles: np.ndarray, max_edge: float) -> np.ndarray:
+    """Bisect each triangle's longest edge until every edge is below ``max_edge``.
+
+    The painter's algorithm sorts whole triangles by centroid depth, which misorders a large flat
+    face (two triangles for a mold block side) against small ones; small triangles sort correctly.
+    """
+
+    done = []
+    while len(triangles):
+        lengths = np.linalg.norm(triangles - np.roll(triangles, -1, axis=1), axis=2)  # edge i runs vertex i -> i+1
+        small = lengths.max(axis=1) <= max_edge
+        done.append(triangles[small])
+        big, longest = triangles[~small], lengths[~small].argmax(axis=1)
+        rows = np.arange(len(big))
+        a, b, c = (big[rows, (longest + k) % 3] for k in range(3))  # longest edge is a -> b
+        middle = 0.5 * (a + b)
+        triangles = np.concatenate([np.stack((a, middle, c), axis=1), np.stack((middle, b, c), axis=1)])  # bisect it
+    return np.concatenate(done)
+
+
 def draw_shaded(
-    axes, triangles: np.ndarray, elevation_deg: float, azimuth_deg: float, base_rgb: Sequence[float], light: Sequence[float]
+    axes, triangles: np.ndarray, elevation_deg: float, azimuth_deg: float, base_rgb: Sequence[float] | np.ndarray, light: Sequence[float]
 ) -> None:
-    """Painter's-algorithm orthographic render of triangles onto a 2D matplotlib axes."""
+    """Painter's-algorithm orthographic render of triangles onto a 2D matplotlib axes.
+
+    ``base_rgb`` is one colour, or one per triangle as an (n, 3) array.
+    """
 
     from matplotlib.collections import PolyCollection
 
@@ -199,6 +223,41 @@ def render_comparison(
 
     if title:
         figure.suptitle(title, fontsize=12, y=0.98)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(output, dpi=150, bbox_inches="tight")
+    plt.close(figure)
+    return output
+
+
+def render_mold(
+    parts: Sequence[tuple[Path, Sequence[float], Sequence[float]]], output: Path, *, title: str = "", scale: float = 1000.0
+) -> Path:
+    """Exploded view of mold inserts and part. ``parts``: (STL in metres, colour, offset in metres)."""
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    def scene(items):
+        triangles, colours = [], []
+        for path, colour, offset in items:
+            t = read_stl(path) * scale + np.asarray(offset) * scale
+            t = subdivide(t, 6.0)
+            triangles.append(t)
+            colours.append(np.tile(np.asarray(colour, dtype=float), (len(t), 1)))
+        return np.concatenate(triangles), np.concatenate(colours)
+
+    figure = plt.figure(figsize=(14, 7.5), facecolor="white")
+    triangles, colours = scene(parts)
+    for index, (name, elevation, azimuth) in enumerate(
+        (("Exploded, from above the leading edge", 28.0, 62.0), ("Exploded, from the root end", 12.0, 160.0))
+    ):
+        axes = figure.add_subplot(1, 2, index + 1)
+        draw_shaded(axes, triangles, elevation, azimuth, colours, light=(0.3, 0.6, 1.0))
+        axes.set_title(name, fontsize=10)
+    if title:
+        figure.suptitle(title, fontsize=12)
     output.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(output, dpi=150, bbox_inches="tight")
     plt.close(figure)

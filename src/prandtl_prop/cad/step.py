@@ -57,6 +57,64 @@ def blade_solid(sections: Sequence[BladeSection], hub_radius_m: float | None = N
     return cq.Solid.makeLoft(wires, False)
 
 
+def loft_outlines(outlines: Sequence[np.ndarray], max_spacing_ratio: float = 4.0):
+    """Loft through explicit 3D outlines (root to tip), all with the same point count.
+
+    Leading outlines with identical (y, z) shape (the prismatic root tab) are joined by a ruled loft
+    and fused to a smooth loft through the rest on their shared planar face. A smooth B-spline loft
+    through two identical sections and on into changing ones is ill-conditioned there: it passed the
+    validity check but even a plane cut through it failed. Strongly uneven section spacing has the
+    same effect (the B-spline overshoots between sections), so a jump in the gap between adjacent
+    sections larger than ``max_spacing_ratio`` is rejected.
+    """
+
+    cq = _cq()
+    wires = [section_wire(points) for points in outlines]
+    prism = 1
+    while prism < len(outlines) - 1 and np.allclose(outlines[prism][:, 1:], outlines[0][:, 1:], rtol=0.0, atol=1.0e-9):
+        prism += 1
+    spacing = np.diff([float(points[0, 0]) for points in outlines[prism - 1 :]])
+    jumps = np.maximum(spacing[1:] / spacing[:-1], spacing[:-1] / spacing[1:]) if len(spacing) > 1 else np.ones(1)
+    if jumps.max() > max_spacing_ratio:
+        raise ValueError(
+            f"Adjacent section gaps differ {jumps.max():.1f}x (limit {max_spacing_ratio}); "
+            "the smooth loft overshoots between unevenly spaced sections. Add sections or even out the spacing."
+        )
+    if prism == 1:
+        return cq.Solid.makeLoft(wires, False)
+    ruled = cq.Solid.makeLoft([wires[0], wires[prism - 1]], True)
+    return ruled.fuse(cq.Solid.makeLoft(wires[prism - 1 :], False)).clean()
+
+
+def full_blade_solid(sections: Sequence[BladeSection], root_geometry):
+    """Blade with clamped root tab and transition (see ``prandtl_prop.cad.root``), bolt holes cut along z."""
+
+    from prandtl_prop.cad.root import bolt_centres, full_blade_outlines
+
+    return outlines_solid(
+        full_blade_outlines(sections, root_geometry),
+        bolt_centres(sections, root_geometry),
+        root_geometry.bolt_diameter_m,
+        4.0 * root_geometry.tab_thickness_m,
+    )
+
+
+def outlines_solid(
+    outlines: Sequence[np.ndarray],
+    holes: Sequence[tuple[float, float, float]] = (),
+    hole_diameter_m: float = 0.0,
+    hole_length_m: float = 0.0,
+):
+    """Loft explicit outlines and cut round holes along z, centred on each (x, y, z) in ``holes``."""
+
+    cq = _cq()
+    blade = loft_outlines(outlines)
+    for x, y, z in holes:
+        hole = cq.Solid.makeCylinder(0.5 * hole_diameter_m, hole_length_m, cq.Vector(x, y, z - 0.5 * hole_length_m), cq.Vector(0, 0, 1))
+        blade = blade.cut(hole)
+    return blade.clean()
+
+
 def rotor_solid(blade, blade_count: int, hub_radius_m: float | None = None, hub_height_m: float | None = None):
     """Pattern the blade about +z; add a hub cylinder centred on z = 0 when a hub radius is given."""
 
