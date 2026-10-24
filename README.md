@@ -53,15 +53,20 @@ The XROTOR and MATLAB commands are report-only by default. Add `--execute` only 
 ## Iterative Design Pipeline (BEMT -> CAD -> FEA/CFD)
 
 ```bash
-prandtl run designs/gmt.yaml                                  # aero, sections, cad, beam (cached)
+prandtl run designs/gmt.yaml --stages beam                    # aero, sections, beam (cached)
+prandtl run designs/gmt.yaml --stages cad,fea                 # STEP (mm) for SolidWorks + CalculiX solid FEA
+prandtl run designs/gmt.yaml --stages cfd                     # OpenFOAM MRF hover CFD
+prandtl loop designs/gmt.yaml                                 # BEMT -> CAD -> CFD -> calibrate -> re-trim
 prandtl compare designs/mil.yaml designs/gmt.yaml --stages aero,beam
 prandtl run designs/gmt.yaml --set operating_point.rpm=4200   # iterate on any design value
 prandtl run designs/gmt.yaml --set-file designs/smoke_overrides.txt   # smoke test without thesis data
 ```
 
 The pipeline re-solves BEMT with a bracketed per-station solve and thrust trim. It then lofts the
-trimmed blade to STEP/STL with CadQuery, maps loads to the blade, and runs a beam structural screen.
-Each stage is cached in a content-addressed run folder. Real runs need the XFOIL polars and airfoil
+trimmed blade with CadQuery (STEP in mm for SolidWorks, plus section curves), runs a beam screen
+and a CalculiX solid FEA with centrifugal stiffening, and runs OpenFOAM hover CFD. A loop
+calibrates BEMT against the CFD station loads and re-trims until CFD meets the target thrust. Each
+stage is cached in a content-addressed run folder. Real runs need the XFOIL polars and airfoil
 coordinates in `data/` (see `data/xfoil_polars/README.md`). See `docs/iterative_workflow.md` for the
 conventions, the verification evidence, and the planned CalculiX and OpenFOAM stages.
 

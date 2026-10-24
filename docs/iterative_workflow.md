@@ -1,20 +1,23 @@
 # Iterative Design Workflow: BEMT -> CAD -> FEA/CFD
 
-This is the path from a design file to aero results, CAD geometry, and structural results. It is
-built for iteration: change one input, re-run, and only the affected stages recompute.
+This is the path from a design file to aero results, CAD geometry, structural results, and CFD.
+It is built for iteration: change one input, re-run, and only the affected stages recompute.
+`prandtl loop` closes the BEMT -> CAD -> CFD loop automatically.
 
 ```mermaid
 flowchart LR
     D[designs/*.yaml] --> A[aero<br/>BEMT + trim]
     A --> S[sections<br/>3D airfoil sections]
     A --> C
-    S --> C[cad<br/>STEP / STL]
+    S --> C[cad<br/>STEP mm / STL m / SW curves]
     A --> B[beam<br/>loads + beam screen]
     S --> B
-    C -.next.-> X[CalculiX solid FEA]
-    C -.next.-> F[OpenFOAM MRF CFD]
-    F -.calibrate.-> A
-    X -.confirm.-> B
+    C --> X[fea<br/>CalculiX C3D10, NLGEOM]
+    B --> X
+    C --> F[cfd<br/>OpenFOAM MRF k-omega SST]
+    A --> F
+    F -->|calibrate lift/drag per station| K[corrections.csv]
+    K -->|prandtl loop| A
 ```
 
 ## Principles
@@ -33,7 +36,7 @@ flowchart LR
 ## Quick start
 
 ```bash
-pip install -e .[cad,dev]          # CadQuery is only needed for the cad stage
+pip install -e .[cad,fea,dev]      # CadQuery for cad; gmsh for fea. CalculiX (ccx) and OpenFOAM are system installs.
 
 # Pipeline smoke test without thesis data (analytic polar, NACA stand-ins; NOT thesis results)
 prandtl run designs/gmt.yaml --set-file designs/smoke_overrides.txt
@@ -45,7 +48,17 @@ prandtl compare designs/mil.yaml designs/gmt.yaml --stages aero,beam
 # Iterate: any design value can be overridden; results are cached per variant
 prandtl run designs/gmt.yaml --set operating_point.rpm=4200 --set structure.material.E_Pa=45.0e+9
 for rpm in 3800 4000 4200; do prandtl run designs/gmt.yaml --stages aero,beam --set operating_point.rpm=$rpm; done
+
+# Higher fidelity
+prandtl run designs/gmt.yaml --stages fea           # CalculiX solid FEA (also runs aero, sections, cad, beam)
+prandtl run designs/gmt.yaml --stages cfd           # OpenFOAM hover CFD
+prandtl loop designs/gmt.yaml --iterations 4        # BEMT -> CAD -> CFD -> calibrate -> re-trim until CFD hits 35 N
+
+# Plumbing check of the CFD loop in minutes (coarse mesh; numbers are meaningless)
+prandtl loop designs/gmt.yaml --set-file designs/smoke_overrides.txt --set-file designs/cfd_smoke_overrides.txt
 ```
+
+SolidWorks: see [`solidworks_import.md`](solidworks_import.md). STEP files are written in mm at true size.
 
 ## Data you need to add
 
@@ -123,15 +136,77 @@ centroid. Torsion uses Saint-Venant's approximation `J = A^4 / (4 pi^2 I_p)`. Ce
 stiffening is neglected, so flap deflection is conservative. Use the screen every iteration and
 confirm finalists with CalculiX.
 
+## CalculiX solid FEA (`fea`)
+
+- gmsh meshes `blade_m.brep` with quadratic tetrahedra (C3D10), single-threaded so identical
+  inputs give identical meshes. The pipeline's cache depends on that, and multithreaded meshing
+  was observed to give different stiffness on repeated runs.
+- The root face is clamped. Centrifugal load is `*DLOAD CENTRIF` (the exact body force, including
+  the propeller moment).
+- Each station's aero force and moment about the pitch axis go to its strip's surface nodes by the
+  minimum-norm distribution that reproduces both exactly (6 equations per strip, the idea behind an
+  RBE3 element). Clamped root-face nodes are excluded, so no applied load silently drops out.
+- NLGEOM is on by default, so centrifugal stiffening is included.
+
+Evidence: on a prismatic NACA 0012 cantilever, tip deflection is 0.984x Euler-Bernoulli at both 3 mm
+and 1.5 mm meshes (converged; the small excess stiffness is the root clamp restraining warping),
+and the root reaction matches the applied load to 1e-6. On the GMT blade (smoke inputs), the
+centrifugal root force matches the beam screen to 0.04%. Linear FEA gives 0.98x the beam tip
+deflection and station stresses within 2-7% inboard. NLGEOM cuts flap deflection to 0.66x: the
+stiffening parameter N L^2 / EI is about 14, so a large effect is expected. Peak FEA stress is
+reported outside a one-root-chord clamp zone, because the clamp's stress singularity is a modelling
+artefact.
+
+## OpenFOAM hover CFD (`cfd`)
+
+- Steady incompressible `simpleFoam`, k-omega SST with wall functions, and an MRF cylinder zone
+  rotating at +omega about +z. The box domain extends 3R to the sides and above, and 6R below
+  (the wake). All far-field faces use `totalPressure` p0 = 0 with `pressureInletOutletVelocity`.
+- blockMesh background (R/4 cells), then snappyHexMesh: MRF zone level 2, blade surface levels
+  5-6, feature edges level 6. All of these are design knobs under `cfd.*`.
+- Post-processing reads the written fields directly, so it does not depend on function objects.
+  (Ubuntu's packaged OpenFOAM v1912 crashes in every function object; `cfd.function_objects: true`
+  adds `forces`/`yPlus` on installations where they work.) Blade loads: face pressure (equal to the
+  owner-cell value on the zeroGradient wall) times the area vector, plus the wall-function shear
+  rho nu_eff (U_P - U_w)_t / delta. Loads are binned into the BEMT station strips by
+  r = sqrt(x^2 + y^2).
+- **Independent check:** thrust is also computed from the axial momentum balance over the far
+  field, -integral(rho (U_z U.n + p n_z)) dA. The MRF source Omega x U has no z component, so this
+  balance is exact, and it shares no code path with the wall integration. On the coarse smoke mesh
+  the two agree to 0.4%. A warning fires above 2%.
+- Snapshots are written `cfd.snapshots` times, and the change in thrust and torque between the
+  last two snapshots is reported as a convergence measure.
+
+`cfd_station_loads.csv` holds BEMT and CFD dT and dQ per station, and `cfd_history.csv` holds the
+thrust and torque history.
+
+## Closing the loop (`prandtl loop`)
+
+At each station, BEMT resolves the section force through the inflow angle phi:
+`dT = B q c (Cl cos(phi) - Cd sin(phi)) dr` and `dFt = B q c (Cl sin(phi) + Cd cos(phi)) dr`.
+Inverting that rotation with the CFD loads gives the effective Cl and Cd at BEMT's own inflow.
+The station factors are their ratios to the polar values. Because the factors change the induced
+velocity, they are found by a relaxed fixed point in which BEMT re-solves the momentum balance each
+pass. A test shows that known factors are recovered to 1e-5 from synthetic loads.
+
+Each outer iteration trims the corrected BEMT to target thrust, which gives a new collective, so
+new CAD, so new CFD, so new factors. The loop stops when the CFD thrust is within
+`--thrust-tolerance` of the target. `runs/<design>/loop/loop_history.csv` records every iteration
+with its aero and cfd run keys. The factors absorb every BEMT-vs-CFD difference (3D relief,
+tip/root effects, polar error, and *mesh error*), so they are only as good as the CFD mesh. Run a
+mesh study on the final geometry before trusting them.
+
+{{LOOP_RESULTS}}
+
 ## Next steps
 
-1. **CalculiX stage (`fea`).** Mesh `blade.step` (gmsh, C3D10), clamp the root face, apply
-   `*DLOAD CENTRIF` plus `line_loads.csv` distributed over each station strip, and run with NLGEOM
-   so centrifugal stiffening is captured. Compare root stress and tip deflection with the beam
-   screen; the beam tests above give the expected agreement for slender sections.
-2. **OpenFOAM stage (`cfd`).** Mesh `rotor.step` with a hub using snappyHexMesh, and solve a
-   steady MRF zone with k-omega SST at the design rpm. Extract T and Q, then spanwise dT/dr and
-   dQ/dr from radial bands.
-3. **Close the loop.** Derive per-station correction factors (CFD over BEMT loading), feed them
-   back to the aero stage as a design input, re-trim, and iterate to a fixed point. The cache keys
-   keep every iteration traceable.
+1. Commit the XFOIL polars and airfoil coordinates (see Data), then re-lock MIL and GMT with the
+   converged solver: `prandtl compare designs/mil.yaml designs/gmt.yaml --stages aero,beam`.
+2. Run `prandtl loop` for MIL and GMT at production CFD resolution on a workstation. Add a mesh
+   study (surface levels 5-6 vs 6-7) and boundary-layer prism layers (`addLayers`), then compare
+   the CFD-calibrated torque reduction with the BEMT-only one.
+3. Feed the calibrated BEMT back into the GMT twist inverse design
+   (`archive/legacy_scripts/geometry/operating_point_inverse_design.py`), so the design itself, not
+   only the collective, responds to CFD.
+4. Add a modal stage (CalculiX `*FREQUENCY` with the NLGEOM prestress) for a Campbell diagram
+   against 1P and 2P at 4000 rpm.

@@ -126,3 +126,12 @@ def test_cli_compare_reports_both_designs(tmp_path, capsys) -> None:
     assert cli_main(["compare", *designs, "--stages", "aero", "--set-file", smoke, "--runs-dir", str(tmp_path)]) == 0
     output = capsys.readouterr().out
     assert "aero.torque_Nm" in output and "delta vs mil" in output
+
+
+def test_every_stage_is_fully_registered() -> None:
+    from prandtl_prop import pipeline
+
+    for registry in (pipeline.STAGE_UPSTREAM, pipeline.STAGE_FUNCTIONS, pipeline.STAGE_MODULES, pipeline.STAGE_DESIGN_INPUTS):
+        assert set(registry) == set(pipeline.STAGES)
+    for stage, upstream in pipeline.STAGE_UPSTREAM.items():
+        assert all(pipeline.STAGES.index(name) < pipeline.STAGES.index(stage) for name in upstream)

@@ -196,8 +196,14 @@ def solve_station(
     op: OperatingPoint,
     polar: Polar,
     tip_loss: bool = True,
+    lift_factor: float = 1.0,
+    drag_factor: float = 1.0,
 ) -> StationSolution:
-    """Solve the momentum/blade-element balance at one station."""
+    """Solve the momentum/blade-element balance at one station.
+
+    ``lift_factor``/``drag_factor`` scale the polar's Cl/Cd at this station (CFD calibration);
+    the induced velocity is re-solved consistently with the corrected loads.
+    """
 
     omega_r = op.omega_rad_s * r_m
     r_R = r_m / op.radius_m
@@ -210,9 +216,10 @@ def solve_station(
         alpha = beta_deg - math.degrees(phi)
         reynolds = op.rho_kg_m3 * w * chord_m / op.mu_air_kg_m_s
         point = polar.evaluate(airfoil, alpha, reynolds)
+        cl, cd = point.cl * lift_factor, point.cd * drag_factor
         q_c = 0.5 * op.rho_kg_m3 * w2 * chord_m
-        thrust_be = op.blade_count * q_c * (point.cl * math.cos(phi) - point.cd * math.sin(phi))
-        tangential = op.blade_count * q_c * (point.cl * math.sin(phi) + point.cd * math.cos(phi))
+        thrust_be = op.blade_count * q_c * (cl * math.cos(phi) - cd * math.sin(phi))
+        tangential = op.blade_count * q_c * (cl * math.sin(phi) + cd * math.cos(phi))
         factor = prandtl_tip_loss(op.blade_count, r_R, phi) if tip_loss else 1.0
         thrust_momentum = 4.0 * math.pi * op.rho_kg_m3 * r_m * factor * va * vi
         residual = thrust_be - thrust_momentum
@@ -223,8 +230,8 @@ def solve_station(
             reynolds=reynolds,
             w_m_s=w,
             tip_loss=factor,
-            cl=point.cl,
-            cd=point.cd,
+            cl=cl,
+            cd=cd,
             cm=point.cm,
             thrust_per_span_N_m=thrust_be,
             tangential_per_span_N_m=tangential,
@@ -260,9 +267,14 @@ def solve_rotor(
     *,
     collective_offset_deg: float = 0.0,
     tip_loss: bool = True,
+    corrections: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> BemtResult:
-    """Solve every station at a fixed collective offset and integrate performance."""
+    """Solve every station at a fixed collective offset and integrate performance.
 
+    ``corrections`` is an optional (lift_factors, drag_factors) pair, one value per station.
+    """
+
+    lift, drag = corrections if corrections is not None else (np.ones(len(stations.r_m)), np.ones(len(stations.r_m)))
     solutions = [
         solve_station(
             r_m=float(stations.r_m[index]),
@@ -272,6 +284,8 @@ def solve_rotor(
             op=op,
             polar=polar,
             tip_loss=tip_loss,
+            lift_factor=float(lift[index]),
+            drag_factor=float(drag[index]),
         )
         for index in range(len(stations.r_m))
     ]
@@ -287,6 +301,7 @@ def trim_to_thrust(
     target_thrust_N: float,
     *,
     tip_loss: bool = True,
+    corrections: tuple[np.ndarray, np.ndarray] | None = None,
     bracket_deg: tuple[float, float] = (-10.0, 10.0),
     thrust_tolerance_N: float = 1.0e-9,
 ) -> BemtResult:
@@ -294,7 +309,12 @@ def trim_to_thrust(
 
     def thrust_error(offset: float) -> float:
         return (
-            float(solve_rotor(stations, op, polar, collective_offset_deg=offset, tip_loss=tip_loss).summary["thrust_N"]) - target_thrust_N
+            float(
+                solve_rotor(stations, op, polar, collective_offset_deg=offset, tip_loss=tip_loss, corrections=corrections).summary[
+                    "thrust_N"
+                ]
+            )
+            - target_thrust_N
         )
 
     low, high = bracket_deg
@@ -306,7 +326,7 @@ def trim_to_thrust(
         raise ValueError(f"Could not bracket target thrust {target_thrust_N} N with collective offsets in [{low}, {high}] deg")
 
     offset = brentq(thrust_error, low, high, xtol=1.0e-12, maxiter=200)
-    result = solve_rotor(stations, op, polar, collective_offset_deg=offset, tip_loss=tip_loss)
+    result = solve_rotor(stations, op, polar, collective_offset_deg=offset, tip_loss=tip_loss, corrections=corrections)
     error = float(result.summary["thrust_N"]) - target_thrust_N
     if abs(error) > max(thrust_tolerance_N, 1.0e-9 * target_thrust_N):
         raise ValueError(f"Trim did not reach target thrust: error {error:.3e} N")

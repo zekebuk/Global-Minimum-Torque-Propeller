@@ -64,6 +64,7 @@ class AeroSpec:
     polar: PolarSpec = field(default_factory=PolarSpec)
     tip_loss: bool = True
     trim_to_target_thrust: bool = True
+    corrections_csv: str | None = None
 
 
 @dataclass(frozen=True)
@@ -107,6 +108,26 @@ class FeaSpec:
 
 
 @dataclass(frozen=True)
+class CfdSpec:
+    side_factor: float = 3.0
+    above_factor: float = 3.0
+    below_factor: float = 6.0
+    background_cells_per_radius: int = 4
+    mrf_radius_factor: float = 1.08
+    mrf_refinement_level: int = 2
+    surface_refinement_min: int = 5
+    surface_refinement_max: int = 6
+    feature_refinement_level: int = 6
+    iterations: int = 1500
+    snapshots: int = 5
+    processors: int = 0
+    function_objects: bool = False
+    openfoam_bashrc: str | None = None
+    keep_case: bool = True
+    timeout_s: int = 6 * 3600
+
+
+@dataclass(frozen=True)
 class DesignCase:
     name: str
     geometry: GeometrySpec
@@ -117,6 +138,7 @@ class DesignCase:
     structure: StructureSpec = field(default_factory=StructureSpec)
     cad: CadSpec = field(default_factory=CadSpec)
     fea: FeaSpec = field(default_factory=FeaSpec)
+    cfd: CfdSpec = field(default_factory=CfdSpec)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -236,6 +258,7 @@ _NESTED: dict[tuple[type, str], type] = {
     (DesignCase, "structure"): StructureSpec,
     (DesignCase, "cad"): CadSpec,
     (DesignCase, "fea"): FeaSpec,
+    (DesignCase, "cfd"): CfdSpec,
     (AeroSpec, "polar"): PolarSpec,
     (StructureSpec, "material"): MaterialSpec,
 }
@@ -253,6 +276,8 @@ def _validate(design: DesignCase) -> None:
         (design.structure.material.E_Pa > 0.0 and design.structure.material.density_kg_m3 > 0.0, "material E and density must be positive"),
         (design.airfoils.points_per_side >= 20, "airfoils.points_per_side must be >= 20"),
         (design.fea.mesh_size_m > 0.0, "fea.mesh_size_m must be positive"),
+        (design.cfd.iterations >= 1 and design.cfd.snapshots >= 1, "cfd.iterations and cfd.snapshots must be >= 1"),
+        (design.cfd.surface_refinement_min <= design.cfd.surface_refinement_max, "cfd.surface_refinement_min must be <= max"),
     ]
     for ok, message in checks:
         if not ok:

@@ -11,6 +11,7 @@ import csv
 import hashlib
 import importlib
 import json
+import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,20 +23,22 @@ from prandtl_prop.cad.sections import BladeSection, build_sections, section_tabl
 from prandtl_prop.design import DesignCase, resolve_path
 from prandtl_prop.runs import RunStore, StageRun, stage_key
 
-STAGES = ("aero", "sections", "cad", "beam", "fea")
+STAGES = ("aero", "sections", "cad", "beam", "fea", "cfd")
 STAGE_UPSTREAM = {
     "aero": (),
     "sections": ("aero",),
     "cad": ("aero", "sections"),
     "beam": ("aero", "sections"),
     "fea": ("aero", "sections", "cad", "beam"),
+    "cfd": ("aero", "cad"),
 }
 STAGE_MODULES = {
-    "aero": ("prandtl_prop.aero.bemt", "prandtl_prop.aero.polars", "prandtl_prop.pipeline"),
+    "aero": ("prandtl_prop.aero.bemt", "prandtl_prop.aero.polars", "prandtl_prop.aero.corrections", "prandtl_prop.pipeline"),
     "sections": ("prandtl_prop.cad.airfoils", "prandtl_prop.cad.sections", "prandtl_prop.pipeline"),
     "cad": ("prandtl_prop.cad.step", "prandtl_prop.pipeline"),
     "beam": ("prandtl_prop.structures.loads", "prandtl_prop.structures.beam", "prandtl_prop.pipeline"),
     "fea": ("prandtl_prop.structures.loads", "prandtl_prop.structures.calculix", "prandtl_prop.pipeline"),
+    "cfd": ("prandtl_prop.cfd.openfoam", "prandtl_prop.pipeline"),
 }
 
 
@@ -88,10 +91,11 @@ def _stage_aero(design: DesignCase, run: StageRun, upstream: dict[str, StageRun]
     op = _operating_point(design)
     stations = BladeStations.from_rows(_read_csv(resolve_path(design.geometry.stations_csv)), op.radius_m)
     polar = _polar(design)
+    corrections = _corrections(design, stations, op.radius_m)
     if design.aero.trim_to_target_thrust:
-        result = trim_to_thrust(stations, op, polar, float(op_spec.target_thrust_N), tip_loss=design.aero.tip_loss)
+        result = trim_to_thrust(stations, op, polar, float(op_spec.target_thrust_N), tip_loss=design.aero.tip_loss, corrections=corrections)
     else:
-        result = solve_rotor(stations, op, polar, tip_loss=design.aero.tip_loss)
+        result = solve_rotor(stations, op, polar, tip_loss=design.aero.tip_loss, corrections=corrections)
     _write_csv(run.path("stations.csv"), result.station_rows())
     metrics = dict(result.summary)
     warnings = []
@@ -100,6 +104,10 @@ def _stage_aero(design: DesignCase, run: StageRun, upstream: dict[str, StageRun]
             warnings.append(f"{metrics[name]} station(s) flagged: {name.removesuffix('_count')}")
     if design.aero.polar.type == "analytic":
         warnings.append("Analytic polar in use: results verify the pipeline, not the airfoils.")
+    if corrections is not None:
+        metrics["corrections_csv"] = design.aero.corrections_csv
+        metrics["mean_lift_factor"] = float(corrections[0].mean())
+        metrics["mean_drag_factor"] = float(corrections[1].mean())
     return metrics, warnings
 
 
@@ -253,12 +261,118 @@ def _stage_fea(design: DesignCase, run: StageRun, upstream: dict[str, StageRun])
     return metrics, warnings
 
 
+def _stage_cfd(design: DesignCase, run: StageRun, upstream: dict[str, StageRun]) -> tuple[dict[str, Any], list[str]]:
+    import os
+    import shutil
+
+    import numpy as np
+
+    from prandtl_prop.cfd import openfoam
+
+    spec = design.cfd
+    op = _operating_point(design)
+    stl = upstream["cad"].output("rotor_m.stl")
+    if not stl.is_file():
+        raise FileNotFoundError("cfd needs the rotor STL; enable cad.export_rotor")
+    processors = spec.processors or os.cpu_count() or 1
+    nu = op.mu_air_kg_m_s / op.rho_kg_m3
+    params = openfoam.CaseParameters(
+        radius_m=op.radius_m,
+        omega_rad_s=op.omega_rad_s,
+        nu_m2_s=nu,
+        rho_kg_m3=op.rho_kg_m3,
+        blade_z_extent_m=openfoam.blade_z_extent(stl),
+        side_factor=spec.side_factor,
+        above_factor=spec.above_factor,
+        below_factor=spec.below_factor,
+        background_cells_per_radius=spec.background_cells_per_radius,
+        mrf_radius_factor=spec.mrf_radius_factor,
+        mrf_refinement_level=spec.mrf_refinement_level,
+        surface_refinement_levels=(spec.surface_refinement_min, spec.surface_refinement_max),
+        feature_refinement_level=spec.feature_refinement_level,
+        iterations=spec.iterations,
+        snapshots=spec.snapshots,
+        processors=processors,
+        function_objects=spec.function_objects,
+    )
+    case = openfoam.write_case(run.path("case"), stl, params)
+    openfoam.run_case(case, processors=processors, bashrc=spec.openfoam_bashrc, timeout_s=spec.timeout_s)
+
+    mesh = openfoam.read_mesh(case)
+    history = []
+    for time_dir in openfoam.solution_times(case):
+        wall = openfoam.wall_loads(case, time_dir, rho_kg_m3=op.rho_kg_m3, nu_m2_s=nu, mesh=mesh)
+        far = openfoam.farfield_thrust(case, time_dir, rho_kg_m3=op.rho_kg_m3, mesh=mesh)
+        torque = -float((wall.centres[:, 0] * wall.force_N[:, 1] - wall.centres[:, 1] * wall.force_N[:, 0]).sum())
+        history.append(
+            {
+                "iteration": float(time_dir.name),
+                "thrust_wall_N": float(wall.force_N[:, 2].sum()),
+                "thrust_farfield_N": far["thrust_N"],
+                "torque_Nm": torque,
+                "mass_imbalance_fraction": far["net_volume_flux_m3_s"] / max(far["outflow_m3_s"], 1.0e-12),
+            }
+        )
+    _write_csv(run.path("cfd_history.csv"), history)
+
+    station_rows = _read_csv(upstream["aero"].output("stations.csv"))
+    radii = np.array([float(row["r_m"]) for row in station_rows])
+    dT, dQ = openfoam.station_loads(wall, radii)
+    comparison = [
+        {
+            "r_R": float(row["r_R"]),
+            "r_m": float(row["r_m"]),
+            "bemt_dT_N": float(row["dT_N"]),
+            "cfd_dT_N": float(dT[index]),
+            "bemt_dQ_Nm": float(row["dQ_Nm"]),
+            "cfd_dQ_Nm": float(dQ[index]),
+        }
+        for index, row in enumerate(station_rows)
+    ]
+    _write_csv(run.path("cfd_station_loads.csv"), comparison)
+    residuals = openfoam.residual_history(case)
+    final, previous = history[-1], history[-2] if len(history) > 1 else history[-1]
+    thrust, torque = final["thrust_wall_N"], final["torque_Nm"]
+    bemt = upstream["aero"].metrics
+    power = torque * op.omega_rad_s
+    ideal = thrust**1.5 / math.sqrt(2.0 * op.rho_kg_m3 * op.disk_area_m2) if thrust > 0 else math.nan
+    metrics: dict[str, Any] = {
+        "cell_count": int(mesh.owner.max()) + 1,
+        "thrust_N": thrust,
+        "torque_Nm": torque,
+        "power_W": power,
+        "figure_of_merit": ideal / power if power > 0 else math.nan,
+        "thrust_ratio_cfd_over_bemt": thrust / float(bemt["thrust_N"]),
+        "torque_ratio_cfd_over_bemt": torque / float(bemt["torque_Nm"]),
+        "wall_vs_farfield_thrust_difference_fraction": (thrust - final["thrust_farfield_N"]) / thrust if thrust else math.nan,
+        "mass_imbalance_fraction": final["mass_imbalance_fraction"],
+        "last_interval_thrust_change_fraction": abs(final["thrust_wall_N"] - previous["thrust_wall_N"]) / abs(thrust)
+        if thrust
+        else math.nan,
+        "last_interval_torque_change_fraction": abs(final["torque_Nm"] - previous["torque_Nm"]) / abs(torque) if torque else math.nan,
+        "final_residuals": {name: values[-1] for name, values in residuals.items()},
+        "geometry_collective_offset_deg": float(bemt.get("collective_offset_deg", 0.0)) if design.cad.apply_trim_offset else 0.0,
+    }
+    warnings = []
+    if abs(metrics["wall_vs_farfield_thrust_difference_fraction"]) > 0.02:
+        warnings.append("Wall-integrated and far-field momentum thrust differ by more than 2%: check convergence and domain size")
+    if metrics["last_interval_thrust_change_fraction"] > 0.005:
+        warnings.append("Thrust still changing by more than 0.5% between the last snapshots: run more iterations")
+    if not spec.keep_case:
+        shutil.rmtree(case)
+    else:
+        for path in case.glob("processor*"):
+            shutil.rmtree(path)
+    return metrics, warnings
+
+
 STAGE_FUNCTIONS: dict[str, Callable[[DesignCase, StageRun, dict[str, StageRun]], tuple[dict[str, Any], list[str]]]] = {
     "aero": _stage_aero,
     "sections": _stage_sections,
     "cad": _stage_cad,
     "beam": _stage_beam,
     "fea": _stage_fea,
+    "cfd": _stage_cfd,
 }
 
 STAGE_DESIGN_INPUTS = {
@@ -267,6 +381,7 @@ STAGE_DESIGN_INPUTS = {
     "cad": ("geometry", "cad", "operating_point", "structure"),
     "beam": ("operating_point", "structure"),
     "fea": ("operating_point", "structure", "fea"),
+    "cfd": ("operating_point", "cfd"),
 }
 
 
@@ -291,6 +406,14 @@ def design_sections(design: DesignCase, aero_run: StageRun) -> list[BladeSection
 
 def _trim_offset(design: DesignCase, aero_run: StageRun) -> float:
     return float(aero_run.metrics.get("collective_offset_deg", 0.0)) if design.cad.apply_trim_offset else 0.0
+
+
+def _corrections(design: DesignCase, stations: BladeStations, radius_m: float):
+    if design.aero.corrections_csv is None:
+        return None
+    from prandtl_prop.aero.corrections import read_corrections
+
+    return read_corrections(resolve_path(design.aero.corrections_csv), stations.r_m / radius_m)
 
 
 def _operating_point(design: DesignCase) -> OperatingPoint:
@@ -323,6 +446,8 @@ def _input_files(stage: str, design: DesignCase) -> list[Path]:
     geometry_csv = resolve_path(design.geometry.stations_csv)
     if stage == "aero":
         files = [geometry_csv]
+        if design.aero.corrections_csv is not None:
+            files.append(resolve_path(design.aero.corrections_csv))
         if design.aero.polar.type == "table":
             directory = resolve_path(design.aero.polar.directory)
             files += (

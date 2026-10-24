@@ -33,6 +33,16 @@ HEADLINE = {
         "tip_deflection_z_ratio_fea_over_beam",
         "root_centrifugal_ratio_fea_over_beam",
     ),
+    "cfd": (
+        "cell_count",
+        "thrust_N",
+        "torque_Nm",
+        "figure_of_merit",
+        "thrust_ratio_cfd_over_bemt",
+        "torque_ratio_cfd_over_bemt",
+        "wall_vs_farfield_thrust_difference_fraction",
+        "last_interval_thrust_change_fraction",
+    ),
 }
 
 
@@ -62,14 +72,26 @@ def build_parser() -> argparse.ArgumentParser:
         )
         command.add_argument("--runs-dir", type=Path, default=config.RUNS_DIR, help="Root folder for run outputs.")
         command.add_argument("--force", action="store_true", help="Re-run even when a cached run exists.")
+    loop = commands.add_parser("loop", help="Iterate BEMT trim, CAD, CFD, and BEMT calibration until CFD meets target thrust.")
+    loop.add_argument("design", type=Path, help="Design YAML file.")
+    loop.add_argument("--iterations", type=int, default=4, help="Maximum CFD runs.")
+    loop.add_argument("--thrust-tolerance", type=float, default=0.005, help="Converged when |T_cfd - T_target| / T_target is below this.")
+    loop.add_argument(
+        "--factor-degree", type=int, default=3, help="Polynomial degree of the spanwise correction factors (-1: per station)."
+    )
+    loop.add_argument("--set", dest="overrides", action="append", default=[], metavar="KEY=VALUE")
+    loop.add_argument("--set-file", dest="override_files", action="append", default=[], type=Path, metavar="PATH")
+    loop.add_argument("--runs-dir", type=Path, default=config.RUNS_DIR)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    stages = [stage.strip() for stage in args.stages.split(",") if stage.strip()]
     store = RunStore(args.runs_dir)
     overrides = [line for path in args.override_files for line in read_override_file(path)] + args.overrides
+    if args.command == "loop":
+        return _loop(args, store, overrides)
+    stages = [stage.strip() for stage in args.stages.split(",") if stage.strip()]
     results: dict[str, dict[str, StageOutcome]] = {}
     for path in args.designs:
         design = load_design(path, overrides)
@@ -83,6 +105,41 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "compare":
         _print_comparison(results)
     return 0
+
+
+def _loop(args: argparse.Namespace, store: RunStore, overrides: list[str]) -> int:
+    from prandtl_prop.loop import run_cfd_loop
+
+    try:
+        result = run_cfd_loop(
+            args.design,
+            overrides=overrides,
+            store=store,
+            max_iterations=args.iterations,
+            thrust_tolerance=args.thrust_tolerance,
+            factor_degree=None if args.factor_degree < 0 else args.factor_degree,
+        )
+    except (FileNotFoundError, ValueError, ImportError, RuntimeError) as exc:
+        print(f"loop failed: {exc}", file=sys.stderr)
+        return 1
+    columns = (
+        "iteration",
+        "collective_offset_deg",
+        "bemt_thrust_N",
+        "cfd_thrust_N",
+        "cfd_torque_Nm",
+        "cfd_thrust_error_fraction",
+        "mean_lift_factor",
+        "mean_drag_factor",
+    )
+    print("".join(f"{name:>26}" for name in columns))
+    for row in result.history:
+        print("".join(f"{_format(row[name]):>26}" for name in columns))
+    print(f"converged: {result.converged}")
+    print(f"history: {config.relative(result.history_csv)}")
+    if result.corrections_csv:
+        print(f"latest corrections: {config.relative(result.corrections_csv)}")
+    return 0 if result.converged else 3
 
 
 def _print_design(name: str, outcomes: dict[str, StageOutcome]) -> None:
