@@ -23,6 +23,7 @@ from prandtl_prop.runs import RunStore
 HEADLINE = {
     "aero": ("thrust_N", "torque_Nm", "power_W", "figure_of_merit", "collective_offset_deg", "nonconverged_station_count"),
     "sections": ("section_count", "substituted_airfoil_count"),
+    "dfm": ("all_pass", "min_trailing_edge_thickness_m", "max_section_thickness_m", "pull_angle_deg", "beam_excitation_margin_over_band"),
     "cad": ("blade_mass_kg", "blade_solid_valid", "loft_vs_section_quadrature_volume_ratio"),
     "beam": ("max_von_mises_Pa", "margin_of_safety", "tip_deflection_z_m", "tip_elastic_twist_deg", "root_centrifugal_force_N"),
     "fea": (
@@ -77,6 +78,30 @@ def build_parser() -> argparse.ArgumentParser:
         )
         command.add_argument("--runs-dir", type=Path, default=config.RUNS_DIR, help="Root folder for run outputs.")
         command.add_argument("--force", action="store_true", help="Re-run even when a cached run exists.")
+    molding = commands.add_parser(
+        "optimize-molding", help="Optimise the thickness schedule for injection-molded CFRP and write a new design."
+    )
+    molding.add_argument("design", type=Path)
+    molding.add_argument(
+        "--material", default="peek-cf30", help="Material preset: aluminum, pa6-cf30, peek-cf30 (see manufacturing/materials.py)."
+    )
+    molding.add_argument(
+        "--rpm-band", type=float, nargs=2, default=(0.9, 1.1), metavar=("LO", "HI"), help="Operating rpm band as fractions of design rpm."
+    )
+    molding.add_argument("--margin", type=float, default=0.10, help="Minimum frequency separation from kP lines.")
+    molding.add_argument("--max-thickness-mm", type=float, default=6.5, help="Largest solid section thickness the molder accepts.")
+    molding.add_argument("--te-mm", type=float, default=0.6, help="Minimum blunt trailing-edge thickness.")
+    molding.add_argument(
+        "--min-scale",
+        type=float,
+        default=1.0,
+        help="Lowest thickness scale; below 1 thins the designed airfoils (aero model less reliable).",
+    )
+    molding.add_argument("--output", type=Path, default=None, help="Where to write the optimised design YAML.")
+    molding.add_argument("--set", dest="overrides", action="append", default=[], metavar="KEY=VALUE")
+    molding.add_argument("--set-file", dest="override_files", action="append", default=[], type=Path, metavar="PATH")
+    molding.add_argument("--runs-dir", type=Path, default=config.RUNS_DIR)
+
     loop = commands.add_parser("loop", help="Iterate BEMT trim, CAD, CFD, and BEMT calibration until CFD meets target thrust.")
     loop.add_argument("design", type=Path, help="Design YAML file.")
     loop.add_argument("--iterations", type=int, default=4, help="Maximum CFD runs.")
@@ -96,6 +121,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     overrides = [line for path in args.override_files for line in read_override_file(path)] + args.overrides
     if args.command == "loop":
         return _loop(args, store, overrides)
+    if args.command == "optimize-molding":
+        return _optimize_molding(args, store, overrides)
     stages = [stage.strip() for stage in args.stages.split(",") if stage.strip()]
     results: dict[str, dict[str, StageOutcome]] = {}
     for path in args.designs:
@@ -145,6 +172,45 @@ def _loop(args: argparse.Namespace, store: RunStore, overrides: list[str]) -> in
     if result.corrections_csv:
         print(f"latest corrections: {config.relative(result.corrections_csv)}")
     return 0 if result.converged else 3
+
+
+def _optimize_molding(args: argparse.Namespace, store: RunStore, overrides: list[str]) -> int:
+    from prandtl_prop.manufacturing.workflow import optimize_for_molding
+
+    try:
+        outcome = optimize_for_molding(
+            args.design,
+            material=args.material,
+            overrides=overrides,
+            store=store,
+            rpm_band=tuple(args.rpm_band),
+            margin=args.margin,
+            max_section_thickness_m=args.max_thickness_mm / 1000.0,
+            trailing_edge_thickness_m=args.te_mm / 1000.0,
+            min_scale=args.min_scale,
+            output=args.output,
+        )
+    except (FileNotFoundError, ValueError, KeyError, ImportError) as exc:
+        print(f"optimize-molding failed: {exc}", file=sys.stderr)
+        return 1
+    result = outcome.result
+    print(f"baseline first flap f0 {result.f0_baseline_hz:.1f} Hz, Southwell K {result.southwell_k:.2f}")
+    for attempt in result.attempts:
+        print(f"  {attempt['window']}: {attempt['result']}")
+    if result.best is None:
+        print("no feasible design: relax the rpm band, the thickness limit, or choose a stiffer material")
+        print(f"report: {config.relative(outcome.report_path)}")
+        return 3
+    best = result.best
+    print(f"chosen window {result.window.lower_harmonic}P-{result.window.lower_harmonic + 1}P")
+    print(f"  profile-torque penalty {best.profile_torque_penalty_Nm * 1e3:.2f} mN*m, blade mass {best.blade_mass_kg * 1e3:.0f} g")
+    print(
+        f"  first flap {best.flap1_hz.min():.0f}-{best.flap1_hz.max():.0f} Hz over the band, max stress {best.max_stress_Pa / 1e6:.1f} MPa"
+    )
+    print(f"  tip deflection {best.tip_deflection_m * 1e3:.1f} mm, max thickness {best.molding['max_section_thickness_m'] * 1e3:.2f} mm")
+    print(f"design: {config.relative(outcome.design_path)}")
+    print(f"report: {config.relative(outcome.report_path)}")
+    return 0
 
 
 def _print_design(name: str, outcomes: dict[str, StageOutcome]) -> None:

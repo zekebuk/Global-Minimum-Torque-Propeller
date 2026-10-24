@@ -135,3 +135,10 @@ def test_every_stage_is_fully_registered() -> None:
         assert set(registry) == set(pipeline.STAGES)
     for stage, upstream in pipeline.STAGE_UPSTREAM.items():
         assert all(pipeline.STAGES.index(name) < pipeline.STAGES.index(stage) for name in upstream)
+
+
+def test_cad_stage_writes_a_render(tmp_path) -> None:
+    pytest.importorskip("cadquery")
+    outcomes = run_design(_smoke(extra=["cad.export_rotor=false"]), ["cad"], store=RunStore(tmp_path))
+    image = outcomes["cad"].run.output("render.png")
+    assert image.is_file() and image.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"

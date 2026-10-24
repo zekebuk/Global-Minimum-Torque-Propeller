@@ -17,17 +17,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from prandtl_prop.aero import AnalyticPolar, BladeStations, OperatingPoint, TablePolar, solve_rotor, trim_to_thrust
 from prandtl_prop.cad.airfoils import find_airfoil_file, load_airfoil
 from prandtl_prop.cad.sections import BladeSection, build_sections, section_table
 from prandtl_prop.design import DesignCase, resolve_path
 from prandtl_prop.runs import RunStore, StageRun, stage_key
 
-STAGES = ("aero", "sections", "cad", "beam", "fea", "modal", "cfd")
-DEFAULT_STAGES = ("aero", "sections", "cad", "beam")  # seconds; fea, modal, and cfd take minutes to hours
+STAGES = ("aero", "sections", "dfm", "cad", "beam", "fea", "modal", "cfd")
+DEFAULT_STAGES = ("aero", "sections", "dfm", "cad", "beam")  # seconds; fea, modal, and cfd take minutes to hours
 STAGE_UPSTREAM = {
     "aero": (),
     "sections": ("aero",),
+    "dfm": ("aero", "sections"),
     "cad": ("aero", "sections"),
     "beam": ("aero", "sections"),
     "fea": ("aero", "sections", "cad", "beam"),
@@ -35,9 +38,16 @@ STAGE_UPSTREAM = {
     "cfd": ("aero", "cad"),
 }
 STAGE_MODULES = {
-    "aero": ("prandtl_prop.aero.bemt", "prandtl_prop.aero.polars", "prandtl_prop.aero.corrections", "prandtl_prop.pipeline"),
-    "sections": ("prandtl_prop.cad.airfoils", "prandtl_prop.cad.sections", "prandtl_prop.pipeline"),
-    "cad": ("prandtl_prop.cad.step", "prandtl_prop.pipeline"),
+    "aero": (
+        "prandtl_prop.aero.bemt",
+        "prandtl_prop.aero.polars",
+        "prandtl_prop.aero.corrections",
+        "prandtl_prop.manufacturing.injection",
+        "prandtl_prop.pipeline",
+    ),
+    "sections": ("prandtl_prop.cad.airfoils", "prandtl_prop.cad.sections", "prandtl_prop.manufacturing.injection", "prandtl_prop.pipeline"),
+    "dfm": ("prandtl_prop.manufacturing.injection", "prandtl_prop.structures.modal_beam", "prandtl_prop.pipeline"),
+    "cad": ("prandtl_prop.cad.step", "prandtl_prop.cad.render", "prandtl_prop.pipeline"),
     "beam": ("prandtl_prop.structures.loads", "prandtl_prop.structures.beam", "prandtl_prop.pipeline"),
     "fea": ("prandtl_prop.structures.loads", "prandtl_prop.structures.calculix", "prandtl_prop.pipeline"),
     "modal": ("prandtl_prop.structures.calculix", "prandtl_prop.pipeline"),
@@ -95,6 +105,10 @@ def _stage_aero(design: DesignCase, run: StageRun, upstream: dict[str, StageRun]
     stations = BladeStations.from_rows(_read_csv(resolve_path(design.geometry.stations_csv)), op.radius_m)
     polar = _polar(design)
     corrections = _corrections(design, stations, op.radius_m)
+    thickness_drag = _thickness_drag_factors(design, stations, op.radius_m)
+    if thickness_drag is not None:
+        lift, drag = corrections if corrections is not None else (np.ones(len(stations.r_m)), np.ones(len(stations.r_m)))
+        corrections = (lift, drag * thickness_drag)
     if design.aero.trim_to_target_thrust:
         result = trim_to_thrust(stations, op, polar, float(op_spec.target_thrust_N), tip_loss=design.aero.tip_loss, corrections=corrections)
     else:
@@ -107,7 +121,13 @@ def _stage_aero(design: DesignCase, run: StageRun, upstream: dict[str, StageRun]
             warnings.append(f"{metrics[name]} station(s) flagged: {name.removesuffix('_count')}")
     if design.aero.polar.type == "analytic":
         warnings.append("Analytic polar in use: results verify the pipeline, not the airfoils.")
-    if corrections is not None:
+    if thickness_drag is not None:
+        metrics["thickness_drag_factor_mean"] = float(thickness_drag.mean())
+        warnings.append(
+            "Thickness modified for manufacturing: profile drag scaled by the Hoerner form-factor ratio; "
+            "polars are for the unmodified sections and the blunt-TE base drag is not modelled. Regenerate XFOIL polars for the final sections."
+        )
+    if corrections is not None and design.aero.corrections_csv is not None:
         metrics["corrections_csv"] = design.aero.corrections_csv
         metrics["mean_lift_factor"] = float(corrections[0].mean())
         metrics["mean_drag_factor"] = float(corrections[1].mean())
@@ -144,6 +164,38 @@ def _stage_sections(design: DesignCase, run: StageRun, upstream: dict[str, Stage
     return metrics, [f"Airfoil stand-in used: {text}" for text in substituted]
 
 
+def _stage_dfm(design: DesignCase, run: StageRun, upstream: dict[str, StageRun]) -> tuple[dict[str, Any], list[str]]:
+    """Injection-molding checks plus a fast rotating-beam Campbell check over the operating rpm band."""
+
+    from prandtl_prop.manufacturing.injection import MoldingRules, check_molding
+    from prandtl_prop.structures.modal_beam import campbell, excitation_margin
+
+    spec = design.molding
+    rules = MoldingRules(
+        min_trailing_edge_thickness_m=spec.min_trailing_edge_thickness_m,
+        max_section_thickness_m=spec.max_section_thickness_m,
+        max_thickness_gradient=spec.max_thickness_gradient,
+        max_flow_length_ratio=spec.max_flow_length_ratio,
+        min_draft_deg=spec.min_draft_deg,
+    )
+    sections = design_sections(design, upstream["aero"])
+    report = check_molding(sections, rules, spec.pull_angle_deg)
+    material = design.structure.material
+    lo, hi = spec.operating_rpm_fractions
+    rpm_values = list(np.linspace(lo, hi, 9) * design.operating_point.rpm)
+    modes = campbell(sections, E_Pa=material.E_Pa, density_kg_m3=material.density_kg_m3, rpm_values=rpm_values, count=3)
+    report["operating_rpm_range"] = [rpm_values[0], rpm_values[-1]]
+    report["beam_flap1_hz_over_band"] = [m[0].frequency_hz for m in modes]
+    report["beam_excitation_margin_over_band"] = excitation_margin(modes, rpm_values)
+    report["checks"]["frequency_margin"] = report["beam_excitation_margin_over_band"] >= spec.frequency_margin
+    report["all_pass"] = all(report["checks"].values())
+    run.write_json("molding_report.json", report)
+    warnings = [f"Molding/frequency check failed: {name}" for name, ok in report["checks"].items() if not ok]
+    metrics = {key: value for key, value in report.items() if key != "checks"}
+    metrics.update({f"check_{name}": ok for name, ok in report["checks"].items()})
+    return metrics, warnings
+
+
 def _stage_cad(design: DesignCase, run: StageRun, upstream: dict[str, StageRun]) -> tuple[dict[str, Any], list[str]]:
     import numpy as np
 
@@ -167,6 +219,16 @@ def _stage_cad(design: DesignCase, run: StageRun, upstream: dict[str, StageRun])
     }
     if design.cad.export_stl:
         step.export_stl(blade, run.path("blade_m.stl"), design.cad.stl_tolerance_m)
+        from prandtl_prop.cad.render import render
+
+        picked = sections[::3] + ([sections[-1]] if (len(sections) - 1) % 3 else [])
+        render(
+            run.path("blade_m.stl"),
+            run.path("render.png"),
+            sections=[s.points_3d() for s in picked],
+            radii_m=[s.r_m for s in picked],
+            title=f"{design.name}: {design.description}"[:140],
+        )
     if design.cad.export_solidworks_curves:
         curves = step.write_solidworks_curves(sections, run.path("solidworks_curves"))
         metrics["solidworks_curve_count"] = len(curves)
@@ -453,6 +515,7 @@ def _stage_cfd(design: DesignCase, run: StageRun, upstream: dict[str, StageRun])
 STAGE_FUNCTIONS: dict[str, Callable[[DesignCase, StageRun, dict[str, StageRun]], tuple[dict[str, Any], list[str]]]] = {
     "aero": _stage_aero,
     "sections": _stage_sections,
+    "dfm": _stage_dfm,
     "cad": _stage_cad,
     "beam": _stage_beam,
     "fea": _stage_fea,
@@ -461,8 +524,9 @@ STAGE_FUNCTIONS: dict[str, Callable[[DesignCase, StageRun, dict[str, StageRun]],
 }
 
 STAGE_DESIGN_INPUTS = {
-    "aero": ("operating_point", "geometry", "aero"),
+    "aero": ("operating_point", "geometry", "aero", "airfoils.thickness_scale", "airfoils.trailing_edge_thickness_m"),
     "sections": ("geometry", "airfoils", "cad.apply_trim_offset"),
+    "dfm": ("operating_point", "structure", "molding"),
     "cad": ("geometry", "cad", "operating_point", "structure"),
     "beam": ("operating_point", "structure"),
     "fea": ("operating_point", "structure", "fea"),
@@ -487,11 +551,47 @@ def design_sections(design: DesignCase, aero_run: StageRun) -> list[BladeSection
             cache[name] = load_airfoil(name, directory, design.airfoils.points_per_side, design.airfoils.substitutes)
         airfoils.append(cache[name])
     offset = _trim_offset(design, aero_run)
-    return build_sections(stations.r_m, stations.chord_m, stations.twist_deg + offset, airfoils, design.geometry.pitch_axis_chord_fraction)
+    sections = build_sections(
+        stations.r_m, stations.chord_m, stations.twist_deg + offset, airfoils, design.geometry.pitch_axis_chord_fraction
+    )
+    return apply_manufacturing(design, sections)
+
+
+def apply_manufacturing(design: DesignCase, sections: list[BladeSection]) -> list[BladeSection]:
+    """Apply the design's thickness schedule and minimum trailing-edge thickness (camber preserved)."""
+
+    spec = design.airfoils
+    if not spec.thickness_scale and spec.trailing_edge_thickness_m is None:
+        return sections
+    import numpy as np
+
+    from prandtl_prop.manufacturing.injection import molded_sections, thickness_schedule
+
+    r_R = np.array([section.r_m for section in sections]) / design.operating_point.radius_m
+    scales = thickness_schedule(r_R, [tuple(point) for point in spec.thickness_scale])
+    return molded_sections(sections, scales, spec.trailing_edge_thickness_m)
 
 
 def _trim_offset(design: DesignCase, aero_run: StageRun) -> float:
     return float(aero_run.metrics.get("collective_offset_deg", 0.0)) if design.cad.apply_trim_offset else 0.0
+
+
+def _thickness_drag_factors(design: DesignCase, stations: BladeStations, radius_m: float):
+    """Hoerner form-factor ratio FF(t'/c) / FF(t/c) per station when the design modifies section thickness."""
+
+    spec = design.airfoils
+    if not spec.thickness_scale and spec.trailing_edge_thickness_m is None:
+        return None
+    from prandtl_prop.manufacturing.injection import hoerner_form_factor, modify_airfoil, thickness_schedule
+
+    directory = resolve_path(spec.directory)
+    scales = thickness_schedule(stations.r_m / radius_m, [tuple(point) for point in spec.thickness_scale])
+    factors = np.ones(len(stations.r_m))
+    for index, (name, scale, chord) in enumerate(zip(stations.airfoil, scales, stations.chord_m, strict=True)):
+        base = load_airfoil(name, directory, spec.points_per_side, spec.substitutes)
+        modified = modify_airfoil(base, float(scale), (spec.trailing_edge_thickness_m or 0.0) / float(chord))
+        factors[index] = float(hoerner_form_factor(modified.max_thickness) / hoerner_form_factor(base.max_thickness))
+    return factors
 
 
 def _corrections(design: DesignCase, stations: BladeStations, radius_m: float):
@@ -534,6 +634,8 @@ def _input_files(stage: str, design: DesignCase) -> list[Path]:
         files = [geometry_csv]
         if design.aero.corrections_csv is not None:
             files.append(resolve_path(design.aero.corrections_csv))
+        if design.airfoils.thickness_scale or design.airfoils.trailing_edge_thickness_m is not None:
+            files += _input_files("sections", design)[1:]
         if design.aero.polar.type == "table":
             directory = resolve_path(design.aero.polar.directory)
             files += (

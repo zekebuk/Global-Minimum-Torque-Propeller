@@ -126,3 +126,26 @@ def test_loft_volume_matches_section_quadrature() -> None:
     assert report.volume_m3 == pytest.approx(np.trapezoid(areas, r), rel=5.0e-3)
     rotor = step.report(step.rotor_solid(step.blade_solid(sections), 3))
     assert rotor.volume_m3 == pytest.approx(3.0 * report.volume_m3, rel=1.0e-6)
+
+
+def test_rotating_beam_modes_match_theory_and_calculix_benchmarks() -> None:
+    """Prismatic cantilever: f1, f2, lag exact to beam theory; Southwell K_flap ~1.49 and spin softening K_flap - K_lag ~1
+    (CalculiX gave 1.49 / 0.50 on the same section)."""
+
+    from prandtl_prop.structures.modal_beam import excitation_margin, rotating_modes
+
+    r, sections = _prismatic(count=21)
+    props = section_plane_properties(sections[0])
+    span = r[-1] - r[0]
+    f1 = 1.8751**2 / (2.0 * np.pi) * np.sqrt(E * props.I_ss_m4 / (RHO * props.area_m2 * span**4))
+    still = rotating_modes(sections, E_Pa=E, density_kg_m3=RHO, omega_rad_s=0.0, count=3)
+    spinning = rotating_modes(sections, E_Pa=E, density_kg_m3=RHO, omega_rad_s=4000.0 * np.pi / 30.0, count=3)
+    assert [m.kind for m in still] == ["flap", "flap", "lag"]
+    assert still[0].frequency_hz == pytest.approx(f1, rel=1.0e-3)
+    assert still[1].frequency_hz == pytest.approx(f1 * (4.6941 / 1.8751) ** 2, rel=2.0e-3)
+    n = 4000.0 / 60.0
+    k_flap = (spinning[0].frequency_hz ** 2 - still[0].frequency_hz ** 2) / n**2
+    k_lag = (spinning[2].frequency_hz ** 2 - still[2].frequency_hz ** 2) / n**2
+    assert k_flap == pytest.approx(1.49, abs=0.03)
+    assert k_flap - k_lag == pytest.approx(1.0, abs=0.05)
+    assert 0.0 < excitation_margin([spinning], [4000.0]) < 1.0

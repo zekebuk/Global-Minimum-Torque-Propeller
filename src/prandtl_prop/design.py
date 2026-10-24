@@ -72,6 +72,9 @@ class AirfoilSpec:
     directory: str = "data/airfoils"
     points_per_side: int = 80
     substitutes: dict[str, str] = field(default_factory=dict)
+    # Manufacturing modifications (camber preserved): [[r/R, thickness scale], ...] and a minimum blunt TE.
+    thickness_scale: tuple[tuple[float, float], ...] = ()
+    trailing_edge_thickness_m: float | None = None
 
 
 @dataclass(frozen=True)
@@ -97,6 +100,22 @@ class CadSpec:
     export_stl: bool = True
     export_solidworks_curves: bool = True
     stl_tolerance_m: float = 1.0e-4
+
+
+@dataclass(frozen=True)
+class MoldingSpec:
+    """Injection-molding rules and the operating envelope used for frequency placement."""
+
+    min_trailing_edge_thickness_m: float = 0.0006
+    max_section_thickness_m: float = 0.0065
+    max_thickness_gradient: float = 0.05
+    max_flow_length_ratio: float = 150.0
+    min_draft_deg: float = 0.5
+    pull_angle_deg: float | None = None
+    operating_rpm_fractions: tuple[float, float] = (0.9, 1.1)
+    frequency_margin: float = 0.10
+    stress_safety_factor: float = 1.5
+    max_tip_deflection_fraction: float = 0.04
 
 
 @dataclass(frozen=True)
@@ -144,6 +163,7 @@ class DesignCase:
     cad: CadSpec = field(default_factory=CadSpec)
     fea: FeaSpec = field(default_factory=FeaSpec)
     cfd: CfdSpec = field(default_factory=CfdSpec)
+    molding: MoldingSpec = field(default_factory=MoldingSpec)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -264,6 +284,7 @@ _NESTED: dict[tuple[type, str], type] = {
     (DesignCase, "cad"): CadSpec,
     (DesignCase, "fea"): FeaSpec,
     (DesignCase, "cfd"): CfdSpec,
+    (DesignCase, "molding"): MoldingSpec,
     (AeroSpec, "polar"): PolarSpec,
     (StructureSpec, "material"): MaterialSpec,
 }

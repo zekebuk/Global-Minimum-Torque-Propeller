@@ -60,6 +60,7 @@ prandtl loop designs/gmt.yaml --set-file designs/smoke_overrides.txt --set-file 
 ```
 
 SolidWorks: see [`solidworks_import.md`](solidworks_import.md). STEP files are written in mm at true size.
+Injection-molded CFRP: see [`cfrp_injection_molding.md`](cfrp_injection_molding.md) (`prandtl optimize-molding`).
 
 ## Data you need to add
 
@@ -206,6 +207,19 @@ this against the operating envelope once the real geometry and material are in.
 
 `cfd_station_loads.csv` holds BEMT and CFD dT and dQ per station, and `cfd_history.csv` holds the
 thrust and torque history.
+
+**Mesh study (same geometry, smoke inputs):**
+
+| Mesh | Cells | Thrust | Torque | FM | Wall vs far-field | Run time (4 cores) |
+| --- | --- | --- | --- | --- | --- | --- |
+| Smoke (surface levels 3-4) | 41k | 27.80 N | 1.090 N*m | 0.41 | 0.37% | 1.5 min |
+| Default (surface levels 5-6) | 234k | 33.65 N | 1.034 N*m | 0.58 | 0.09% | 8.3 min |
+| BEMT (analytic polar) | | 35.00 N | 0.848 N*m | 0.75 | | |
+
+Thrust moved 21% between the two meshes, so the default mesh is not yet mesh-converged. Run one more
+level (6-7, roughly 1M cells) for a Richardson estimate before trusting absolute numbers. The
+remaining CFD-BEMT gap also contains a polar mismatch: the analytic BEMT polar is not the NACA 4410
+geometry the CFD sees. With real XFOIL polars, that part of the gap closes.
 
 ## Closing the loop (`prandtl loop`)
 
