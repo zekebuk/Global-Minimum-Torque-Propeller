@@ -134,12 +134,12 @@ def campbell(
 
 
 def excitation_margin(modes_by_rpm: Sequence[Sequence[BeamMode]], rpm_values: Sequence[float], harmonics: int = 4) -> float:
-    """Smallest relative separation |f - k n| / f over all modes, speeds, and k = 1..harmonics."""
+    """Smallest separation |f - k n| / (k n), as a fraction of the excitation frequency, over all modes, speeds, and k = 1..harmonics."""
 
     worst = np.inf
     for modes, rpm in zip(modes_by_rpm, rpm_values, strict=True):
         n = rpm / 60.0
         for mode in modes:
             for k in range(1, harmonics + 1):
-                worst = min(worst, abs(mode.frequency_hz - k * n) / mode.frequency_hz)
+                worst = min(worst, abs(mode.frequency_hz - k * n) / (k * n))
     return float(worst)

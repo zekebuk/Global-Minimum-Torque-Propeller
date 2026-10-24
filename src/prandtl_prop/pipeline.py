@@ -368,7 +368,7 @@ def _stage_modal(design: DesignCase, run: StageRun, upstream: dict[str, StageRun
     worst = math.inf
     for mode in design_modes:
         nearest = min(range(1, spec.excitation_harmonics + 1), key=lambda k: abs(mode.frequency_hz - k * rev_hz))
-        margin = abs(mode.frequency_hz - nearest * rev_hz) / mode.frequency_hz
+        margin = abs(mode.frequency_hz - nearest * rev_hz) / (nearest * rev_hz)  # separation as a fraction of the excitation
         metrics[f"mode{mode.number}_{mode.kind}_hz"] = mode.frequency_hz
         metrics[f"mode{mode.number}_nearest_excitation"] = f"{nearest}P"
         metrics[f"mode{mode.number}_margin"] = margin

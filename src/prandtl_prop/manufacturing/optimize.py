@@ -211,7 +211,7 @@ def _other_modes_margin(modes_by_rpm: Sequence[Sequence[BeamMode]], rpm_values: 
             if mode is first:
                 continue
             for k in range(1, harmonics + 1):
-                worst = min(worst, abs(mode.frequency_hz - k * rpm / 60.0) / mode.frequency_hz)
+                worst = min(worst, abs(mode.frequency_hz - k * rpm / 60.0) / (k * rpm / 60.0))
     return worst
 
 

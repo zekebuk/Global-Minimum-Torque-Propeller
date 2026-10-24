@@ -119,3 +119,13 @@ def test_optimiser_returns_a_design_that_satisfies_every_constraint() -> None:
     assert np.min(problem.constraints(result.best.control, result.window)) >= 0.0
     assert result.best.molding["all_pass"]
     assert np.all(result.best.scales >= 1.0 - 1e-12)  # default: never thinner than the designed airfoils
+
+
+def test_frequency_margin_is_a_fraction_of_the_excitation() -> None:
+    """Regression: the optimiser requires f >= (1 + m) k n; every check must read that design as margin m, not m / (1 + m)."""
+
+    from prandtl_prop.structures.modal_beam import BeamMode, excitation_margin
+
+    n = 4000.0 / 60.0
+    mode = BeamMode(frequency_hz=1.10 * 2 * n, kind="flap", flap_fraction=1.0)
+    assert excitation_margin([[mode]], [4000.0], harmonics=2) == pytest.approx(0.10)
