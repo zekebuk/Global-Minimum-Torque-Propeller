@@ -5,8 +5,8 @@ from __future__ import annotations
 import csv
 import math
 import shutil
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
 
 from prandtl_prop import config
 
@@ -85,14 +85,14 @@ def validate_geometry(rows: list[GeometryRow]) -> None:
     chords = chord_values_m(rows)
     twists = twist_values_deg(rows)
 
-    if any(b <= a for a, b in zip(stations, stations[1:])):
+    if any(b <= a for a, b in zip(stations, stations[1:], strict=False)):
         raise AssertionError("Radial stations must be strictly increasing")
     if any(chord <= 0.0 for chord in chords):
         raise AssertionError("Chord values must be positive")
     if any(not math.isfinite(twist) for twist in twists):
         raise AssertionError("Twist values must be finite")
     if min(stations) <= 0.0 or max(stations) > 1.0001:
-        raise AssertionError("Radial stations should lie in the open span interval ending at the tip")
+        raise AssertionError("Radial stations must lie in (0, 1] (tolerance 1e-4 at the tip)")
 
 
 def validate_geometry_pair(mil_rows: list[GeometryRow], gmt_rows: list[GeometryRow], tolerance: float = 1.0e-10) -> None:
@@ -103,18 +103,19 @@ def validate_geometry_pair(mil_rows: list[GeometryRow], gmt_rows: list[GeometryR
     if len(mil_rows) != len(gmt_rows):
         raise AssertionError(f"Geometry row mismatch: MIL={len(mil_rows)}, GMT={len(gmt_rows)}")
 
-    for index, (mil_row, gmt_row) in enumerate(zip(mil_rows, gmt_rows), start=1):
-        for column in ("mu", "radius_m", "chord_m"):
-            delta = abs(float(row_value(mil_row, column)) - float(row_value(gmt_row, column)))
-            if delta > tolerance:
-                raise AssertionError(f"Station {index} {column} differs between MIL and GMT by {delta}")
+    for column, values in (("radial station", radial_stations), ("chord", chord_values_m)):
+        for index, (a, b) in enumerate(zip(values(mil_rows), values(gmt_rows), strict=True), start=1):
+            if abs(a - b) > tolerance:
+                raise AssertionError(f"Station {index} {column} differs between MIL and GMT by {abs(a - b)}")
+    for index, (mil_row, gmt_row) in enumerate(zip(mil_rows, gmt_rows, strict=True), start=1):
         if row_value(mil_row, "airfoil").strip().upper() != row_value(gmt_row, "airfoil").strip().upper():
             raise AssertionError(f"Station {index} airfoil differs between MIL and GMT")
 
 
 def export_locked_geometry(output_dir: Path = config.OUTPUT_GEOMETRY_DIR) -> list[Path]:
-    """Copy locked geometry CSVs to the clean output geometry folder."""
+    """Validate the locked geometry pair, then copy it to the clean output geometry folder."""
 
+    validate_geometry_pair(load_case_geometry("MIL"), load_case_geometry("GMT"))
     output_dir.mkdir(parents=True, exist_ok=True)
     outputs = [
         output_dir / "final_mil_geometry.csv",
@@ -125,7 +126,7 @@ def export_locked_geometry(output_dir: Path = config.OUTPUT_GEOMETRY_DIR) -> lis
     return outputs
 
 
-def write_geometry_audit(output_path: Path) -> Path:
+def write_geometry_audit(output_path: Path = config.OUTPUT_REPORTS_DIR / "geometry_audit.md") -> Path:
     """Write a compact geometry audit report."""
 
     mil_rows = load_case_geometry("MIL")
@@ -148,3 +149,9 @@ def write_geometry_audit(output_path: Path) -> Path:
     ]
     output_path.write_text("\n".join(lines), encoding="utf-8")
     return output_path
+
+
+def run_geometry_workflow() -> tuple[list[Path], Path]:
+    """Export the validated locked geometry and write the geometry audit."""
+
+    return export_locked_geometry(), write_geometry_audit()

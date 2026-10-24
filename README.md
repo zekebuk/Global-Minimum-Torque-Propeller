@@ -8,10 +8,11 @@ The repository is a research workflow, not a general propeller design package. T
 
 | Path | Purpose |
 | --- | --- |
-| `scripts/` | Final thesis workflow entry points. |
-| `scripts/helpers/` | Helper functions used by the final workflow scripts. |
+| `src/prandtl_prop/` | The single implementation: BEMT (`aero/`), CAD (`cad/`), structures (`structures/`), external tools (`external/`), design files, run cache, pipeline, and CLI. |
+| `designs/` | Design files (`mil.yaml`, `gmt.yaml`) for the iterative pipeline, plus smoke-test overrides. |
+| `scripts/` | Thin entry points for the locked thesis workflow. |
 | `scripts/gui/` | Interactive launchers for the Streamlit aero UI and MATLAB FEA viewer. |
-| `src/prandtl_prop/` | Retained importable package and tested source modules from the cleaned thesis workflow. |
+| `runs/` | Pipeline run folders, created on demand and git-ignored. |
 | `data/geometry/` | Locked MIL/GMT station-based geometry CSVs used by the workflow. |
 | `data/processed/` | Locked BEMT station data and summary files. |
 | `outputs/geometry_exports/` | Regenerated geometry exports. |
@@ -31,8 +32,7 @@ Use Python 3.10 or newer.
 ```bash
 python -m venv .venv
 python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-python -m pip install -e .
+python -m pip install -e .[cad,dev]     # or: python -m pip install -r requirements.txt (adds the GUI extras)
 ```
 
 The core locked-result workflow runs from CSV/JSON data in this repository. Historical regeneration attempts, UI experiments, and external-solver scripts are preserved under `archive/` and may require local XFOIL, XROTOR, MATLAB, Abaqus, OpenVSP, or PSU-WOPWOP installations.
@@ -48,9 +48,29 @@ python scripts/make_thesis_figures.py
 pytest
 ```
 
-The XROTOR and MATLAB commands are report-only by default. Add `--execute` only when the required external software and inputs are available. Archived scripts are deliberately excluded from the quick start.
+The XROTOR and MATLAB commands are report-only by default. Add `--execute` only when the required external software and inputs are available. A requested `--execute` that cannot run exits with status 2 and says why. Archived scripts are deliberately excluded from the quick start.
 
-## Reproducibility Workflow
+## Iterative Design Pipeline (BEMT -> CAD -> FEA/CFD)
+
+```bash
+prandtl run designs/gmt.yaml                                  # aero, sections, cad, beam (cached)
+prandtl compare designs/mil.yaml designs/gmt.yaml --stages aero,beam
+prandtl run designs/gmt.yaml --set operating_point.rpm=4200   # iterate on any design value
+prandtl run designs/gmt.yaml --set-file designs/smoke_overrides.txt   # smoke test without thesis data
+```
+
+The pipeline re-solves BEMT with a bracketed per-station solve and thrust trim. It then lofts the
+trimmed blade to STEP/STL with CadQuery, maps loads to the blade, and runs a beam structural screen.
+Each stage is cached in a content-addressed run folder. Real runs need the XFOIL polars and airfoil
+coordinates in `data/` (see `data/xfoil_polars/README.md`). See `docs/iterative_workflow.md` for the
+conventions, the verification evidence, and the planned CalculiX and OpenFOAM stages.
+
+**Locked result caveat:** the archived solver left the tip station unconverged in both locked
+cases, and the GMT tip violates the momentum balance by 84%. A first-order estimate puts the
+corrected torque reduction near 0.9%, not 1.50%. The figures below are the historical locked values
+until they are re-locked with the new solver and the real polars.
+
+## Locked-Result Reproducibility Workflow
 
 1. `python scripts/run_geometry_generation.py`
    Exports the locked MIL/GMT geometry to `outputs/geometry_exports/` and writes `outputs/reports/geometry_audit.md`.

@@ -22,7 +22,7 @@ def test_radial_stations_are_monotonic() -> None:
     """Nondimensional station locations should increase from root toward tip."""
 
     stations = geometry.radial_stations(geometry.load_case_geometry("MIL"))
-    assert all(b > a for a, b in zip(stations, stations[1:]))
+    assert all(b > a for a, b in zip(stations, stations[1:], strict=False))
     assert stations[0] == pytest.approx(0.2)
     assert stations[-1] <= 1.0
 

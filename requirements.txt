@@ -1,9 +1,2 @@
-numpy
-pandas
-scipy
-matplotlib
-pytest
-openpyxl
-streamlit
-black
-ruff
+# Convenience install of everything, including optional CAD and GUI extras.
+-e .[cad,gui,dev]

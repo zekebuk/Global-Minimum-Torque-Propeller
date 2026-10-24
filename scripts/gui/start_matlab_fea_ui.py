@@ -7,10 +7,10 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+if str(ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(ROOT / "src"))
 
-from scripts.helpers import gui_launchers
+from prandtl_prop.external import gui as gui_launchers
 
 
 def parse_args() -> argparse.Namespace:

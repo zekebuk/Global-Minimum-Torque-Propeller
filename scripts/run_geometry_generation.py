@@ -6,20 +6,20 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+if str(ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(ROOT / "src"))
 
-from scripts.helpers import geometry_generation, paths
+from prandtl_prop import config, geometry
 
 
 def main() -> int:
     """Export locked geometry and write a geometry audit report."""
 
-    exported, audit = geometry_generation.run_geometry_workflow()
+    exported, audit = geometry.run_geometry_workflow()
     print("Locked geometry export complete")
     for path in exported:
-        print(f"  {paths.relative(path)}")
-    print(f"  {paths.relative(audit)}")
+        print(f"  {config.relative(path)}")
+    print(f"  {config.relative(audit)}")
     return 0
 
 

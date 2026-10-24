@@ -7,10 +7,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-from scripts.helpers import matlab_fea, paths
+from prandtl_prop import config
+from prandtl_prop.external import matlab_fea
 
-STREAMLIT_ENTRY = paths.GUI_SCRIPTS_DIR / "streamlit_aero_ui.py"
-MATLAB_FEA_UI_ENTRY = paths.GUI_SCRIPTS_DIR / "start_matlab_fea_ui.m"
+STREAMLIT_ENTRY = config.GUI_SCRIPTS_DIR / "streamlit_aero_ui.py"
+MATLAB_FEA_UI_ENTRY = config.GUI_SCRIPTS_DIR / "start_matlab_fea_ui.m"
 
 
 def command_text(command: list[str]) -> str:
@@ -33,9 +34,9 @@ def run_streamlit_aero_ui(*, python_executable: str | Path | None = None, port: 
 
     command = streamlit_command(python_executable=python_executable, port=port)
     env = os.environ.copy()
-    legacy_path = str(paths.LEGACY_SCRIPTS_DIR)
-    env["PYTHONPATH"] = legacy_path + os.pathsep + env.get("PYTHONPATH", "")
-    completed = subprocess.run(command, cwd=paths.PROJECT_ROOT, env=env, check=False)
+    entries = [str(config.LEGACY_SCRIPTS_DIR), env.get("PYTHONPATH", "")]
+    env["PYTHONPATH"] = os.pathsep.join(entry for entry in entries if entry)
+    completed = subprocess.run(command, cwd=config.PROJECT_ROOT, env=env, check=False)
     return int(completed.returncode)
 
 
@@ -58,7 +59,7 @@ def build_matlab_fea_ui_expression(
 
     results_arg = results_csv if results_csv is not None else ""
     return (
-        f"addpath({matlab_string(paths.GUI_SCRIPTS_DIR)}); "
+        f"addpath({matlab_string(config.GUI_SCRIPTS_DIR)}); "
         f"start_matlab_fea_ui({matlab_string(results_arg)}, {matlab_string(viewer)}, {matlab_string(plot_plane)});"
     )
 
@@ -94,7 +95,7 @@ def start_matlab_fea_ui(
         plot_plane=plot_plane,
     )
     if wait:
-        completed = subprocess.run(command, cwd=paths.PROJECT_ROOT, check=False)
+        completed = subprocess.run(command, cwd=config.PROJECT_ROOT, check=False)
         return int(completed.returncode)
-    subprocess.Popen(command, cwd=paths.PROJECT_ROOT)
+    subprocess.Popen(command, cwd=config.PROJECT_ROOT)
     return 0

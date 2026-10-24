@@ -1,11 +1,11 @@
-"""Helpers for reading and checking locked BEMT postprocessing outputs."""
+"""Readers and checks for the locked BEMT station data produced by the archived aero solver."""
 
 from __future__ import annotations
 
 import csv
 from pathlib import Path
 
-from prandtl_prop import config
+from prandtl_prop import config, metrics
 
 StationRow = dict[str, str]
 
@@ -50,7 +50,7 @@ def assert_station_data_sane(rows: list[StationRow]) -> None:
     chord = column_values(rows, "chord_m")
     twist = column_values(rows, "twist_deg")
 
-    if any(b <= a for a, b in zip(radius, radius[1:])):
+    if any(b <= a for a, b in zip(radius, radius[1:], strict=False)):
         raise AssertionError("BEMT radial stations must be strictly increasing")
     if any(value < -1.0e-8 for value in thrust):
         raise AssertionError("Locked final case has an undocumented negative thrust station")
@@ -62,7 +62,7 @@ def assert_station_data_sane(rows: list[StationRow]) -> None:
         raise AssertionError("Station twist values are outside a reasonable engineering range")
 
 
-def write_station_summary(output_path: Path) -> Path:
+def write_station_summary(output_path: Path = config.OUTPUT_TABLES_DIR / "locked_bemt_station_summary.csv") -> Path:
     """Write a compact station-data summary table."""
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -85,7 +85,7 @@ def write_station_summary(output_path: Path) -> Path:
 
     fieldnames = list(rows[0])
     with output_path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, lineterminator="\n")
         writer.writeheader()
         for row in rows:
             writer.writerow({key: _csv_value(value) for key, value in row.items()})
@@ -96,3 +96,16 @@ def _csv_value(value: object) -> object:
     if isinstance(value, float):
         return f"{value:.12g}"
     return value
+
+
+def run_aero_postprocessing(
+    table_path: Path = config.OUTPUT_TABLES_DIR / "locked_bemt_summary.csv",
+    station_summary_path: Path = config.OUTPUT_TABLES_DIR / "locked_bemt_station_summary.csv",
+) -> tuple[Path, Path, float]:
+    """Validate the locked data against the constants and write the summary tables."""
+
+    metrics.assert_locked_summary_matches_constants()
+    table = metrics.write_locked_result_table(table_path)
+    station_summary = write_station_summary(station_summary_path)
+    reduction = metrics.torque_reduction_pct(config.LOCKED_MIL_TORQUE_NM, config.LOCKED_GMT_TORQUE_NM)
+    return table, station_summary, reduction

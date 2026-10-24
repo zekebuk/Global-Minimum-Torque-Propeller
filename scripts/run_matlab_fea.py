@@ -7,10 +7,11 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+if str(ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(ROOT / "src"))
 
-from scripts.helpers import matlab_fea, paths
+from prandtl_prop import config
+from prandtl_prop.external import matlab_fea
 
 
 def parse_args() -> argparse.Namespace:
@@ -36,9 +37,12 @@ def main() -> int:
     )
     print("MATLAB FEA workflow complete")
     print(f"  matlab executable: {result.matlab_executable or 'not found'}")
-    print(f"  FEA directory: {paths.relative(result.fea_directory) if result.fea_directory else 'not found'}")
+    print(f"  FEA directory: {config.relative(result.fea_directory) if result.fea_directory else 'not found'}")
     print(f"  return code: {result.returncode if result.returncode is not None else 'not run'}")
-    print(f"  {paths.relative(result.report_path)}")
+    print(f"  {config.relative(result.report_path)}")
+    if result.error:
+        print(f"  error: {result.error}", file=sys.stderr)
+        return 2
     return 0 if result.returncode in (None, 0) else result.returncode
 
 
