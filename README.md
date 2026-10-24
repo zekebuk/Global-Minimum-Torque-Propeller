@@ -53,8 +53,9 @@ The XROTOR and MATLAB commands are report-only by default. Add `--execute` only 
 ## Iterative Design Pipeline (BEMT -> CAD -> FEA/CFD)
 
 ```bash
-prandtl run designs/gmt.yaml --stages beam                    # aero, sections, beam (cached)
-prandtl run designs/gmt.yaml --stages cad,fea                 # STEP (mm) for SolidWorks + CalculiX solid FEA
+prandtl run designs/gmt.yaml                                  # fast stages: aero, sections, cad (STEP in mm), beam
+prandtl run designs/gmt.yaml --stages fea                     # CalculiX solid FEA with centrifugal stiffening
+prandtl run designs/gmt.yaml --stages modal                   # Campbell diagram (prestressed modes vs rpm)
 prandtl run designs/gmt.yaml --stages cfd                     # OpenFOAM MRF hover CFD
 prandtl loop designs/gmt.yaml                                 # BEMT -> CAD -> CFD -> calibrate -> re-trim
 prandtl compare designs/mil.yaml designs/gmt.yaml --stages aero,beam

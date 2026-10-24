@@ -49,8 +49,9 @@ prandtl compare designs/mil.yaml designs/gmt.yaml --stages aero,beam
 prandtl run designs/gmt.yaml --set operating_point.rpm=4200 --set structure.material.E_Pa=45.0e+9
 for rpm in 3800 4000 4200; do prandtl run designs/gmt.yaml --stages aero,beam --set operating_point.rpm=$rpm; done
 
-# Higher fidelity
+# Higher fidelity (opt-in; `prandtl run` alone runs only the fast stages aero, sections, cad, beam)
 prandtl run designs/gmt.yaml --stages fea           # CalculiX solid FEA (also runs aero, sections, cad, beam)
+prandtl run designs/gmt.yaml --stages modal         # Campbell diagram, minutes
 prandtl run designs/gmt.yaml --stages cfd           # OpenFOAM hover CFD
 prandtl loop designs/gmt.yaml --iterations 4        # BEMT -> CAD -> CFD -> calibrate -> re-trim until CFD hits 35 N
 
