@@ -24,6 +24,7 @@ from prandtl_prop.design import DesignCase, resolve_path
 from prandtl_prop.runs import RunStore, StageRun, stage_key
 
 STAGES = ("aero", "sections", "cad", "beam", "fea", "modal", "cfd")
+DEFAULT_STAGES = ("aero", "sections", "cad", "beam")  # seconds; fea, modal, and cfd take minutes to hours
 STAGE_UPSTREAM = {
     "aero": (),
     "sections": ("aero",),
@@ -56,7 +57,7 @@ class StageOutcome:
 
 def run_design(
     design: DesignCase,
-    stages: Sequence[str] = STAGES,
+    stages: Sequence[str] = DEFAULT_STAGES,
     *,
     store: RunStore | None = None,
     force: bool = False,
@@ -258,7 +259,7 @@ def _stage_fea(design: DesignCase, run: StageRun, upstream: dict[str, StageRun])
         if run.path(name).exists() and name != "blade.dat":
             run.path(name).unlink()
     warnings = []
-    if mesh.min_quality < 0.05:
+    if mesh.min_quality < 0.01:  # curved C3D10 at a sharp trailing edge typically reach ~0.03 with no inverted elements
         warnings.append(f"Poor mesh quality (min SICN {mesh.min_quality:.3f}); refine fea.mesh_size_m")
     if metrics["margin_of_safety_outside_clamp_zone"] < 0.0:
         warnings.append("Negative margin of safety outside the clamp zone")

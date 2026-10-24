@@ -17,7 +17,7 @@ from pathlib import Path
 
 from prandtl_prop import config
 from prandtl_prop.design import load_design, read_override_file
-from prandtl_prop.pipeline import STAGES, StageOutcome, run_design
+from prandtl_prop.pipeline import DEFAULT_STAGES, STAGES, StageOutcome, run_design
 from prandtl_prop.runs import RunStore
 
 HEADLINE = {
@@ -53,7 +53,11 @@ def build_parser() -> argparse.ArgumentParser:
     for name, help_text in (("run", "Run stages for one or more designs."), ("compare", "Run designs and compare headline metrics.")):
         command = commands.add_parser(name, help=help_text)
         command.add_argument("designs", nargs="+", type=Path, help="Design YAML files.")
-        command.add_argument("--stages", default=",".join(STAGES), help=f"Comma-separated subset of {','.join(STAGES)}.")
+        command.add_argument(
+            "--stages",
+            default=",".join(DEFAULT_STAGES),
+            help=f"Comma-separated subset of {','.join(STAGES)} (default: the fast stages {','.join(DEFAULT_STAGES)}).",
+        )
         command.add_argument(
             "--set",
             dest="overrides",

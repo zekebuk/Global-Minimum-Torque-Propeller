@@ -329,6 +329,8 @@ def run_case(case: Path, *, processors: int = 1, bashrc: str | None = None, time
     """Mesh and solve the case. Writes ``log.<step>`` files; raises with the failing step's log tail."""
 
     bashrc = bashrc or _default_bashrc()
+    if not Path(bashrc).is_file() and shutil.which("blockMesh") is None:
+        raise FileNotFoundError(f"OpenFOAM not found (no {bashrc} and no blockMesh on PATH); install OpenFOAM or set cfd.openfoam_bashrc")
     steps = [
         ("blockMesh", "blockMesh"),
         ("surfaceFeatureExtract", "surfaceFeatureExtract"),

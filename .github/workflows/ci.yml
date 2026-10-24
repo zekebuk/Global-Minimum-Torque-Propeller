@@ -22,5 +22,7 @@ jobs:
           ruff format --check src scripts tests
       - name: Test
         run: python -m pytest -q
-      - name: Pipeline smoke test
+      - name: Pipeline smoke test (fast stages)
         run: prandtl run designs/mil.yaml designs/gmt.yaml --set-file designs/smoke_overrides.txt --runs-dir "$RUNNER_TEMP/runs"
+      - name: Pipeline smoke test (CalculiX FEA on the full blade)
+        run: prandtl run designs/gmt.yaml --stages fea --set-file designs/smoke_overrides.txt --set cad.export_rotor=false --runs-dir "$RUNNER_TEMP/runs"
