@@ -135,14 +135,15 @@ def plot_blade_cp(triangles: np.ndarray, cp: np.ndarray, *, title: str, output: 
     style()
     norm = TwoSlopeNorm(vmin=limits[0], vcenter=0.0, vmax=limits[1])
     cmap = diverging_cmap()
-    figure, axes = plt.subplots(1, 2, figsize=(14, 5.6))
+    # Stacked rows: the rotor is ~14x wider than a chord, so side-by-side panels shrink each blade to a sliver.
+    figure, axes = plt.subplots(2, 1, figsize=(13, 6.2))
     scaled = triangles * 1000.0
     for ax, (name, elevation, azimuth) in zip(
         axes, (("Suction side (from +z)", 89.0, -90.0), ("Pressure side (from -z)", -89.0, -90.0)), strict=True
     ):
         draw_data(ax, scaled, cp, cmap, norm, elevation, azimuth)
         ax.set_title(name)
-    figure.colorbar(ScalarMappable(norm=norm, cmap=cmap), ax=axes, shrink=0.75, label="Cp = p / (0.5 ((Omega r)^2 + V^2))")
+    figure.colorbar(ScalarMappable(norm=norm, cmap=cmap), ax=axes, shrink=0.9, fraction=0.03, label="Cp = p / (0.5 ((Omega r)^2 + V^2))")
     figure.suptitle(title, fontsize=12)
     output.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(output, dpi=150, bbox_inches="tight")
