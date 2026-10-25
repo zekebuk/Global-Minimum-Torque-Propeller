@@ -117,6 +117,11 @@ def parting_row(outline_yz: np.ndarray, y_grid: np.ndarray, ease_m: float, te_fr
     return z
 
 
+_EASE_POINTS = 25
+_MID_POINTS = 41
+_CHAIN_POINTS = 81
+
+
 def _profile_wire(x: float, outline_yz: np.ndarray, y_grid: np.ndarray, z_outer: float, design: MoldDesign, surface: str):
     """Closed planar wire at span x for one mold half.
 
@@ -127,11 +132,16 @@ def _profile_wire(x: float, outline_yz: np.ndarray, y_grid: np.ndarray, z_outer:
 
     cq = _cq()
     upper, lower = half_chains(outline_yz, design.te_parting_fraction)
-    z_grid = parting_row(outline_yz, y_grid, design.parting_ease_m, design.te_parting_fraction)
     exit_point, leading = upper[0], upper[-1]
-    half = 0.5 * design.grid_step_m
-    left = np.vstack([np.column_stack([y_grid, z_grid])[y_grid < exit_point[0] - half], exit_point])
-    right = np.vstack([leading, np.column_stack([y_grid, z_grid])[y_grid > leading[0] + half]])
+    # A fixed point count per edge, denser toward the silhouette where the parting line eases out: a
+    # count that varied with the section (all grid points outside it) made the spanwise skinning merge
+    # incompatible parameterisations until it failed beyond about ten sections.
+    t = np.linspace(0.0, 1.0, _EASE_POINTS)[1:] ** 2
+    y_left = (exit_point[0] - t * (exit_point[0] - y_grid[0]))[::-1]
+    y_right = leading[0] + t * (y_grid[-1] - leading[0])
+    row = lambda ys: np.column_stack([ys, parting_row(outline_yz, ys, design.parting_ease_m, design.te_parting_fraction)])  # noqa: E731
+    left = np.vstack([row(y_left), exit_point])
+    right = np.vstack([leading, row(y_right)])
 
     def vec(point) -> object:
         return cq.Vector(x, float(point[0]), float(point[1]))
@@ -141,11 +151,17 @@ def _profile_wire(x: float, outline_yz: np.ndarray, y_grid: np.ndarray, z_outer:
 
     edges = [spline(left)]
     if surface == "mid":
-        inside = (y_grid > exit_point[0] + half) & (y_grid < leading[0] - half)
-        edges.append(spline(np.vstack([exit_point, np.column_stack([y_grid, z_grid])[inside], leading])))
+        y_inside = exit_point[0] + 0.5 * (1.0 - np.cos(np.linspace(0.0, math.pi, _MID_POINTS)[1:-1])) * (leading[0] - exit_point[0])
+        edges.append(spline(np.vstack([exit_point, row(y_inside), leading])))
     else:
         chain = upper if surface == "upper" else lower
-        edges += [cq.Edge.makeLine(vec(chain[0]), vec(chain[1])), spline(chain[1:])]
+        # Resample at a fixed count (arc length, cosine-spaced toward the TE corner and the LE): the raw
+        # chains differ by a few points between sections (the max-y LE point shifts with pitch), and
+        # mismatched spline knot vectors broke the spanwise skinning of the cavity half.
+        raw = spline(chain[1:])
+        fractions = 0.5 * (1.0 - np.cos(np.linspace(0.0, math.pi, _CHAIN_POINTS)))
+        resampled = [raw.positionAt(float(f), mode="length") for f in fractions]
+        edges += [cq.Edge.makeLine(vec(chain[0]), vec(chain[1])), cq.Edge.makeSpline(resampled)]
     edges.append(spline(right))
     end, start = right[-1], left[0]
     edges += [
