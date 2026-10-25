@@ -285,20 +285,36 @@ def part_cost(part: Part, volume: float, a: CostAssumptions) -> list[dict[str, A
     ]
 
 
-def hub_cost(volume_props: float, a: CostAssumptions) -> dict[str, float]:
-    """Folding hub per prop: two 2.5D CNC 6061 plates (outsourced job-shop model) plus COTS hardware.
+def hub_cost(volume_props: float, a: CostAssumptions) -> dict[str, Any]:
+    """Folding hub per prop: two 6061 plates by the cheapest route for the volume, plus COTS and assembly.
 
-    Per plate: setup $150 per batch of min(volume, 500), 6 min machining at $60/h, $2 stock; COTS: two
-    dowels, two DU bushings, four M3 button heads, about $4.
+    The plates are 2.5D (a profile, through holes, counterbores, tapped holes from one side), so:
+
+    - **CNC job shop:** $150 setup per batch of min(volume, 500), 6 min machining at $60/h, $2 stock.
+    - **Laser/waterjet blank + secondaries:** blank $1.50 (nested sheet, cut by the meter), drill,
+      counterbore, and tap on a fixture 1.5 min at $45/h, $150 fixture per batch of 2000.
+    - **Die-cast A380 near-net plates + tap:** tooling $20k for both plates (100k-shot life),
+      $0.90 per casting, 0.5 min tapping at $45/h. Die-cast alloy is weaker than 6061-T6: the plate
+      stresses must be re-checked (docs/production.md).
+
+    COTS: two dowels, two DU bushings, four M3 button heads, about $4 at volume. Assembly 3 min.
     """
 
-    batch = min(max(volume_props, 1.0), 500.0)
-    plate = 150.0 / batch + 6.0 / 60.0 * 60.0 + 2.0
+    v = max(volume_props, 1.0)
+    routes = {
+        "CNC job shop": 2.0 * (150.0 / min(v, 500.0) + 6.0 / 60.0 * 60.0 + 2.0),
+        "laser blank + secondaries": 2.0 * (1.5 + 1.5 / 60.0 * 45.0 + 150.0 / min(v, 2000.0)),
+        "die-cast + tap": 20000.0 * max(1, math.ceil(v / 1.0e5)) / v + 2.0 * (0.90 + 0.5 / 60.0 * 45.0),
+    }
+    route = min(routes, key=routes.get)
+    assembly = 3.0 / 60.0 * a.labor_usd_h
     return {
-        "plates": 2.0 * plate,
+        "route": route,
+        "plates": routes[route],
         "cots": 4.0,
-        "assembly": 3.0 / 60.0 * a.labor_usd_h,
-        "total": 2.0 * plate + 4.0 + 3.0 / 60.0 * a.labor_usd_h,
+        "assembly": assembly,
+        "total": routes[route] + 4.0 + assembly,
+        "routes": routes,
     }
 
 
@@ -319,4 +335,5 @@ def per_prop(parts: list[Part], volume_props: float, a: CostAssumptions, *, fold
         for entry in out.values():
             entry["total"] += hub["total"]
             entry["hub"] = hub["total"]
+            entry["hub_route"] = hub["route"]
     return out

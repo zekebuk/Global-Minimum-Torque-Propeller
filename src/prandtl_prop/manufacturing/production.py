@@ -36,7 +36,7 @@ def parts_for_design(design: DesignCase, runs: dict[str, Any]) -> list[tuple[str
     area = projected_area_from_stl(cad.output("blade_m.stl"))
     wall = max(design.root.tab_thickness_m if design.root.enabled else 0.0, section_max)
     blade = Part(f"{design.name} blade", float(cad.metrics["blade_volume_m3"]), area, wall, design.operating_point.blade_count, "blade")
-    return [("blades + machined hub", [blade], True)]
+    return [("blades + hub (route by volume)", [blade], True)]
 
 
 def cost_table(designs: list[DesignCase], runs_by_design: dict[str, dict[str, Any]], a: CostAssumptions) -> list[dict[str, Any]]:
@@ -59,6 +59,7 @@ def cost_table(designs: list[DesignCase], runs_by_design: dict[str, dict[str, An
                             "tooling": entry.get("tooling", 0.0),
                             "finishing": entry.get("finishing", 0.0),
                             "hub": entry.get("hub", 0.0),
+                            "hub_route": entry.get("hub_route", ""),
                             "note": entry["note"],
                             "part_volume_cm3": sum(p.volume_m3 * p.count_per_prop for p in parts) * 1e6,
                             "projected_area_cm2": parts[0].projected_area_m2 * 1e4,
