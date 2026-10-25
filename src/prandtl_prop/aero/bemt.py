@@ -244,8 +244,16 @@ def solve_station(
 
     residual_at_zero, solution_at_zero = evaluate(0.0)
     if residual_at_zero <= 0.0:
-        # Section produces no positive thrust even with zero inflow; momentum theory has no
-        # positive-vi solution. Report the zero-inflow loads and flag the station.
+        # No positive thrust even with zero induced velocity. In axial flight (V > 0) momentum
+        # theory still holds for mildly negative loading (windmill-brake branch: vi < 0 while the
+        # slipstream keeps moving, V + 2 vi > 0). Search that branch; otherwise report the
+        # zero-inflow loads and flag the station.
+        lowest = -0.49 * op.v_inf_m_s
+        if op.v_inf_m_s > 0.0 and evaluate(lowest)[0] > 0.0:
+            vi = brentq(lambda value: evaluate(value)[0], lowest, 0.0, xtol=1.0e-12, rtol=1.0e-12, maxiter=200)
+            residual, solution = evaluate(vi)
+            scale = max(abs(solution.thrust_per_span_N_m), 1.0e-9)
+            return replace(solution, negative_loading=True, converged=abs(residual) <= 1.0e-8 * scale + 1.0e-10)
         return replace(solution_at_zero, negative_loading=True)
 
     upper = max(omega_r * math.tan(math.radians(min(max(beta_deg, 1.0), 80.0))), 1.0e-3)
@@ -334,6 +342,53 @@ def trim_to_thrust(
     return result
 
 
+def trim_rpm_to_thrust(
+    stations: BladeStations,
+    op: OperatingPoint,
+    polar: Polar,
+    target_thrust_N: float,
+    *,
+    collective_offset_deg: float = 0.0,
+    tip_loss: bool = True,
+    corrections: tuple[np.ndarray, np.ndarray] | None = None,
+    rpm_bracket: tuple[float, float] = (500.0, 12000.0),
+) -> BemtResult:
+    """Fixed-pitch off-design: the rpm that gives ``target_thrust_N`` at the geometry's collective.
+
+    A fixed-pitch prop is designed (collective set) at one point; elsewhere the controller only
+    changes rpm. Thrust rises monotonically with rpm at fixed V over the useful range, so the root
+    is bracketed by scanning up from the lower bound.
+    """
+
+    def thrust_error(rpm: float) -> float:
+        trial = replace(op, rpm=rpm)
+        return (
+            float(
+                solve_rotor(
+                    stations, trial, polar, collective_offset_deg=collective_offset_deg, tip_loss=tip_loss, corrections=corrections
+                ).summary["thrust_N"]
+            )
+            - target_thrust_N
+        )
+
+    grid = np.geomspace(rpm_bracket[0], rpm_bracket[1], 24)
+    errors = [thrust_error(rpm) for rpm in grid]
+    for low, high, e_low, e_high in zip(grid[:-1], grid[1:], errors[:-1], errors[1:], strict=True):
+        if e_low < 0.0 <= e_high:
+            rpm = brentq(thrust_error, low, high, xtol=1.0e-9, maxiter=200)
+            result = solve_rotor(
+                stations,
+                replace(op, rpm=rpm),
+                polar,
+                collective_offset_deg=collective_offset_deg,
+                tip_loss=tip_loss,
+                corrections=corrections,
+            )
+            result.summary["target_thrust_N"] = target_thrust_N
+            return result
+    raise ValueError(f"No rpm in {rpm_bracket} gives {target_thrust_N} N at V = {op.v_inf_m_s} m/s")
+
+
 def _summarize(result: BemtResult) -> dict[str, float | int | bool]:
     op = result.operating_point
     stations = result.stations
@@ -353,6 +408,10 @@ def _summarize(result: BemtResult) -> dict[str, float | int | bool]:
         "CQ": torque / (op.rho_kg_m3 * n**2 * diameter**5),
         "CP": power / (op.rho_kg_m3 * n**3 * diameter**5),
         "figure_of_merit": ideal_power / power if power > 0.0 else math.nan,
+        "v_inf_m_s": op.v_inf_m_s,
+        "rpm": op.rpm,
+        "advance_ratio_J": op.v_inf_m_s / (n * diameter) if n > 0 else math.nan,
+        "propulsive_efficiency": thrust * op.v_inf_m_s / power if power > 0.0 else math.nan,
         "collective_offset_deg": result.collective_offset_deg,
         "center_of_thrust_mu": float((r_R * dT).sum() / thrust) if thrust else math.nan,
         "tip_loading_fraction": float(dT[r_R >= TIP_LOADING_LOWER_MU].sum() / thrust) if thrust else math.nan,

@@ -25,7 +25,7 @@ from prandtl_prop.cad.sections import BladeSection, build_sections, section_tabl
 from prandtl_prop.design import DesignCase, resolve_path
 from prandtl_prop.runs import RunStore, StageRun, stage_key
 
-STAGES = ("aero", "sections", "dfm", "cad", "beam", "fea", "modal", "mold", "hub", "cfd")
+STAGES = ("aero", "sections", "dfm", "cad", "beam", "fea", "modal", "mold", "hub", "cfd", "envelope")
 DEFAULT_STAGES = ("aero", "sections", "dfm", "cad", "beam")  # seconds; fea, modal, and cfd take minutes to hours
 STAGE_UPSTREAM = {
     "aero": (),
@@ -38,6 +38,7 @@ STAGE_UPSTREAM = {
     "mold": ("aero", "cad"),
     "hub": ("aero", "cad"),
     "cfd": ("aero", "cad"),
+    "envelope": ("aero",),
 }
 STAGE_MODULES = {
     "aero": (
@@ -75,6 +76,7 @@ STAGE_MODULES = {
         "prandtl_prop.pipeline",
     ),
     "cfd": ("prandtl_prop.cfd.openfoam", "prandtl_prop.pipeline"),
+    "envelope": ("prandtl_prop.mission", "prandtl_prop.aero.bemt", "prandtl_prop.plot_style", "prandtl_prop.pipeline"),
 }
 
 
@@ -760,6 +762,29 @@ def _stage_hub(design: DesignCase, run: StageRun, upstream: dict[str, StageRun])
     return metrics, list(result.warnings)
 
 
+def _stage_envelope(design: DesignCase, run: StageRun, upstream: dict[str, StageRun]) -> tuple[dict[str, Any], list[str]]:
+    """Off-design mission envelope (prandtl_prop.mission): BEMT map over V and rpm, rpm-trimmed mission points."""
+
+    from prandtl_prop import mission
+
+    data = mission.envelope(design, upstream["aero"])
+    _write_csv(run.path("envelope_map.csv"), data["grid"])
+    _write_csv(run.path("mission_points.csv"), data["points"])
+    for point, result in zip(data["points"], data["solutions"], strict=True):
+        _write_csv(run.path(f"stations_{point['name']}.csv"), result.station_rows())
+    mission.plot_envelope(data, design, run.path("envelope.png"))
+    metrics: dict[str, Any] = {"collective_offset_deg": data["collective_offset_deg"], "mission_points": data["points"]}
+    warnings = []
+    for point in data["points"]:
+        if not point["rpm_within_limit"]:
+            warnings.append(f"{point['name']}: needs {point['rpm']:.0f} rpm, above the {design.mission.max_rpm:.0f} rpm limit")
+        if point["stalled_station_count"]:
+            warnings.append(f"{point['name']}: {point['stalled_station_count']} station(s) at or past Cl = {design.mission.stall_cl}")
+        if point["negative_loading_station_count"]:
+            warnings.append(f"{point['name']}: {point['negative_loading_station_count']} station(s) with negative loading")
+    return metrics, warnings
+
+
 def _stage_cfd(design: DesignCase, run: StageRun, upstream: dict[str, StageRun]) -> tuple[dict[str, Any], list[str]]:
     import os
     import shutil
@@ -876,6 +901,7 @@ STAGE_FUNCTIONS: dict[str, Callable[[DesignCase, StageRun, dict[str, StageRun]],
     "mold": _stage_mold,
     "hub": _stage_hub,
     "cfd": _stage_cfd,
+    "envelope": _stage_envelope,
 }
 
 STAGE_DESIGN_INPUTS = {
@@ -889,6 +915,7 @@ STAGE_DESIGN_INPUTS = {
     "mold": ("mold", "root", "hub"),
     "hub": ("hub", "root", "operating_point", "structure"),
     "cfd": ("operating_point", "cfd"),
+    "envelope": ("operating_point", "geometry", "aero", "airfoils.thickness_scale", "airfoils.trailing_edge_thickness_m", "mission"),
 }
 
 

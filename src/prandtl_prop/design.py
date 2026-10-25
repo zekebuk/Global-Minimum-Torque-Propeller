@@ -177,6 +177,31 @@ class CfdSpec:
 
 
 @dataclass(frozen=True)
+class MissionSpec:
+    """Off-design envelope for a fixed-pitch prop: axial free stream, rpm-only control.
+
+    Mission points are (v_inf, thrust) pairs; thrust_N defaults to operating_point.target_thrust_N
+    at every speed. The geometry stays frozen at the design point and each point is reached by
+    trimming rpm. ``cfd_points``/``fea_points`` index into the mission points.
+    """
+
+    v_inf_m_s: tuple[float, ...] = (0.0, 5.0, 10.0, 15.0, 20.0)
+    thrust_N: tuple[float, ...] = ()
+    map_v_inf_m_s: tuple[float, ...] = (0.0, 2.5, 5.0, 7.5, 10.0, 12.5, 15.0, 17.5, 20.0)
+    map_rpm: tuple[float, ...] = tuple(float(v) for v in range(2000, 6750, 250))
+    max_rpm: float = 6500.0
+    stall_cl: float = 1.2  # flag sections at or above this Cl (polar stall margin indicator)
+    cfd_points: tuple[int, ...] = (0, 1, 2, 3, 4)
+    fea_points: tuple[int, ...] = (0, 2, 4)
+
+    def points(self, default_thrust_N: float) -> list[tuple[float, float]]:
+        thrusts = self.thrust_N or tuple(default_thrust_N for _ in self.v_inf_m_s)
+        if len(thrusts) != len(self.v_inf_m_s):
+            raise ValueError("mission.thrust_N must match mission.v_inf_m_s in length")
+        return list(zip(self.v_inf_m_s, thrusts, strict=True))
+
+
+@dataclass(frozen=True)
 class DesignCase:
     name: str
     geometry: GeometrySpec
@@ -192,6 +217,7 @@ class DesignCase:
     root: RootSpec = field(default_factory=RootSpec)
     mold: MoldDesign = field(default_factory=MoldDesign)
     hub: HubDesign = field(default_factory=HubDesign)
+    mission: MissionSpec = field(default_factory=MissionSpec)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -316,6 +342,7 @@ _NESTED: dict[tuple[type, str], type] = {
     (DesignCase, "root"): RootSpec,
     (DesignCase, "mold"): MoldDesign,
     (DesignCase, "hub"): HubDesign,
+    (DesignCase, "mission"): MissionSpec,
     (AeroSpec, "polar"): PolarSpec,
     (StructureSpec, "material"): MaterialSpec,
 }
