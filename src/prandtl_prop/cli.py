@@ -141,6 +141,15 @@ def build_parser() -> argparse.ArgumentParser:
     gmt.add_argument("--set-file", dest="override_files", action="append", default=[], type=Path, metavar="PATH")
     gmt.add_argument("--runs-dir", type=Path, default=config.RUNS_DIR)
 
+    cost = commands.add_parser("cost", help="Production cost per prop against annual volume, per route (manufacturing/cost.py).")
+    cost.add_argument("designs", nargs="+", type=Path)
+    cost.add_argument("--output-dir", type=Path, default=config.PROJECT_ROOT / "outputs" / "production")
+    cost.add_argument("--labor-usd-h", type=float, default=None, help="Labor rate (default 25; ~6 for an Asian contract molder).")
+    cost.add_argument("--resin-usd-kg", type=float, default=None, help="PA6-CF30 compound price (default 10).")
+    cost.add_argument("--set", dest="overrides", action="append", default=[], metavar="KEY=VALUE")
+    cost.add_argument("--set-file", dest="override_files", action="append", default=[], type=Path, metavar="PATH")
+    cost.add_argument("--runs-dir", type=Path, default=config.RUNS_DIR)
+
     loop = commands.add_parser("loop", help="Iterate BEMT trim, CAD, CFD, and BEMT calibration until CFD meets target thrust.")
     loop.add_argument("design", type=Path, help="Design YAML file.")
     loop.add_argument("--iterations", type=int, default=4, help="Maximum CFD runs.")
@@ -164,6 +173,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _optimize_molding(args, store, overrides)
     if args.command == "design-gmt":
         return _design_gmt(args, overrides)
+    if args.command == "cost":
+        return _cost(args, store, overrides)
     stages = [stage.strip() for stage in args.stages.split(",") if stage.strip()]
     results: dict[str, dict[str, StageOutcome]] = {}
     for path in args.designs:
@@ -213,6 +224,45 @@ def _loop(args: argparse.Namespace, store: RunStore, overrides: list[str]) -> in
     if result.corrections_csv:
         print(f"latest corrections: {config.relative(result.corrections_csv)}")
     return 0 if result.converged else 3
+
+
+def _usd(value: float) -> str:
+    return f"${value:.2f}"
+
+
+def _cost(args: argparse.Namespace, store: RunStore, overrides: list[str]) -> int:
+    from dataclasses import replace
+
+    from prandtl_prop.manufacturing import production
+    from prandtl_prop.manufacturing.cost import CostAssumptions
+
+    assumptions = CostAssumptions()
+    if args.labor_usd_h is not None:
+        assumptions = replace(assumptions, labor_usd_h=args.labor_usd_h)
+    if args.resin_usd_kg is not None:
+        assumptions = replace(assumptions, resin_usd_per_kg=args.resin_usd_kg)
+    designs, runs = [], {}
+    for path in args.designs:
+        design = load_design(path, overrides)
+        try:
+            outcomes = run_design(design, ["cad", "dfm"], store=store)
+        except (FileNotFoundError, ValueError, ImportError) as exc:
+            print(f"[{design.name}] failed: {exc}", file=sys.stderr)
+            return 1
+        designs.append(design)
+        runs[design.name] = {stage: outcome.run for stage, outcome in outcomes.items()}
+    rows = production.cost_table(designs, runs, assumptions)
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    production.write_csv(rows, args.output_dir / "production_costs.csv")
+    production.plot(rows, args.output_dir / "production_costs.png")
+    production.plot_breakdown(rows, args.output_dir / "production_breakdown.png")
+    print(f"{'design':<24}{'variant':<26}{'props/yr':>10}  " + "".join(f"{r:>28}" for r in dict.fromkeys(r["route"] for r in rows)))
+    for key in dict.fromkeys((r["design"], r["variant"], r["props_per_year"]) for r in rows):
+        pick = [r for r in rows if (r["design"], r["variant"], r["props_per_year"]) == key]
+        cells = "".join(f"{_usd(r['usd_per_prop']) if r['feasible'] else 'n/a':>28}" for r in pick)
+        print(f"{key[0]:<24}{key[1][:25]:<26}{key[2]:>10.0f}  {cells}")
+    print(f"report: {config.relative(args.output_dir)}")
+    return 0
 
 
 def _design_gmt(args: argparse.Namespace, overrides: list[str]) -> int:
