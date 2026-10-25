@@ -111,3 +111,25 @@ def test_motor_match_and_level_flight_trim(case) -> None:
     n = spec.rotor_count
     assert n * (trim["thrust_N"] * math.cos(th) + trim["h_force_N"] * math.sin(th)) == pytest.approx(spec.weight_N, rel=2e-3)
     assert n * (trim["thrust_N"] * math.sin(th) - trim["h_force_N"] * math.cos(th)) == pytest.approx(trim["body_drag_N"], rel=2e-3)
+
+
+def test_blade_stress_matches_closed_forms(case) -> None:
+    """Tension alone: sum of rho A omega^2 r dr outboard over A; bending alone: outboard thrust moment over Z."""
+
+    from prandtl_prop.gmt_design import SECTION_AREA, SECTION_MODULUS, blade_stress, thickness_to_chord
+
+    design, stations, op, _, _ = case
+    r, dr, c = stations.r_m, stations.dr_m, stations.chord_m
+    rho, t = design.structure.material.density_kg_m3, thickness_to_chord(design) * c
+    area, modulus = SECTION_AREA * c * t, SECTION_MODULUS * c * t**2
+    omega = 1500.0
+    tension = blade_stress(design, stations, np.zeros_like(r), omega, 1.0)
+    i = 5
+    expected = (rho * area[i:] * omega**2 * r[i:] * dr[i:]).sum() / area[i]
+    assert tension[i] == pytest.approx(expected, rel=1e-12)
+    load = np.full_like(r, 30.0)  # N/m, all blades
+    bending = blade_stress(design, stations, load, 0.0, 1.0)
+    per_blade = load * dr / op.blade_count
+    assert bending[i] == pytest.approx((per_blade[i + 1 :] * (r[i + 1 :] - r[i])).sum() / modulus[i], rel=1e-12)
+    thicker = blade_stress(design, stations, load, 0.0, 1.5)
+    assert thicker[0] == pytest.approx(bending[0] / 1.5**2, rel=1e-9)  # Z grows with t^2 at the root

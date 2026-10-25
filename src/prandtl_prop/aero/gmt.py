@@ -62,6 +62,8 @@ class GmtSolution:
     cl: np.ndarray
     alpha_deg: np.ndarray
     phi_deg: np.ndarray
+    thrust_per_span_N_m: np.ndarray  # all blades
+    torque_per_span_N: np.ndarray
 
 
 class InviscidPolar:
@@ -200,6 +202,8 @@ def select_twist(
         cl=tables.cl[rows, j],
         alpha_deg=tables.alpha_deg[rows, j],
         phi_deg=tables.phi_deg[rows, j],
+        thrust_per_span_N_m=T,
+        torque_per_span_N=tables.torque_per_span_N[rows, j],
     )
 
 
@@ -237,6 +241,10 @@ def design(
         cl_limit=cl_limit,
         bending_weight=bending_weight,
     )
+
+
+def twist_grid(step_deg: float = 0.1, beta_range_deg: tuple[float, float] = (-8.0, 60.0)) -> np.ndarray:
+    return np.arange(beta_range_deg[0], beta_range_deg[1] + 1e-9, step_deg)
 
 
 def with_twist(stations: BladeStations, twist_deg: np.ndarray) -> BladeStations:

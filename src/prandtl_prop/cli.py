@@ -23,6 +23,17 @@ from prandtl_prop.runs import RunStore
 HEADLINE = {
     "aero": ("thrust_N", "torque_Nm", "power_W", "figure_of_merit", "collective_offset_deg", "nonconverged_station_count"),
     "sections": ("section_count", "substituted_airfoil_count"),
+    "multirotor": (
+        "hover_rpm",
+        "hover_total_electrical_power_W",
+        "hover_endurance_min",
+        "max_thrust_rpm",
+        "max_thrust_current_A",
+        "motor_kv_rpm_per_V",
+        "best_range_speed_m_s",
+        "best_range_km",
+        "motor_time_constant_ms",
+    ),
     "dfm": ("all_pass", "min_trailing_edge_thickness_m", "max_section_thickness_m", "pull_angle_deg", "beam_excitation_margin_over_band"),
     "cad": ("blade_mass_kg", "blade_solid_valid", "loft_vs_section_quadrature_volume_ratio"),
     "beam": ("max_von_mises_Pa", "margin_of_safety", "tip_deflection_z_m", "tip_elastic_twist_deg", "root_centrifugal_force_N"),
@@ -220,8 +231,10 @@ def _design_gmt(args: argparse.Namespace, overrides: list[str]) -> int:
         f"endurance {chosen['hover_endurance_min']:.1f} min; full throttle {chosen['max_thrust_rpm']:.0f} rpm, "
         f"{chosen['max_thrust_current_A']:.1f} A, Kv {chosen['motor_kv_rpm_per_V']:.0f}"
     )
-    for name in ("gmt", "mil", "helix"):
-        print(f"  same cell, {name:>5}: torque {same[name]['torque_Nm'] * 1e3:.3f} mN*m, FM {same[name]['figure_of_merit']:.4f}")
+    for name in ("gmt", "gmt_unconstrained", "mil", "helix"):
+        row = same[name]
+        fits = "fits" if row["root_scale_needed"] is not None else "exceeds the root-thickness cap"
+        print(f"  same cell, {name:>17}: torque {row['torque_Nm'] * 1e3:.3f} mN*m, FM {row['figure_of_merit']:.4f}, root stress {fits}")
     print(f"design: {config.relative(Path(summary['design_file']))}")
     print(f"report: {config.relative(report_dir)}")
     return 0

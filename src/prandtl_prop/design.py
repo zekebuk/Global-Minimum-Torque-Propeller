@@ -224,7 +224,9 @@ class GmtSpec:
     hover_rpm_grid: tuple[float, ...] = tuple(float(v) for v in range(4500, 9750, 250))
     chord_max_over_R_grid: tuple[float, ...] = (0.08, 0.09, 0.10, 0.11, 0.12, 0.13, 0.14, 0.15, 0.16, 0.17, 0.18, 0.19, 0.20)
     cl_limit: float = 1.0  # design-point Cl ceiling (stall margin for gusts and manoeuvres)
-    bending_weight: float = 0.0  # mu: 0 is the unconstrained global minimum torque
+    bending_weight: float = 0.0  # starting mu (0: unconstrained); raised per cell until the root stress fits
+    max_root_thickness_scale: float = 1.8  # root section may thicken to this x the airfoil's t/c (molded root)
+    twist_step_deg: float = 0.1  # scan resolution of the twist tables (the selected design is refined to 0.02 deg)
     bending_family: tuple[float, ...] = (0.0, 0.02, 0.05, 0.1, 0.2, 0.4)
     objective: str = "electrical_power"  # or "torque"
 

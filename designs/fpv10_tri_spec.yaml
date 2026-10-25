@@ -30,7 +30,7 @@ structure:
 molding:
   min_trailing_edge_thickness_m: 0.0004
   max_section_thickness_m: 0.006
-  operating_rpm_fractions: [0.8, 2.1]  # hover to full throttle (T/W 4 needs about 2x hover rpm)
+  operating_rpm_fractions: [0.95, 1.05]  # hover dwell band; throttle sweeps transiently to 2x hover (docs/fpv10_tri.md)
   pull_angle_deg: 0.0
 root:
   enabled: true
@@ -63,7 +63,10 @@ mission:
   fea_points: [0, 1]
 multirotor:
   rotor_count: 4
-  mass_kg: 1.6                # 10 in long-range quad: frame, 4 x 2810 motors, 6S 4000 mAh, HD camera
+  mass_kg: 1.6                # starting guess; closed by the sizing loop
+  payload_mass_kg: 1.22       # frame, 6S 4000 mAh, ESC, FC, VTX, HD camera: a 1.6 kg 10 in quad less 4 x (80 g motor + 15 g prop)
+  motor_base_mass_kg: 0.015   # bearings, shaft, bell structure
+  motor_mass_per_peak_torque_kg_per_Nm: 0.186   # 2810-class outrunner: ~80 g at ~0.35 N m peak
   body_cda_m2: 0.020          # body drag area (frame, battery, camera); multirotor drag areas run 0.01-0.03 m^2
   arm_length_m: 0.21
   ixx_kg_m2: 0.011
@@ -79,14 +82,18 @@ multirotor:
   motor_max_current_A: 50.0
   motor_rotor_inertia_kg_m2: 8.0e-6
   max_tip_mach: 0.70
+  max_speed_m_s: 25.0         # trimmed level flight without retreating-blade stall
+  forward_cl_limit: 1.15
 gmt:
   planform_csv: data/geometry/final_gmt_geometry.csv   # chord shape of the thesis GMT blade, rescaled
   airfoil: NACA4410
   station_count: 40
   root_r_R: 0.2
+  hover_rpm_grid: [4000, 4250, 4500, 4750, 5000, 5250, 5500, 5750, 6000, 6250, 6500, 6750, 7000, 7250, 7500, 7750, 8000, 8250, 8500, 8750, 9000, 9500, 10000]
+  chord_max_over_R_grid: [0.08, 0.09, 0.10, 0.11, 0.12, 0.13, 0.14, 0.15, 0.16, 0.17, 0.18, 0.19, 0.20]   # 0.20 R = 25 mm: widest practical 10 in blade
   cl_limit: 1.0
   bending_weight: 0.0
-  objective: electrical_power
+  objective: torque          # global minimum motor torque (motor size and current); the energy optimum is reported too
 cad:
   apply_trim_offset: true
   export_rotor: true

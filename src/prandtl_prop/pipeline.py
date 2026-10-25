@@ -25,7 +25,7 @@ from prandtl_prop.cad.sections import BladeSection, build_sections, section_tabl
 from prandtl_prop.design import DesignCase, resolve_path
 from prandtl_prop.runs import RunStore, StageRun, stage_key
 
-STAGES = ("aero", "sections", "dfm", "cad", "beam", "fea", "modal", "mold", "hub", "cfd", "envelope", "mission")
+STAGES = ("aero", "sections", "dfm", "cad", "beam", "fea", "modal", "mold", "hub", "cfd", "envelope", "mission", "multirotor")
 DEFAULT_STAGES = ("aero", "sections", "dfm", "cad", "beam")  # seconds; fea, modal, and cfd take minutes to hours
 STAGE_UPSTREAM = {
     "aero": (),
@@ -40,6 +40,7 @@ STAGE_UPSTREAM = {
     "cfd": ("aero", "cad"),
     "envelope": ("aero",),
     "mission": ("aero", "cad", "envelope"),
+    "multirotor": ("aero", "cad"),
 }
 STAGE_MODULES = {
     "aero": (
@@ -86,6 +87,13 @@ STAGE_MODULES = {
         "prandtl_prop.structures.cfd_coupling",
         "prandtl_prop.structures.loads",
         "prandtl_prop.cad.render",
+        "prandtl_prop.plot_style",
+        "prandtl_prop.pipeline",
+    ),
+    "multirotor": (
+        "prandtl_prop.multirotor",
+        "prandtl_prop.mission",
+        "prandtl_prop.aero.bemt",
         "prandtl_prop.plot_style",
         "prandtl_prop.pipeline",
     ),
@@ -815,6 +823,47 @@ def _stage_mission(design: DesignCase, run: StageRun, upstream: dict[str, StageR
     return mission.run_mission(design, run, upstream)
 
 
+def _stage_multirotor(design: DesignCase, run: StageRun, upstream: dict[str, StageRun]) -> tuple[dict[str, Any], list[str]]:
+    """The prop on its vehicle (prandtl_prop.multirotor): hover, full throttle, motor match, forward flight, control.
+
+    Rotor inertia comes from the CAD solid: B x (I_cg,zz + m r_cg^2) of the blade (or one-piece sector).
+    """
+
+    from dataclasses import replace
+
+    from prandtl_prop import mission, multirotor
+
+    stations, polar, corrections, collective, op = mission.bemt_context(design, upstream["aero"])
+    stations = replace(stations, twist_deg=stations.twist_deg + collective)
+    cad = upstream["cad"].metrics
+    x, y, _ = cad["blade_center_of_mass_m"]
+    inertia = op.blade_count * (float(cad["blade_inertia_cg_zz_kg_m2"]) + float(cad["blade_mass_kg"]) * (x * x + y * y))
+    spec = design.multirotor
+    result = multirotor.evaluate_vehicle(
+        stations, op, polar, spec, tip_loss=design.aero.tip_loss, prop_inertia_kg_m2=inertia, corrections=corrections
+    )
+    rows = result.pop("forward_flight", [])
+    _write_csv(run.path("forward_flight.csv"), rows)
+    multirotor.plot_forward_flight(
+        {design.name: {"forward_flight": rows}},
+        spec,
+        f"{design.name}: {spec.rotor_count}-rotor vehicle, {spec.mass_kg:g} kg, Kv {result.get('motor_kv_rpm_per_V') or 0:.0f}",
+        run.path("vehicle.png"),
+    )
+    metrics = {"prop_inertia_kg_m2": inertia, **result}
+    warnings = []
+    if not result["feasible_power_transfer"]:
+        warnings.append("Full-throttle requirement exceeds the motor's maximum power transfer")
+    else:
+        if not result["current_within_limit"]:
+            warnings.append(f"Full-throttle current {result['max_thrust_current_A']:.1f} A exceeds {spec.motor_max_current_A:.0f} A")
+        if not result["tip_mach_within_limit"]:
+            warnings.append(f"Full-throttle tip Mach {result['max_tip_mach']:.2f} exceeds {spec.max_tip_mach:.2f}")
+    if len(rows) < len(spec.cruise_speeds_m_s):
+        warnings.append(f"Level flight could not be trimmed above {rows[-1]['v_m_s'] if rows else 0:.1f} m/s")
+    return metrics, warnings
+
+
 def _stage_cfd(design: DesignCase, run: StageRun, upstream: dict[str, StageRun]) -> tuple[dict[str, Any], list[str]]:
     import os
     import shutil
@@ -934,6 +983,7 @@ STAGE_FUNCTIONS: dict[str, Callable[[DesignCase, StageRun, dict[str, StageRun]],
     "cfd": _stage_cfd,
     "envelope": _stage_envelope,
     "mission": _stage_mission,
+    "multirotor": _stage_multirotor,
 }
 
 STAGE_DESIGN_INPUTS = {
@@ -949,6 +999,7 @@ STAGE_DESIGN_INPUTS = {
     "cfd": ("operating_point", "cfd"),
     "envelope": ("operating_point", "geometry", "aero", "airfoils.thickness_scale", "airfoils.trailing_edge_thickness_m", "mission"),
     "mission": ("operating_point", "structure", "fea", "cfd", "mission", "root", "hub"),
+    "multirotor": ("operating_point", "geometry", "aero", "airfoils.thickness_scale", "airfoils.trailing_edge_thickness_m", "multirotor"),
 }
 
 
