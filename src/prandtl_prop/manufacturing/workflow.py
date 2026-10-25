@@ -21,7 +21,7 @@ from prandtl_prop.design import apply_override, design_from_dict
 from prandtl_prop.manufacturing.injection import MoldingRules
 from prandtl_prop.manufacturing.materials import preset
 from prandtl_prop.manufacturing.optimize import CONTROL_R_R, OptimisationResult, ThicknessProblem, optimise, with_material
-from prandtl_prop.pipeline import design_sections, run_design
+from prandtl_prop.pipeline import _clamp_radius, design_sections, run_design
 from prandtl_prop.runs import RunStore
 
 
@@ -78,6 +78,7 @@ def optimize_for_molding(
         radius_m=base.operating_point.radius_m,
         model_cushion=model_cushion,
         root_geometry=base.root.geometry() if base.root.enabled else None,
+        clamp_radius_m=_clamp_radius(base),
     )
     result = optimise(problem, bounds=(min_scale, 2.0))
 

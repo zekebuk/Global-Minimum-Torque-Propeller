@@ -43,6 +43,11 @@ class RootGeometry:
     # through the rotation axis, so a tab off the line from the axis through the blade's centre of
     # mass puts an in-plane moment F_c * offset on the hub joint (see prandtl_prop.cad.hub).
     tab_centre_s_m: float | None = None
+    # "square": the tab ends flat at tab_inner_radius_m (two bolts, fixed blade). "round": a
+    # semicircular end centred on the single hinge pin at bolt_radii_m[0] (folding blade), so the end
+    # sweeps a circle of radius tab_width_m / 2 as the blade folds; tab_inner_radius_m must then be
+    # pin - tab_width_m / 2.
+    tab_end: str = "square"
 
 
 def _superellipse(
@@ -57,13 +62,13 @@ def _superellipse(
     return u, v
 
 
-def tab_local_outline(root: BladeSection, geometry: RootGeometry) -> np.ndarray:
+def tab_local_outline(root: BladeSection, geometry: RootGeometry, width_scale: float = 1.0) -> np.ndarray:
     """Tab outline in the root section's local (s, t) frame, with the same point order as the airfoil loop."""
 
     airfoil = root.airfoil
-    te_gap = airfoil.trailing_edge_gap * root.chord_m
+    te_gap = airfoil.trailing_edge_gap * root.chord_m * width_scale
     centre_s = (0.5 - root.pitch_axis_chord_fraction) * root.chord_m if geometry.tab_centre_s_m is None else geometry.tab_centre_s_m
-    half_w, half_t = 0.5 * geometry.tab_width_m, 0.5 * geometry.tab_thickness_m
+    half_w, half_t = 0.5 * geometry.tab_width_m * width_scale, 0.5 * geometry.tab_thickness_m
     u_up, v_up = _superellipse(airfoil.x, True, half_w, half_t, geometry.corner_exponent, te_gap)
     u_lo, v_lo = _superellipse(airfoil.x, False, half_w, half_t, geometry.corner_exponent, te_gap)
     upper = np.column_stack([u_up[::-1], v_up[::-1]])
@@ -86,10 +91,23 @@ def root_outlines(root: BladeSection, geometry: RootGeometry) -> list[np.ndarray
         raise ValueError("Root geometry needs tab_inner_radius < tab_outer_radius < first aerodynamic station radius")
     tab = tab_local_outline(root, geometry)
     airfoil = root.local_outline()
-    outlines = [
-        _place(tab, geometry.tab_inner_radius_m, geometry.tab_pitch_deg),
-        _place(tab, geometry.tab_outer_radius_m, geometry.tab_pitch_deg),
-    ]
+    if geometry.tab_end == "round":
+        pin, radius = geometry.bolt_radii_m[0], 0.5 * geometry.tab_width_m
+        if len(geometry.bolt_radii_m) != 1 or abs(pin - radius - geometry.tab_inner_radius_m) > 1.0e-6:
+            raise ValueError("A round tab end needs one hinge pin and tab_inner_radius_m = pin - tab_width_m / 2")
+        # Plan view: a semicircle about the pin (a 20% wide flat at the very end keeps the loft regular).
+        outlines = [
+            _place(tab_local_outline(root, geometry, math.sin(phi)), pin - radius * math.cos(phi), geometry.tab_pitch_deg)
+            for phi in np.linspace(0.2, 0.5 * math.pi, 7)
+        ]
+        outlines.append(_place(tab, geometry.tab_outer_radius_m, geometry.tab_pitch_deg))
+    elif geometry.tab_end == "square":
+        outlines = [
+            _place(tab, geometry.tab_inner_radius_m, geometry.tab_pitch_deg),
+            _place(tab, geometry.tab_outer_radius_m, geometry.tab_pitch_deg),
+        ]
+    else:
+        raise ValueError(f"tab_end must be 'square' or 'round', not {geometry.tab_end!r}")
     for x in np.linspace(0.0, 1.0, geometry.transition_sections + 2)[1:-1]:
         w = 3.0 * x**2 - 2.0 * x**3
         r = geometry.tab_outer_radius_m + x * (root.r_m - geometry.tab_outer_radius_m)
@@ -98,10 +116,18 @@ def root_outlines(root: BladeSection, geometry: RootGeometry) -> list[np.ndarray
     return outlines
 
 
-def full_blade_outlines(sections: Sequence[BladeSection], geometry: RootGeometry) -> list[np.ndarray]:
-    """All outlines root to tip: tab, transition, then every aerodynamic station."""
+def full_blade_outlines(
+    sections: Sequence[BladeSection], geometry: RootGeometry, hub_outlines: Sequence[np.ndarray] = ()
+) -> list[np.ndarray]:
+    """All outlines root to tip: (one-piece hub,) tab, transition, then every aerodynamic station."""
 
-    return root_outlines(sections[0], geometry) + [section.points_3d() for section in sections]
+    return list(hub_outlines) + root_outlines(sections[0], geometry) + [section.points_3d() for section in sections]
+
+
+def tab_outline_3d(sections: Sequence[BladeSection], geometry: RootGeometry) -> np.ndarray:
+    """The full-width tab section, placed at the tab's outer (clamp-edge) radius."""
+
+    return _place(tab_local_outline(sections[0], geometry), geometry.tab_outer_radius_m, geometry.tab_pitch_deg)
 
 
 def bolt_centres(sections: Sequence[BladeSection], geometry: RootGeometry) -> list[tuple[float, float, float]]:

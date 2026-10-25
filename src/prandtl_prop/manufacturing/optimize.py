@@ -104,6 +104,7 @@ class ThicknessProblem:
         model_cushion: float = 0.01,
         higher_mode_cushion: float = 0.05,
         root_geometry=None,
+        clamp_radius_m: float | None = None,
     ) -> None:
         self.base = list(base_sections)
         self.rows = list(station_rows)
@@ -136,10 +137,11 @@ class ThicknessProblem:
             ]
         )
         self.root_geometry = root_geometry
+        self.clamp_radius_m = clamp_radius_m
         self._cache: dict[tuple[float, ...], Evaluation] = {}
 
     def beam_arrays(self, sections: Sequence[BladeSection]) -> dict[str, np.ndarray]:
-        return blade_arrays(sections, self.root_geometry)
+        return blade_arrays(sections, self.root_geometry, self.clamp_radius_m)
 
     def schedule(self, control_scales: np.ndarray) -> np.ndarray:
         return thickness_schedule(self.r_R, list(zip(self.control, control_scales, strict=True)))

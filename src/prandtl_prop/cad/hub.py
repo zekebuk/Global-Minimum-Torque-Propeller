@@ -54,20 +54,26 @@ class MetricScrew:
     stress_area: float
     washer_od: float
     washer_h: float
+    button_head_d: float = 0.0  # ISO 7380 button head
+    button_head_h: float = 0.0
 
 
 SCREWS = {
-    "M3": MetricScrew("M3", 3.0e-3, 0.5e-3, 5.5e-3, 3.0e-3, 3.2e-3, 3.4e-3, 2.5e-3, 6.5e-3, 5.03e-6, 7.0e-3, 0.5e-3),
-    "M4": MetricScrew("M4", 4.0e-3, 0.7e-3, 7.0e-3, 4.0e-3, 4.3e-3, 4.5e-3, 3.3e-3, 8.0e-3, 8.78e-6, 9.0e-3, 0.8e-3),
-    "M5": MetricScrew("M5", 5.0e-3, 0.8e-3, 8.5e-3, 5.0e-3, 5.3e-3, 5.5e-3, 4.2e-3, 10.0e-3, 14.2e-6, 10.0e-3, 1.0e-3),
-    "M6": MetricScrew("M6", 6.0e-3, 1.0e-3, 10.0e-3, 6.0e-3, 6.4e-3, 6.6e-3, 5.0e-3, 11.0e-3, 20.1e-6, 12.0e-3, 1.6e-3),
+    "M3": MetricScrew("M3", 3.0e-3, 0.5e-3, 5.5e-3, 3.0e-3, 3.2e-3, 3.4e-3, 2.5e-3, 6.5e-3, 5.03e-6, 7.0e-3, 0.5e-3, 5.7e-3, 1.65e-3),
+    "M4": MetricScrew("M4", 4.0e-3, 0.7e-3, 7.0e-3, 4.0e-3, 4.3e-3, 4.5e-3, 3.3e-3, 8.0e-3, 8.78e-6, 9.0e-3, 0.8e-3, 7.6e-3, 2.2e-3),
+    "M5": MetricScrew("M5", 5.0e-3, 0.8e-3, 8.5e-3, 5.0e-3, 5.3e-3, 5.5e-3, 4.2e-3, 10.0e-3, 14.2e-6, 10.0e-3, 1.0e-3, 9.5e-3, 2.75e-3),
+    "M6": MetricScrew("M6", 6.0e-3, 1.0e-3, 10.0e-3, 6.0e-3, 6.4e-3, 6.6e-3, 5.0e-3, 11.0e-3, 20.1e-6, 12.0e-3, 1.6e-3, 10.5e-3, 3.3e-3),
 }
 ISO_4762_LENGTHS_M = tuple(v * 1e-3 for v in (6, 8, 10, 12, 16, 20, 25, 30, 35, 40, 45, 50))
+ISO_8734_LENGTHS_M = tuple(v * 1e-3 for v in (8, 10, 12, 14, 16, 18, 20, 24, 28, 30, 32, 36, 40))  # hardened dowels, d = 6
 PROOF_STRESS_PA = {"8.8": 580.0e6, "12.9": 970.0e6}  # ISO 898-1, d <= 16 mm
 
 
 @dataclass(frozen=True)
 class HubDesign:
+    # "bolted": two bolts per blade, fixed. "folding": one hinge pin per blade (prandtl_prop.cad.hub_variants).
+    # "one_piece": both blades and a hub boss molded as one part, clamped by a machined cap.
+    variant: str = "bolted"
     top_plate_thickness_m: float = 0.004
     bottom_plate_thickness_m: float = 0.008
     plate_side_margin_m: float = 0.004  # plate width = tab width + 2 x margin
@@ -92,12 +98,30 @@ class HubDesign:
     access_holes: bool = True
     safety_factor: float = 2.0
     standard_lengths_m: tuple[float, ...] = field(default=ISO_4762_LENGTHS_M)
+    edge_chamfer_m: float = 0.0008  # exposed plate/cap edges
+    # Folding variant
+    hinge_pin_diameter_m: float = 0.006  # ISO 8734 hardened dowel, m6: press fit in the bottom plate
+    hinge_pin_shear_strength_Pa: float = 550.0e6  # ISO 8734 double-shear rating / (2 x area), d = 6
+    hinge_bushing_od_m: float = 0.008  # PTFE-lined steel-backed bushing (DU type 0608) pressed into the tab
+    hinge_bushing_length_m: float = 0.008
+    hinge_bushing_static_pressure_Pa: float = 250.0e6
+    plate_margin_m: float = 0.002  # plate edge beyond the tab end's circle
+    fold_clearance_m: float = 0.001
+    fold_angle_deg: float = 90.0  # stowed: both blades to the same side (one lags, one leads)
+    spacer_squeeze_m: float = 2.0e-5  # core spacer thinner than the tab: no flap slop, light fold friction
+    top_plate_options_m: tuple[float, ...] = (0.004, 0.005, 0.006)
+    bottom_plate_options_m: tuple[float, ...] = (0.006, 0.008, 0.010)
+    dowel_lengths_m: tuple[float, ...] = field(default=ISO_8734_LENGTHS_M)
+    # One-piece variant
+    boss_diameter_m: float = 0.036
+    boss_thickness_m: float = 0.010
+    cap_options_m: tuple[float, ...] = (0.003, 0.004, 0.005, 0.006)
+    motor_screw_preload_N: float = 1000.0  # through the polymer boss: modest, re-check after the first runs
 
 
 @dataclass
 class HubResult:
-    top_plate: object
-    bottom_plate: object
+    parts: dict  # machined parts by name
     fasteners: list  # simplified COTS solids for the assembly view
     metrics: dict
     warnings: list[str]
@@ -438,7 +462,7 @@ def build_hub(
             "set hub.motor_* from the motor drawing and hub.motor_pattern_confirmed: true"
         )
     bom = _bom(g, h, bolt, motor, blade_length, motor_length, len(bolts_all), cbore_depth)
-    return HubResult(top, bottom, fasteners, metrics, warnings, bom)
+    return HubResult({"hub_top_plate": top, "hub_bottom_plate": bottom}, fasteners, metrics, warnings, bom)
 
 
 def _tab_boxes(g, y_c: float) -> list[tuple[float, float, float, float]]:
@@ -522,8 +546,8 @@ def _bom(
     ]
 
 
-def export_hub(result: HubResult, folder: Path, blade=None) -> dict[str, Path]:
-    """STEP (mm) per plate and for the assembly, DXF profiles (mm), STL (m), BOM (CSV and Markdown)."""
+def export_hub(result: HubResult, folder: Path, blades: Sequence = ()) -> dict[str, Path]:
+    """STEP (mm) and STL (m) per machined part, DXF profiles (mm), fasteners, assembly STEP, BOM (CSV, Markdown)."""
 
     import csv
 
@@ -531,25 +555,22 @@ def export_hub(result: HubResult, folder: Path, blade=None) -> dict[str, Path]:
 
     cq = _cq()
     folder.mkdir(parents=True, exist_ok=True)
-    paths = {
-        "top_step": export_step(result.top_plate, folder / "hub_top_plate.step"),
-        "bottom_step": export_step(result.bottom_plate, folder / "hub_bottom_plate.step"),
-        "top_stl": export_stl(result.top_plate, folder / "hub_top_plate_m.stl", 5e-5),
-        "bottom_stl": export_stl(result.bottom_plate, folder / "hub_bottom_plate_m.stl", 5e-5),
-    }
-    fasteners = cq.Compound.makeCompound(result.fasteners)
-    paths["fasteners_stl"] = export_stl(fasteners, folder / "hub_fasteners_m.stl", 5e-5)
-    for name, plate, face in (("top", result.top_plate, ">Z"), ("bottom", result.bottom_plate, "<Z")):
-        profile = cq.Workplane().add(plate).faces(face).val()
+    paths: dict[str, Path] = {}
+    for name, part in result.parts.items():
+        paths[f"{name}_step"] = export_step(part, folder / f"{name}.step")
+        paths[f"{name}_stl"] = export_stl(part, folder / f"{name}_m.stl", 5e-5)
+        profile = max(
+            cq.Workplane().add(part).faces("%PLANE").vals(), key=lambda face: face.Area() if abs(face.normalAt().z) > 0.99 else 0.0
+        )
         profile = profile.translate(cq.Vector(0, 0, -profile.Center().z)).scale(1000.0)
-        path = folder / f"hub_{name}_plate_profile_mm.dxf"
-        cq.exporters.exportDXF(cq.Workplane("XY").add(profile), str(path))
-        paths[f"{name}_dxf"] = path
-    if blade is not None:
-        blades = [blade, blade.rotate(cq.Vector(0, 0, 0), cq.Vector(0, 0, 1), 180.0)]
-        assembly = cq.Compound.makeCompound([result.top_plate, result.bottom_plate, *result.fasteners, *blades])
+        paths[f"{name}_dxf"] = folder / f"{name}_profile_mm.dxf"
+        cq.exporters.exportDXF(cq.Workplane("XY").add(profile), str(paths[f"{name}_dxf"]))
+    if result.fasteners:
+        paths["fasteners_stl"] = export_stl(cq.Compound.makeCompound(result.fasteners), folder / "hub_fasteners_m.stl", 5e-5)
+    if blades:
+        assembly = cq.Compound.makeCompound([*result.parts.values(), *result.fasteners, *blades])
         paths["assembly_step"] = export_step(assembly, folder / "hub_assembly.step")
-        paths["blades_stl"] = export_stl(cq.Compound.makeCompound(blades), folder / "hub_blades_m.stl", 2e-4)
+        paths["blades_stl"] = export_stl(cq.Compound.makeCompound(list(blades)), folder / "hub_blades_m.stl", 2e-4)
     with (folder / "hub_bom.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(result.bom[0]))
         writer.writeheader()

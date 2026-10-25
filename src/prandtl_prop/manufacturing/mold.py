@@ -31,6 +31,7 @@ Construction:
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -160,26 +161,40 @@ def _loft(wires, ruled: bool):
     return cq.Solid.makeLoft(wires, ruled)
 
 
+def _loft_runs(wires, yz: Sequence[np.ndarray]):
+    """Ruled lofts over runs of identical sections (prismatic tab or hub), smooth lofts elsewhere, fused."""
+
+    same = [np.allclose(yz[i + 1], yz[i], rtol=0.0, atol=1.0e-9) for i in range(len(yz) - 1)]
+    runs: list[tuple[bool, int, int]] = []
+    for i, is_prism in enumerate(same):
+        if runs and runs[-1][0] == is_prism:
+            runs[-1] = (is_prism, runs[-1][1], i + 1)
+        else:
+            runs.append((is_prism, i, i + 1))
+    pieces = [_loft([wires[a], wires[b]], ruled=True) if prism else _loft(wires[a : b + 1], ruled=False) for prism, a, b in runs]
+    solid = pieces[0]
+    for piece in pieces[1:]:
+        solid = solid.fuse(piece)
+    return solid
+
+
 def _half(
     outlines: Sequence[np.ndarray], x_range: tuple[float, float], y_grid: np.ndarray, z_outer: float, surface: str, design: MoldDesign
 ):
-    """One mold half: impression loft through the section stations plus flat end pieces to the insert faces."""
+    """One mold half: impression loft through the section stations plus flat end pieces to the insert faces.
+
+    An end piece is skipped when the range starts (or ends) at the first (last) station, as for the
+    blades of a one-piece prop, which meet a centre block instead.
+    """
 
     yz = [np.asarray(o)[:, 1:] for o in outlines]
     xs = [float(o[0, 0]) for o in outlines]
     profile = lambda x, o, kind: _profile_wire(x, o, y_grid, z_outer, design, kind)  # noqa: E731
-    prism = 1
-    while prism < len(yz) - 1 and np.allclose(yz[prism], yz[0], rtol=0.0, atol=1.0e-9):
-        prism += 1
-    wires = [profile(x, o, surface) for x, o in zip(xs, yz, strict=True)]
-    pieces = [_loft(wires[prism - 1 :], ruled=False)]  # smooth through changing sections (see cad.step.loft_outlines)
-    if prism > 1:
-        pieces.append(_loft([wires[0], wires[prism - 1]], ruled=True))
-    pieces.append(_loft([profile(x_range[0], yz[0], "mid"), profile(xs[0], yz[0], "mid")], ruled=True))
-    pieces.append(_loft([profile(xs[-1], yz[-1], "mid"), profile(x_range[1], yz[-1], "mid")], ruled=True))
-    solid = pieces[0]
-    for piece in pieces[1:]:
-        solid = solid.fuse(piece)
+    solid = _loft_runs([profile(x, o, surface) for x, o in zip(xs, yz, strict=True)], yz)
+    if x_range[0] < xs[0] - 1.0e-9:
+        solid = solid.fuse(_loft([profile(x_range[0], yz[0], "mid"), profile(xs[0], yz[0], "mid")], ruled=True))
+    if x_range[1] > xs[-1] + 1.0e-9:
+        solid = solid.fuse(_loft([profile(xs[-1], yz[-1], "mid"), profile(x_range[1], yz[-1], "mid")], ruled=True))
     return solid.clean()
 
 
@@ -295,6 +310,137 @@ def build_mold(
     return MoldResult(core, cavity, cavity_part, metrics)
 
 
+def build_one_piece_mold(
+    blade_outlines: Sequence[np.ndarray],
+    boss_diameter_m: float,
+    boss_thickness_m: float,
+    z_centre_m: float,
+    pin_holes: Sequence[tuple[float, float, float]] = (),
+    design: MoldDesign = MoldDesign(),  # noqa: B008
+    boss_draft_deg: float = 1.0,
+    sprue_diameters_m: tuple[float, float] = (0.004, 0.006),
+) -> MoldResult:
+    """Core/cavity inserts for a one-piece two-blade prop (blades + drafted hub boss), centre-gated.
+
+    Each blade's half-inserts are lofted from its section profiles exactly as for a single blade,
+    and the other blade's are their 180 deg copy. The centre, between the blades' first stations,
+    is a plain block split at the boss mid-plane. The drafted boss is then cut from both halves,
+    and core pins for the motor holes (x, y, diameter) are added back, meeting at the parting plane.
+    A sprue through the cavity (fixed) half feeds the boss centre, so the melt flows out to both
+    tips and the fibres align spanwise. The centre bore is drilled after degating.
+    """
+
+    from prandtl_prop.cad.step import drafted_boss, one_piece_solid
+
+    cq = _cq()
+    scale = shrink_factors(design)
+    outlines = [np.asarray(o) * scale for o in blade_outlines]
+    cross = 1.0 + design.shrink_cross
+    boss_d, boss_t, z_c = boss_diameter_m * cross, boss_thickness_m * cross, z_centre_m * cross
+    cavity_part, _ = one_piece_solid(outlines, boss_d, boss_t, z_c, draft_deg=boss_draft_deg)
+    box = cavity_part.BoundingBox()
+    x1 = max(abs(box.xmin), abs(box.xmax)) + design.margin_m
+    y1 = max(abs(box.ymin), abs(box.ymax)) + design.margin_m
+    z0, z1 = box.zmin - design.margin_m, box.zmax + design.margin_m
+    y_grid = np.linspace(-y1, y1, 2 * int(np.ceil(y1 / design.grid_step_m)) + 1)  # symmetric: the 180 deg copy matches
+    x_first = float(outlines[0][0, 0])
+
+    def halves(kind_upper: str, kind_lower: str):
+        pieces = {}
+        for name, kind, z_outer, z_lo, z_hi in (("core", kind_upper, z1, z_c, z1), ("cavity", kind_lower, z0, z0, z_c)):
+            half = _half(outlines, (x_first, x1), y_grid, z_outer, kind, design)
+            centre = cq.Solid.makeBox(2.0 * x_first, 2.0 * y1, z_hi - z_lo, cq.Vector(-x_first, -y1, z_lo))
+            solid = half.fuse(half.rotate(cq.Vector(0, 0, 0), cq.Vector(0, 0, 1), 180.0)).fuse(centre).clean()
+            pieces[name] = solid
+        return pieces["core"], pieces["cavity"]
+
+    core, cavity = halves("upper", "lower")
+    blank_core, blank_cavity = halves("mid", "mid")
+    boss = drafted_boss(boss_d, boss_t, z_c, boss_draft_deg)
+    core, cavity = core.cut(boss).clean(), cavity.cut(boss).clean()
+    blank_core, blank_cavity = blank_core.cut(boss), blank_cavity.cut(boss)
+    impression_core = _volume(blank_core) - _volume(core) + _volume(boss.intersect(_box_above(z_c, x1, y1, z1)))
+    impression_cavity = _volume(blank_cavity) - _volume(cavity) + _volume(boss.intersect(_box_below(z_c, x1, y1, z0)))
+    for x, y, diameter in pin_holes:
+        r = 0.5 * diameter * cross
+        core = core.fuse(
+            cq.Solid.makeCylinder(r, z_c + 0.5 * boss_t + 1e-3 - z_c, cq.Vector(x * scale[0], y * cross, z_c), cq.Vector(0, 0, 1))
+        )
+        cavity = cavity.fuse(
+            cq.Solid.makeCylinder(r, 0.5 * boss_t + 1e-3, cq.Vector(x * scale[0], y * cross, z_c - 0.5 * boss_t - 1e-3), cq.Vector(0, 0, 1))
+        )
+    core, cavity = core.clean(), cavity.clean()
+
+    # Sprue: tapered, from the cavity insert's outer face to the boss underside at the centre.
+    z_boss_bottom = z_c - 0.5 * boss_t
+    sprue = cq.Solid.makeCone(
+        0.5 * sprue_diameters_m[0], 0.5 * sprue_diameters_m[1], z_boss_bottom - z0 + 1.5e-3, cq.Vector(0, 0, z0 - 1e-3), cq.Vector(0, 0, 1)
+    )
+    cavity = cavity.cut(sprue)
+    # Ejectors in the core (moving half), on the boss top between the motor holes.
+    ejector_r = 0.5 * design.ejector_diameter_m
+    ejectors = []
+    hole_angles = [math.atan2(y, x) for x, y, _ in pin_holes] or [math.radians(45.0)]
+    ring = 0.25 * boss_d
+    for a in hole_angles:
+        ex, ey = ring * math.cos(a + math.pi / 4), ring * math.sin(a + math.pi / 4)
+        pin = cq.Solid.makeCylinder(
+            ejector_r, z1 - (z_c + 0.5 * boss_t) + 2e-3, cq.Vector(ex, ey, z_c + 0.5 * boss_t - 0.5e-3), cq.Vector(0, 0, 1)
+        )
+        ejectors.append(pin)
+        core = core.cut(pin)
+    # Leader pins and cooling: as for the single-blade mold, along the full span.
+    leader_r = 0.5 * design.leader_pin_diameter_m
+    inset = 0.6 * design.margin_m
+    for x in (-x1 + inset, x1 - inset):
+        for y in (-y1 + inset, y1 - inset):
+            hole = cq.Solid.makeCylinder(leader_r, z1 - z0 + 0.002, cq.Vector(x, y, z0 - 0.001), cq.Vector(0, 0, 1))
+            core, cavity = core.cut(hole), cavity.cut(hole)
+    cooling_r = 0.5 * design.cooling_diameter_m
+    span = box.ymax - box.ymin
+    lanes = np.linspace(box.ymin + 0.15 * span, box.ymax - 0.15 * span, design.cooling_lanes)
+    keep_clear = cooling_r + max(ring, 0.5 * boss_d) + 0.004  # lanes pass beside the boss, its ejectors and the sprue
+    lanes = [y if abs(y) >= keep_clear else math.copysign(keep_clear, y if y != 0 else 1.0) for y in lanes]
+    for y in sorted(set(round(float(v), 6) for v in lanes)):
+        core = core.cut(
+            cq.Solid.makeCylinder(
+                cooling_r, 2 * x1 + 0.002, cq.Vector(-x1 - 0.001, y, box.zmax + design.cooling_offset_m), cq.Vector(1, 0, 0)
+            )
+        )
+        cavity = cavity.cut(
+            cq.Solid.makeCylinder(
+                cooling_r, 2 * x1 + 0.002, cq.Vector(-x1 - 0.001, y, box.zmin - design.cooling_offset_m), cq.Vector(1, 0, 0)
+            )
+        )
+    part_volume = _volume(cavity_part)
+    metrics = {
+        "insert_size_mm": [round(2 * x1 * 1000, 1), round(2 * y1 * 1000, 1), round((z1 - z0) * 1000, 1)],
+        "core_valid": bool(core.isValid()),
+        "cavity_valid": bool(cavity.isValid()),
+        "cavity_part_volume_cm3": part_volume * 1e6,
+        "impression_volume_cm3": (impression_core + impression_cavity) * 1e6,
+        "impression_over_part_volume": (impression_core + impression_cavity) / part_volume,
+        "part_volume_fraction_in_cavity_half": impression_cavity / (impression_core + impression_cavity),
+        "blanks_over_block_volume": (_volume(blank_core) + _volume(blank_cavity) + _volume(boss)) / (2 * x1 * 2 * y1 * (z1 - z0)),
+        "cooling_to_part_steel_mm": (design.cooling_offset_m - cooling_r) * 1000,
+        "clearance_ok": bool(design.cooling_offset_m - cooling_r >= 0.003),
+        "gate": "centre sprue into the boss (drill the centre bore after degating)",
+        "shrink_flow": design.shrink_flow,
+        "shrink_cross": design.shrink_cross,
+    }
+    return MoldResult(core, cavity, cavity_part, metrics)
+
+
+def _box_above(z: float, x1: float, y1: float, z1: float):
+    cq = _cq()
+    return cq.Solid.makeBox(2 * x1, 2 * y1, z1 - z, cq.Vector(-x1, -y1, z))
+
+
+def _box_below(z: float, x1: float, y1: float, z0: float):
+    cq = _cq()
+    return cq.Solid.makeBox(2 * x1, 2 * y1, z - z0, cq.Vector(-x1, -y1, z0))
+
+
 def _volume(shape) -> float:
     from prandtl_prop.cad.step import report
 
@@ -335,6 +481,7 @@ __all__ = [
     "MoldDesign",
     "MoldResult",
     "build_mold",
+    "build_one_piece_mold",
     "export_mold",
     "half_chains",
     "parting_row",

@@ -86,20 +86,27 @@ def concat_arrays(*parts: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     return {key: np.concatenate([part[key] for part in parts]) for key in parts[0]}
 
 
-def blade_arrays(sections: Sequence[BladeSection], root_geometry=None) -> dict[str, np.ndarray]:
+def blade_arrays(sections: Sequence[BladeSection], root_geometry=None, clamp_radius_m: float | None = None) -> dict[str, np.ndarray]:
     """Section properties for the modal beam, clamped where the hub grips the blade.
 
-    With a root tab (``prandtl_prop.cad.root.RootGeometry``), the beam starts at the tab's outer clamp
-    edge and runs through the transition outlines before the aero stations. Clamping at the first
-    aero station instead overestimated flap 1 by ~14% against CalculiX (159 vs 139 Hz).
+    With a root tab (``prandtl_prop.cad.root.RootGeometry``), the beam starts at the clamp radius
+    (default: the tab's outer edge, where the hub plates end; the boss edge for a one-piece prop) and
+    runs through the transition outlines before the aero stations. Clamping at the first aero station
+    instead overestimated flap 1 by ~14% against CalculiX (159 vs 139 Hz).
     """
 
     data = section_arrays(sections)
     if root_geometry is None:
         return data
-    from prandtl_prop.cad.root import root_outlines
+    from prandtl_prop.cad.root import root_outlines, tab_outline_3d
 
-    return concat_arrays(outline_arrays(root_outlines(sections[0], root_geometry)[1:]), data)
+    clamp = root_geometry.tab_outer_radius_m if clamp_radius_m is None else clamp_radius_m
+    outlines = [o for o in root_outlines(sections[0], root_geometry) if float(o[0, 0]) >= clamp - 1.0e-9]
+    if clamp < root_geometry.tab_outer_radius_m - 1.0e-9:
+        tab = tab_outline_3d(sections, root_geometry).copy()
+        tab[:, 0] = clamp
+        outlines.insert(0, tab)
+    return concat_arrays(outline_arrays(outlines), data)
 
 
 def rotating_modes(

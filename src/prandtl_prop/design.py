@@ -84,6 +84,7 @@ class RootSpec:
     bolt_diameter_m: float = 0.0053
     bolt_radii_m: tuple[float, ...] = (0.020, 0.029)
     tab_centre_s_m: float | None = None  # None: chord midpoint (see prandtl_prop.cad.root.RootGeometry)
+    tab_end: str = "square"  # "round" for a folding blade's hinge end
 
     def geometry(self):
         from prandtl_prop.cad.root import RootGeometry

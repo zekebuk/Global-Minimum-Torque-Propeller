@@ -49,7 +49,13 @@ STAGE_MODULES = {
     ),
     "sections": ("prandtl_prop.cad.airfoils", "prandtl_prop.cad.sections", "prandtl_prop.manufacturing.injection", "prandtl_prop.pipeline"),
     "dfm": ("prandtl_prop.manufacturing.injection", "prandtl_prop.structures.modal_beam", "prandtl_prop.cad.root", "prandtl_prop.pipeline"),
-    "cad": ("prandtl_prop.cad.step", "prandtl_prop.cad.render", "prandtl_prop.cad.root", "prandtl_prop.pipeline"),
+    "cad": (
+        "prandtl_prop.cad.step",
+        "prandtl_prop.cad.render",
+        "prandtl_prop.cad.root",
+        "prandtl_prop.cad.hub_variants",
+        "prandtl_prop.pipeline",
+    ),
     "beam": ("prandtl_prop.structures.loads", "prandtl_prop.structures.beam", "prandtl_prop.pipeline"),
     "fea": ("prandtl_prop.structures.loads", "prandtl_prop.structures.calculix", "prandtl_prop.pipeline"),
     "modal": ("prandtl_prop.structures.calculix", "prandtl_prop.pipeline"),
@@ -60,7 +66,14 @@ STAGE_MODULES = {
         "prandtl_prop.cad.render",
         "prandtl_prop.pipeline",
     ),
-    "hub": ("prandtl_prop.cad.hub", "prandtl_prop.cad.step", "prandtl_prop.cad.root", "prandtl_prop.cad.render", "prandtl_prop.pipeline"),
+    "hub": (
+        "prandtl_prop.cad.hub",
+        "prandtl_prop.cad.hub_variants",
+        "prandtl_prop.cad.step",
+        "prandtl_prop.cad.root",
+        "prandtl_prop.cad.render",
+        "prandtl_prop.pipeline",
+    ),
     "cfd": ("prandtl_prop.cfd.openfoam", "prandtl_prop.pipeline"),
 }
 
@@ -213,7 +226,7 @@ def _stage_dfm(design: DesignCase, run: StageRun, upstream: dict[str, StageRun])
     material = design.structure.material
     lo, hi = spec.operating_rpm_fractions
     rpm_values = list(np.linspace(lo, hi, 9) * design.operating_point.rpm)
-    beam = blade_arrays(sections, design.root.geometry() if design.root.enabled else None)
+    beam = blade_arrays(sections, design.root.geometry() if design.root.enabled else None, _clamp_radius(design))
     modes = campbell(beam, E_Pa=material.E_Pa, density_kg_m3=material.density_kg_m3, rpm_values=rpm_values, count=3)
     report["operating_rpm_range"] = [rpm_values[0], rpm_values[-1]]
     report["beam_flap1_hz_over_band"] = [m[0].frequency_hz for m in modes]
@@ -233,17 +246,23 @@ def _stage_cad(design: DesignCase, run: StageRun, upstream: dict[str, StageRun])
     from prandtl_prop.cad import step
 
     sections = design_sections(design, upstream["aero"])
+    prop = None
     if design.root.enabled:
         from prandtl_prop.cad.root import full_blade_outlines
 
-        blade = step.full_blade_solid(sections, design.root.geometry())
-        run.write_json(
-            "root_outlines.json", {"outlines_m": [o.round(9).tolist() for o in full_blade_outlines(sections, design.root.geometry())]}
-        )
+        geometry = design.root.geometry()
+        outlines = full_blade_outlines(sections, geometry)
+        run.write_json("root_outlines.json", {"outlines_m": [o.round(9).tolist() for o in outlines]})
+        if design.hub.variant == "one_piece":
+            prop, blade = _one_piece_prop(design, sections)  # blade: blade 1 + its half of the boss (for the FEA)
+        else:
+            blade = step.full_blade_solid(sections, geometry)
     else:
         blade = step.blade_solid(sections, design.geometry.hub_radius_m)
-    step.export_step(blade, run.path("blade.step"))  # millimetres, for SolidWorks and other CAD
+    step.export_step(prop if prop is not None else blade, run.path("blade.step"))  # millimetres, for SolidWorks and other CAD
     blade.exportBrep(str(run.path("blade_m.brep")))  # metres, for meshing (CalculiX)
+    if prop is not None:
+        prop.exportBrep(str(run.path("prop_m.brep")))
     report = step.report(blade)
     areas = np.array([section.properties().area_m2 for section in sections])
     radii = np.array([section.r_m for section in sections])
@@ -254,12 +273,16 @@ def _stage_cad(design: DesignCase, run: StageRun, upstream: dict[str, StageRun])
         "blade_center_of_mass_m": list(report.center_of_mass_m),
         "blade_bounding_box_m": list(report.bounding_box_m),
         "blade_solid_valid": report.is_valid,
+        "blade_inertia_cg_zz_kg_m2": step.inertia_zz_about_cg(blade, design.structure.material.density_kg_m3),
         "loft_vs_section_quadrature_volume_ratio": report.volume_m3 / quadrature_volume
         if design.geometry.hub_radius_m is None and not design.root.enabled
         else None,
     }
+    if prop is not None:
+        metrics["prop_mass_kg"] = step.report(prop).volume_m3 * design.structure.material.density_kg_m3
+        metrics["prop_solid_valid"] = bool(prop.isValid())
     if design.cad.export_stl:
-        step.export_stl(blade, run.path("blade_m.stl"), design.cad.stl_tolerance_m)
+        step.export_stl(prop if prop is not None else blade, run.path("blade_m.stl"), design.cad.stl_tolerance_m)
         from prandtl_prop.cad.render import render
 
         picked = sections[::3] + ([sections[-1]] if (len(sections) - 1) % 3 else [])
@@ -274,12 +297,39 @@ def _stage_cad(design: DesignCase, run: StageRun, upstream: dict[str, StageRun])
         curves = step.write_solidworks_curves(sections, run.path("solidworks_curves"))
         metrics["solidworks_curve_count"] = len(curves)
     if design.cad.export_rotor:
-        rotor = step.rotor_solid(blade, design.operating_point.blade_count, design.geometry.hub_radius_m)
+        rotor = prop if prop is not None else step.rotor_solid(blade, design.operating_point.blade_count, design.geometry.hub_radius_m)
         step.export_step(rotor, run.path("rotor.step"))
         step.export_stl(rotor, run.path("rotor_m.stl"), design.cad.stl_tolerance_m)  # metres, for OpenFOAM
         metrics["rotor_volume_m3"] = step.report(rotor).volume_m3
     warnings = [] if report.is_valid else ["Blade solid failed OpenCascade validity check"]
     return metrics, warnings
+
+
+def _one_piece_prop(design: DesignCase, sections: list[BladeSection]):
+    """One-piece prop (both blades + boss) and the FEA half; holes: centre bore and the motor pattern."""
+
+    from prandtl_prop.cad import step
+    from prandtl_prop.cad.hub_variants import _motor_holes
+    from prandtl_prop.cad.root import full_blade_outlines, tab_outline_3d
+
+    geometry, hub = design.root.geometry(), design.hub
+    if not geometry.tab_inner_radius_m < 0.5 * hub.boss_diameter_m < geometry.tab_outer_radius_m:
+        raise ValueError("One-piece prop: the tab must start inside the boss and end outside it (tab_inner < boss radius < tab_outer)")
+    if hub.boss_thickness_m <= geometry.tab_thickness_m:
+        raise ValueError("One-piece prop: hub.boss_thickness_m must exceed root.tab_thickness_m (no coincident faces)")
+    tab = tab_outline_3d(sections, geometry)
+    z_centre = 0.5 * float(tab[:, 2].max() + tab[:, 2].min())
+    holes = [(0.0, 0.0, z_centre)] + [(x, y, z_centre) for x, y in _motor_holes(hub)]
+    diameters = [hub.center_bore_m] + [_motor_clearance(hub)] * hub.motor_screw_count
+    return step.one_piece_solid(
+        full_blade_outlines(sections, geometry), hub.boss_diameter_m, hub.boss_thickness_m, z_centre, holes, diameters
+    )
+
+
+def _motor_clearance(hub) -> float:
+    from prandtl_prop.cad.hub import SCREWS
+
+    return SCREWS[hub.motor_screw].clearance_medium
 
 
 def _stage_beam(design: DesignCase, run: StageRun, upstream: dict[str, StageRun]) -> tuple[dict[str, Any], list[str]]:
@@ -358,7 +408,8 @@ def _stage_fea(design: DesignCase, run: StageRun, upstream: dict[str, StageRun])
         mesh, result, sections, allowable_stress_Pa=material.allowable_stress_Pa, clamp_zone_end_m=clamp_zone_end
     )
     if design.root.enabled:
-        metrics.update(_bolt_checks(design, sections, upstream["cad"].metrics))
+        if design.hub.variant == "bolted":  # folding and one-piece joints are checked in the hub stage
+            metrics.update(_bolt_checks(design, sections, upstream["cad"].metrics))
     beam = upstream["beam"].metrics
     metrics["applied_aero_force_N"] = forces.sum(axis=0).tolist()
     metrics["tip_deflection_z_ratio_fea_over_beam"] = metrics["tip_deflection_z_m"] / beam["tip_deflection_z_m"]
@@ -388,14 +439,25 @@ def _root_boundary(design: DesignCase, sections: list[BladeSection], mesh) -> tu
 
     if not design.root.enabled:
         return None, None, None
-    from prandtl_prop.cad.root import bolt_centres
+    from prandtl_prop.cad.root import tab_outline_3d
     from prandtl_prop.structures import calculix
 
     root = design.root
-    z_centre = bolt_centres(sections, root.geometry())[0][2]
-    clamp = calculix.tab_clamp_nodes(mesh, root.tab_outer_radius_m, root.tab_thickness_m, z_centre)
+    tab = tab_outline_3d(sections, root.geometry())
+    z_centre = 0.5 * float(tab[:, 2].max() + tab[:, 2].min())
     inner_edge = sections[0].r_m - 0.5 * (sections[1].r_m - sections[0].r_m)
+    if design.hub.variant == "one_piece":  # boss faces under the cap and on the motor, plus the cut at the axis
+        radius = 0.5 * design.hub.boss_diameter_m
+        clamp = calculix.hub_clamp_nodes(mesh, radius, design.hub.boss_thickness_m, z_centre)
+        return clamp, inner_edge, radius + root.tab_width_m
+    clamp = calculix.tab_clamp_nodes(mesh, root.tab_outer_radius_m, root.tab_thickness_m, z_centre)
     return clamp, inner_edge, root.tab_outer_radius_m + root.tab_width_m
+
+
+def _clamp_radius(design: DesignCase) -> float | None:
+    """Where the hub stops supporting the blade in flap (None: the tab's outer edge)."""
+
+    return 0.5 * design.hub.boss_diameter_m if design.root.enabled and design.hub.variant == "one_piece" else None
 
 
 def _bolt_checks(design: DesignCase, sections: list[BladeSection], cad_metrics: dict[str, Any]) -> dict[str, float]:
@@ -536,10 +598,24 @@ def _stage_mold(design: DesignCase, run: StageRun, upstream: dict[str, StageRun]
     """Two-plate core/cavity inserts (prandtl_prop.manufacturing.mold), STEP in mm, plus an exploded render."""
 
     from prandtl_prop.cad.render import render_mold
-    from prandtl_prop.manufacturing.mold import build_mold, export_mold
+    from prandtl_prop.manufacturing.mold import build_mold, build_one_piece_mold, export_mold
 
     sections = design_sections(design, upstream["aero"])
-    if design.root.enabled:
+    if design.root.enabled and design.hub.variant == "one_piece":
+        from prandtl_prop.cad.hub_variants import _motor_holes
+        from prandtl_prop.cad.root import full_blade_outlines, tab_outline_3d
+
+        geometry, hub = design.root.geometry(), design.hub
+        tab = tab_outline_3d(sections, geometry)
+        result = build_one_piece_mold(
+            full_blade_outlines(sections, geometry),
+            hub.boss_diameter_m,
+            hub.boss_thickness_m,
+            0.5 * float(tab[:, 2].max() + tab[:, 2].min()),
+            [(x, y, _motor_clearance(hub)) for x, y in _motor_holes(hub)],
+            design.mold,
+        )
+    elif design.root.enabled:
         from prandtl_prop.cad.root import bolt_centres, full_blade_outlines
 
         geometry = design.root.geometry()
@@ -569,55 +645,118 @@ def _stage_mold(design: DesignCase, run: StageRun, upstream: dict[str, StageRun]
 
 
 def _stage_hub(design: DesignCase, run: StageRun, upstream: dict[str, StageRun]) -> tuple[dict[str, Any], list[str]]:
-    """Center hub (prandtl_prop.cad.hub): machined plates + COTS fasteners clamping both root tabs."""
+    """Center hub by ``hub.variant``: bolted (prandtl_prop.cad.hub), folding or one-piece (prandtl_prop.cad.hub_variants)."""
 
     import cadquery as cq
 
-    from prandtl_prop.cad.hub import build_hub, export_hub
+    from prandtl_prop.cad import hub as hub_module
+    from prandtl_prop.cad import hub_variants
     from prandtl_prop.cad.render import render_mold
-    from prandtl_prop.cad.root import bolt_centres, root_outlines
+    from prandtl_prop.cad.root import bolt_centres, full_blade_outlines, tab_outline_3d
+    from prandtl_prop.cad.sections import polygon_properties
 
     if not design.root.enabled:
         raise ValueError("The hub stage needs the blade root tab: set root.enabled: true")
     sections = design_sections(design, upstream["aero"])
-    geometry = design.root.geometry()
-    cad = upstream["cad"].metrics
+    geometry, spec = design.root.geometry(), design.hub
+    cad, aero = upstream["cad"].metrics, upstream["aero"].metrics
     op = _operating_point(design)
     blades = design.operating_point.blade_count
-    r_o = geometry.tab_outer_radius_m
-    stations = _read_csv(upstream["aero"].output("stations.csv"))
-    flap_moment = sum(float(row["qz_N_per_m"]) / blades * (float(row["r_m"]) - r_o) * float(row["dr_m"]) for row in stations)
-    result = build_hub(
-        geometry,
-        bolt_centres(sections, geometry),
-        root_outlines(sections[0], geometry)[0],
-        blade_mass_kg=cad["blade_mass_kg"],
-        blade_cg_m=cad["blade_center_of_mass_m"],
-        rpm=op.rpm,
-        thrust_N=float(upstream["aero"].metrics["thrust_N"]),
-        torque_Nm=float(upstream["aero"].metrics["torque_Nm"]),
-        blade_count=blades,
-        root_flap_moment_Nm=flap_moment,
-        tab_allowable_Pa=design.structure.material.allowable_stress_Pa,
-        design=design.hub,
-    )
+    stations = [
+        (float(row["r_m"]), float(row["dr_m"]), float(row["qz_N_per_m"]) / blades, float(row["qy_tangential_N_per_m"]) / blades)
+        for row in _read_csv(upstream["aero"].output("stations.csv"))
+    ]
+
+    def flap_moment(about_r: float) -> float:
+        return sum(qz * (r - about_r) * dr for r, dr, qz, _ in stations if r > about_r)
+
+    tab = tab_outline_3d(sections, geometry)
     blade = cq.Shape.importBrep(str(upstream["cad"].output("blade_m.brep")))
-    paths = export_hub(result, run.directory, blade)
+    common = dict(rpm=op.rpm, thrust_N=float(aero["thrust_N"]), torque_Nm=float(aero["torque_Nm"]), design=spec)
+    extra: dict[str, Any] = {}
+    if spec.variant == "bolted":
+        result = hub_module.build_hub(
+            geometry,
+            bolt_centres(sections, geometry),
+            tab,
+            blade_mass_kg=cad["blade_mass_kg"],
+            blade_cg_m=cad["blade_center_of_mass_m"],
+            blade_count=blades,
+            root_flap_moment_Nm=flap_moment(geometry.tab_outer_radius_m),
+            tab_allowable_Pa=design.structure.material.allowable_stress_Pa,
+            **common,
+        )
+        assembly = [blade, blade.rotate(cq.Vector(0, 0, 0), cq.Vector(0, 0, 1), 180.0)]
+    elif spec.variant == "folding":
+        pin = bolt_centres(sections, geometry)[0]
+        aero_moment = sum(-(r - pin[0]) * qy * dr for r, dr, _, qy in stations)
+        result = hub_variants.build_folding_hub(
+            geometry,
+            pin,
+            tab,
+            full_blade_outlines(sections, geometry),
+            blade_mass_kg=cad["blade_mass_kg"],
+            blade_cg_m=cad["blade_center_of_mass_m"],
+            blade_inertia_cg_zz=cad["blade_inertia_cg_zz_kg_m2"],
+            aero_moment_about_pin_Nm=aero_moment,
+            root_flap_moment_Nm=flap_moment(geometry.tab_outer_radius_m),
+            tab_allowable_Pa=design.structure.material.allowable_stress_Pa,
+            **common,
+        )
+        assembly = hub_variants.fold_blades(blade, pin, 0.0)
+        extra["folded"] = hub_variants.fold_blades(blade, pin, spec.fold_angle_deg)
+    elif spec.variant == "one_piece":
+        props = polygon_properties(tab[:, 1:])
+        neck = type("Neck", (), {"area_m2": props.area_m2, "I_flap_m4": props.I_ss_m4, "height_m": float(np.ptp(tab[:, 2]))})()
+        result = hub_variants.build_one_piece_hub(
+            0.5 * float(tab[:, 2].max() + tab[:, 2].min()),
+            half_mass_kg=cad["blade_mass_kg"],
+            half_cg_m=cad["blade_center_of_mass_m"],
+            flap_moment_at_axis_Nm=flap_moment(0.0),
+            flap_moment_at_boss_edge_Nm=flap_moment(0.5 * spec.boss_diameter_m),
+            neck_section=neck,
+            prop_allowable_Pa=design.structure.material.allowable_stress_Pa,
+            prop_safety_factor=design.molding.stress_safety_factor,
+            **common,
+        )
+        assembly = [cq.Shape.importBrep(str(upstream["cad"].output("prop_m.brep")))]
+    else:
+        raise ValueError(f"hub.variant must be bolted, folding, or one_piece, not {spec.variant!r}")
+    paths = hub_module.export_hub(result, run.directory, assembly)
+    parts_stl = [path for key, path in paths.items() if key.endswith("_stl") and key not in ("blades_stl", "fasteners_stl")]
+    metal = (0.72, 0.74, 0.78)
     lift = 0.03
+    scene = [(paths["blades_stl"], (0.16, 0.17, 0.19), (0.0, 0.0, 0.0)), (paths["fasteners_stl"], (0.85, 0.65, 0.25), (0.0, 0.0, 0.0))]
+    for path in parts_stl:
+        z = lift if "top" in path.name or "cap" in path.name else -lift if "bottom" in path.name else 0.0
+        scene.append((path, metal, (0.0, 0.0, z)))
+    title = {"bolted": "bolted hub", "folding": "folding hub (one hinge pin per blade)", "one_piece": "one-piece prop with clamp cap"}[
+        spec.variant
+    ]
     render_mold(
-        [
-            (paths["blades_stl"], (0.20, 0.22, 0.25), (0.0, 0.0, 0.0)),
-            (paths["bottom_stl"], (0.70, 0.72, 0.76), (0.0, 0.0, -lift)),
-            (paths["top_stl"], (0.70, 0.72, 0.76), (0.0, 0.0, lift)),
-            (paths["fasteners_stl"], (0.85, 0.65, 0.25), (0.0, 0.0, 0.0)),
-        ],
+        scene,
         run.path("hub_render.png"),
-        title=f"{design.name}: center hub, plates exploded along the rotor axis (fasteners in place)",
+        title=f"{design.name}: {title}, parts exploded along the rotor axis",
         views=(("From above the leading edge", 35.0, 60.0), ("From below (motor side)", -35.0, 120.0)),
-        clip_radius_m=0.06,
+        clip_radius_m=0.075,
     )
+    assembled = [(paths["blades_stl"], (0.16, 0.17, 0.19), (0.0, 0.0, 0.0)), (paths["fasteners_stl"], (0.85, 0.65, 0.25), (0.0, 0.0, 0.0))]
+    assembled += [(path, metal, (0.0, 0.0, 0.0)) for path in parts_stl]
+    render_mold(
+        assembled, run.path("prop_render.png"), title=f"{design.name}: {title}", views=(("3/4 view", 30.0, 60.0), ("Top view", 89.0, 90.0))
+    )
+    if "folded" in extra:
+        from prandtl_prop.cad.step import export_stl
+
+        folded = export_stl(cq.Compound.makeCompound(extra["folded"]), run.path("hub_blades_folded_m.stl"), 2e-4)
+        render_mold(
+            [(folded, (0.16, 0.17, 0.19), (0.0, 0.0, 0.0))] + assembled[1:],
+            run.path("folded_render.png"),
+            title=f"{design.name}: folded for stowage ({spec.fold_angle_deg:.0f} deg, both blades to one side)",
+            views=(("3/4 view", 30.0, 60.0), ("Top view", 89.0, 90.0)),
+        )
     metrics = dict(result.metrics)
-    metrics["root_flap_moment_at_clamp_Nm"] = flap_moment
+    metrics["root_flap_moment_at_clamp_Nm"] = flap_moment(_clamp_radius(design) or geometry.tab_outer_radius_m)
     return metrics, list(result.warnings)
 
 
@@ -742,12 +881,12 @@ STAGE_FUNCTIONS: dict[str, Callable[[DesignCase, StageRun, dict[str, StageRun]],
 STAGE_DESIGN_INPUTS = {
     "aero": ("operating_point", "geometry", "aero", "airfoils.thickness_scale", "airfoils.trailing_edge_thickness_m"),
     "sections": ("geometry", "airfoils", "cad.apply_trim_offset"),
-    "dfm": ("operating_point", "structure", "molding", "root"),
-    "cad": ("geometry", "cad", "operating_point", "structure", "root"),
+    "dfm": ("operating_point", "structure", "molding", "root", "hub"),
+    "cad": ("geometry", "cad", "operating_point", "structure", "root", "hub"),
     "beam": ("operating_point", "structure"),
-    "fea": ("operating_point", "structure", "fea"),
-    "modal": ("operating_point", "structure", "fea"),
-    "mold": ("mold", "root"),
+    "fea": ("operating_point", "structure", "fea", "hub"),
+    "modal": ("operating_point", "structure", "fea", "hub"),
+    "mold": ("mold", "root", "hub"),
     "hub": ("hub", "root", "operating_point", "structure"),
     "cfd": ("operating_point", "cfd"),
 }

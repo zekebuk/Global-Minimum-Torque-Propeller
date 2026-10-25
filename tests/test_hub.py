@@ -92,13 +92,13 @@ def test_hub_builds_with_valid_plates_and_positive_margins(tmp_path) -> None:
         root_flap_moment_Nm=2.7,
         tab_allowable_Pa=60e6,
     )
-    assert result.top_plate.isValid() and result.bottom_plate.isValid()
+    assert all(part.isValid() for part in result.parts.values())
     margins = {k: v for k, v in result.metrics.items() if k.endswith("_margin")}
     assert margins and all(v > 0 for v in margins.values()), margins
     assert result.metrics["motor_access_clearance_to_tabs_m"] > 0
     assert any("placeholder" in w for w in result.warnings)  # motor pattern not confirmed
     # Holes: top has 4 bolt + 4 access + centre; bottom has 4 tapped + 4 counterbored + centre.
-    assert len([f for f in result.top_plate.Faces() if f.geomType() == "CYLINDER"]) >= 9
+    assert len([f for f in result.parts["hub_top_plate"].Faces() if f.geomType() == "CYLINDER"]) >= 9
     paths = export_hub(result, tmp_path)
     assert all(path.stat().st_size > 0 for path in paths.values())
     assert sum(row["qty"] for row in result.bom if row["source"].startswith("COTS ISO")) == 12

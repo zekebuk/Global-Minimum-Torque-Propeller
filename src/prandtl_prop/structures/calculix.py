@@ -427,6 +427,18 @@ def tab_clamp_nodes(
     return surface[(x <= clamp_outer_radius_m + 1.0e-7) & on_face]
 
 
+def hub_clamp_nodes(
+    mesh: TetMesh, boss_radius_m: float, boss_thickness_m: float, z_centre_m: float, tolerance_m: float = 2.0e-4
+) -> np.ndarray:
+    """One-piece prop half: boss top/bottom face nodes (cap and motor face) plus the cut face at the axis (x = min)."""
+
+    surface = mesh.surface_nodes
+    x, y, z = (mesh.nodes[surface, k] for k in range(3))
+    on_face = (np.abs(np.abs(z - z_centre_m) - 0.5 * boss_thickness_m) <= tolerance_m) & (np.hypot(x, y) <= boss_radius_m + 1.0e-7)
+    on_cut = x <= float(mesh.nodes[:, 0].min()) + tolerance_m
+    return surface[on_face | on_cut]
+
+
 def summarize(
     mesh: TetMesh,
     result: CalculixResult,

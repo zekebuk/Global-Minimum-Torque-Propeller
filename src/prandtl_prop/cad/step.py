@@ -60,30 +60,40 @@ def blade_solid(sections: Sequence[BladeSection], hub_radius_m: float | None = N
 def loft_outlines(outlines: Sequence[np.ndarray], max_spacing_ratio: float = 4.0):
     """Loft through explicit 3D outlines (root to tip), all with the same point count.
 
-    Leading outlines with identical (y, z) shape (the prismatic root tab) are joined by a ruled loft
-    and fused to a smooth loft through the rest on their shared planar face. A smooth B-spline loft
-    through two identical sections and on into changing ones is ill-conditioned there: it passed the
-    validity check but even a plane cut through it failed. Strongly uneven section spacing has the
-    same effect (the B-spline overshoots between sections), so a jump in the gap between adjacent
-    sections larger than ``max_spacing_ratio`` is rejected.
+    Runs of consecutive outlines with identical (y, z) shape (a prismatic tab or hub) are joined by
+    ruled lofts, the rest by smooth lofts, and the pieces fused on their shared planar faces. A smooth
+    B-spline loft through identical sections and on into changing ones is ill-conditioned: it passed
+    the validity check but even a plane cut through it failed. Strongly uneven section spacing has
+    the same effect (the B-spline overshoots between sections), so within a smooth run a jump in the
+    gap between adjacent sections larger than ``max_spacing_ratio`` is rejected.
     """
 
     cq = _cq()
     wires = [section_wire(points) for points in outlines]
-    prism = 1
-    while prism < len(outlines) - 1 and np.allclose(outlines[prism][:, 1:], outlines[0][:, 1:], rtol=0.0, atol=1.0e-9):
-        prism += 1
-    spacing = np.diff([float(points[0, 0]) for points in outlines[prism - 1 :]])
-    jumps = np.maximum(spacing[1:] / spacing[:-1], spacing[:-1] / spacing[1:]) if len(spacing) > 1 else np.ones(1)
-    if jumps.max() > max_spacing_ratio:
-        raise ValueError(
-            f"Adjacent section gaps differ {jumps.max():.1f}x (limit {max_spacing_ratio}); "
-            "the smooth loft overshoots between unevenly spaced sections. Add sections or even out the spacing."
-        )
-    if prism == 1:
-        return cq.Solid.makeLoft(wires, False)
-    ruled = cq.Solid.makeLoft([wires[0], wires[prism - 1]], True)
-    return ruled.fuse(cq.Solid.makeLoft(wires[prism - 1 :], False)).clean()
+    prism = [np.allclose(outlines[i + 1][:, 1:], outlines[i][:, 1:], rtol=0.0, atol=1.0e-9) for i in range(len(outlines) - 1)]
+    runs: list[tuple[bool, int, int]] = []
+    for i, is_prism in enumerate(prism):
+        if runs and runs[-1][0] == is_prism:
+            runs[-1] = (is_prism, runs[-1][1], i + 1)
+        else:
+            runs.append((is_prism, i, i + 1))
+    pieces = []
+    for is_prism, start, end in runs:
+        if is_prism:
+            pieces.append(cq.Solid.makeLoft([wires[start], wires[end]], True))
+            continue
+        spacing = np.diff([float(points[0, 0]) for points in outlines[start : end + 1]])
+        jumps = np.maximum(spacing[1:] / spacing[:-1], spacing[:-1] / spacing[1:]) if len(spacing) > 1 else np.ones(1)
+        if jumps.max() > max_spacing_ratio:
+            raise ValueError(
+                f"Adjacent section gaps differ {jumps.max():.1f}x (limit {max_spacing_ratio}); "
+                "the smooth loft overshoots between unevenly spaced sections. Add sections or even out the spacing."
+            )
+        pieces.append(cq.Solid.makeLoft(wires[start : end + 1], False))
+    solid = pieces[0]
+    for piece in pieces[1:]:
+        solid = solid.fuse(piece)
+    return solid.clean() if len(pieces) > 1 else solid
 
 
 def full_blade_solid(sections: Sequence[BladeSection], root_geometry):
@@ -97,6 +107,52 @@ def full_blade_solid(sections: Sequence[BladeSection], root_geometry):
         root_geometry.bolt_diameter_m,
         4.0 * root_geometry.tab_thickness_m,
     )
+
+
+def drafted_boss(diameter_m: float, thickness_m: float, z_centre_m: float, draft_deg: float):
+    """Disc of the given diameter at its mid-plane, tapering by ``draft_deg`` toward both faces."""
+
+    cq = _cq()
+    r_mid = 0.5 * diameter_m
+    r_face = r_mid - 0.5 * thickness_m * math.tan(math.radians(draft_deg))
+    up = cq.Solid.makeCone(r_mid, r_face, 0.5 * thickness_m, cq.Vector(0, 0, z_centre_m), cq.Vector(0, 0, 1))
+    down = cq.Solid.makeCone(r_mid, r_face, 0.5 * thickness_m, cq.Vector(0, 0, z_centre_m), cq.Vector(0, 0, -1))
+    return up.fuse(down).clean()
+
+
+def one_piece_solid(
+    blade_outlines: Sequence[np.ndarray],
+    boss_diameter_m: float,
+    boss_thickness_m: float,
+    z_centre_m: float,
+    holes: Sequence[tuple[float, float, float]] = (),
+    hole_diameters_m: Sequence[float] = (),
+    draft_deg: float = 1.0,
+):
+    """One-piece two-blade prop: a hub boss plus the blade loft and its 180 deg copy.
+
+    The boss is two frustums meeting at its mid-plane (the mold's parting plane), each side drafted
+    by ``draft_deg`` so it releases along the rotor axis.
+
+    The blade's root tab starts inside the boss and is thinner than it, so no faces coincide: the tab
+    faces lie inside the boss and the tab sides cut its cylinder transversally (fusing two lofted
+    halves on a shared plane at the axis was tried and failed). Holes run along z through the boss.
+    Returns (prop, half): the half is blade 1 plus the boss on its side of x = 0, for the FEA.
+    """
+
+    cq = _cq()
+    blade = loft_outlines(blade_outlines)
+    boss = cq.Solid.makeCylinder(
+        0.5 * boss_diameter_m, boss_thickness_m, cq.Vector(0, 0, z_centre_m - 0.5 * boss_thickness_m), cq.Vector(0, 0, 1)
+    )
+    prop = boss.fuse(blade).fuse(blade.rotate(cq.Vector(0, 0, 0), cq.Vector(0, 0, 1), 180.0)).clean()
+    for (x, y, z), diameter in zip(holes, hole_diameters_m, strict=True):
+        length = 2.0 * boss_thickness_m
+        prop = prop.cut(cq.Solid.makeCylinder(0.5 * diameter, length, cq.Vector(x, y, z - 0.5 * length), cq.Vector(0, 0, 1)))
+    prop = prop.clean()
+    side = 2.0 * float(np.max(np.abs(np.vstack(blade_outlines))))
+    half = prop.intersect(cq.Solid.makeBox(side, 2.0 * side, 2.0 * side, cq.Vector(0.0, -side, -side))).clean()
+    return prop, half
 
 
 def outlines_solid(
@@ -146,6 +202,17 @@ def report(shape, relative_tolerance: float = 1.0e-9) -> SolidReport:
         bounding_box_m=(box.xmin, box.xmax, box.ymin, box.ymax, box.zmin, box.zmax),
         is_valid=bool(shape.isValid()),
     )
+
+
+def inertia_zz_about_cg(shape, density_kg_m3: float) -> float:
+    """Mass moment of inertia about the z axis through the centre of mass (kg m^2)."""
+
+    from OCP.BRepGProp import BRepGProp
+    from OCP.GProp import GProp_GProps
+
+    properties = GProp_GProps()
+    BRepGProp.VolumeProperties_s(shape.wrapped, properties, 1.0e-9)
+    return float(properties.MatrixOfInertia().Value(3, 3)) * density_kg_m3
 
 
 def export_step(shape, path: Path) -> Path:
