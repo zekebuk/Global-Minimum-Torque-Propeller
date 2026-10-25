@@ -162,8 +162,9 @@ Re-optimising with the root modelled (9 mm thickness cap, 10% margin over 0.9-1.
   4400 rpm** (319 vs 293 Hz), because the beam read it 3.7% high. The optimiser now gives modes above
   flap 1 a 5% cushion (Euler-Bernoulli neglects shear and rotary inertia, an error that grows with
   mode number). Re-optimised with that cushion, `designs/gmt_pa6_cf30.yaml` makes
-  the root 12% thicker (scales 1.12 / 1.0 / 1.0 / 1.0) for +0.18% torque. Its CalculiX confirmation is
-  in progress.
+  the root 12% thicker (scales 1.12 / 1.0 / 1.0 / 1.0) for +0.18% torque. CalculiX confirms it (earlier
+  tab): flap 1 at 107.4 Hz at 4000 rpm, **11.3% minimum separation over the band**, 15.5 MPa peak
+  outside the clamp (margin 2.9), and 3.5 mm tip deflection.
 
 So with a realistic root, the stiff design needs one of these:
 
