@@ -147,42 +147,58 @@ the root stress.
   operating point cannot serve both.
 - **Yaw authority.** A torque-minimised prop has less reaction torque per unit thrust. This is
   inherent to minimising torque: yaw authority comes from torque.
-- **Responsiveness.** The motor-rotor time constant, τ = J / (Kt²/R + dQ/dω), is set mostly by
-  the motor's electrical stiffness at this prop inertia (about 1.5e-5 kg·m² for three blades).
+- **Responsiveness.** The motor-rotor time constant is τ = J / (Kt²/R + dQ/dω). Prop
+  inertia is 2.9e-5 kg·m² by the designer's span-only estimate, which gives 18 ms. The CAD solid,
+  including the root, tabs and hub, gives 3.6e-5 kg·m², which the multirotor stage turns into
+  22 ms.
 
 ### Pipeline confirmation
 
-From `prandtl run designs/gmt_fpv10_tri.yaml` (smoke inputs):
+From `prandtl run designs/gmt_fpv10_tri.yaml --stages aero,sections,dfm,cad,beam,multirotor,modal`
+(smoke inputs):
 
-- **aero:** 3.560 N at 7500 rpm with collective trim 0.001 deg, i.e. the designer's twist
-  reproduced. Torque is 45.36 mN·m, 1.1% above the designer: the aero stage adds Hoerner form drag
+- **aero:** 3.544 N at 7500 rpm with collective trim 0.001 deg, i.e. the designer's twist
+  reproduced. Torque is 44.77 mN·m, 1.1% above the designer: the aero stage adds Hoerner form drag
   for the thickened root, which the designer leaves out.
-- **dfm:** passes draft, trailing edge, flow length and thickness (max 3.3 mm). The thickness
-  gradient passes with the r/R 0.5 taper.
-- **dfm frequency:** the hover-band frequency check **fails at a 4.5% margin to 2P**; see Dynamics.
-- **cad:** valid one-piece tri-blade solid; blade 4.8 g.
-- **beam:** hover margin +5.0.
-- **multirotor:** reproduces the designer's vehicle numbers.
+- **dfm:** passes draft, trailing edge (0.4 mm), flow length, maximum thickness (2.7 mm) and
+  thickness gradient (0.033 with the r/R 0.5 taper).
+- **dfm frequency:** the beam-model check fails at 7.1% (see Dynamics). CalculiX is the
+  arbiter.
+- **cad:** valid one-piece tri-blade solid. Blade sector 4.3 g; whole prop 12.9 g. The designer's
+  8.5 g estimate leaves out the root tabs and transitions.
+- **beam:** margin +4.7 at hover.
+- **multirotor:** 194 W hover, 22.0 min, best range 20.1 km, full throttle 14.3 A at Kv 719. This
+  reproduces the designer.
+- **modal (CalculiX, prestressed C3D10):** see the next section. Flags: minimum element quality
+  0.003, and a Southwell fit misfit of 2.9% against the 2% tolerance. A finer `fea.mesh_size_m`
+  would tighten both.
 
-## Dynamics: the 2P margin
+## Dynamics: Campbell diagram (CalculiX)
 
-**Measured.** The first flap mode is about 1.85 per rev across the operating range. It is set
-mainly by centrifugal stiffening, f² = f0² + K Ω², so the per-rev ratio hardly responds to
-thickness. Thinning the outboard sections 6% moved it by under 1 Hz. The beam model gives:
+Prestressed modal analysis of the clamped blade sector at 0-16,500 rpm:
 
-- 1.84/rev at hover, 8% below 2P;
-- 1.91/rev at 0.95× hover, 4.5% below;
-- about 1.95/rev in the cruise power bucket at 0.91× hover.
+| rpm | Flap 1 | Flap 2 | Next mode |
+| --- | --- | --- | --- |
+| 0 | 144 Hz | 476 Hz | 758 Hz lag |
+| 3750 | 165 Hz (2.63/rev) | 493 Hz (7.9/rev) | 763 Hz lag (12.2/rev) |
+| **7500 (hover)** | **213 Hz (1.71/rev)** | **541 Hz (4.32/rev)** | 780 Hz lag (6.2/rev) |
+| 11,250 | 272 Hz (1.45/rev) | 601 Hz (3.20/rev) | 815 Hz flap (4.35/rev) |
+| 15,000 (full throttle) | 335 Hz (1.34/rev) | 654 Hz (2.62/rev) | 876 Hz flap (3.50/rev) |
 
-**Implications:**
-
-- **1P is clear** at every rpm up to full throttle, at ≥ 1.38/rev.
-- **2P forcing in hover is weak.** It comes mainly from forward-flight inflow asymmetry, and FPV
-  throttle sweeps through 2P continuously.
-- **Moving the mode** above 2.2/rev would take roughly 1.5× the thickness everywhere. Moving it
-  below 1.8/rev would take a thinner root, which the stress limit forbids.
-
-The design is left as is, and the margin is reported rather than hidden.
+- **Flap 1** follows Southwell, f² = f0² + K n², with f0 = 148 Hz and K = 1.44. It is
+  centrifugally dominated: the per-rev ratio hardly responds to thickness (thinning the outboard
+  sections 6% moved it by under 1 Hz).
+  - At hover it sits **14.7% below 2P**, clearing the 10% rule. The beam model in the DFM stage,
+    at 1.76/rev and 12%, is conservative.
+  - It crosses 2P near 5800 rpm, below the lowest cruise rpm (6800 rpm in the power bucket, about
+    1.78/rev, 11% clear).
+  - It never reaches 1P (lowest 1.31/rev at 16,500 rpm).
+- **Flap 2 binds: 8.1% from 4P at hover.** It also passes 3P near 11,000 rpm on the way to full
+  throttle, which is transient. For a three-blade rotor in axial flight the blade sees little 4P
+  forcing; in forward flight the harmonic content is mostly 1P and 2P.
+- **Raising flap 2** about 2% would clear 10%. Stiffening mid-span (around r/R 0.5-0.7) rather than
+  the root does it, and costs little torque. That is a one-line change to the thickness schedule
+  once XFOIL polars replace the smoke inputs.
 
 ## Limits
 
