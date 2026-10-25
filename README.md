@@ -57,6 +57,7 @@ prandtl run designs/gmt.yaml                                  # fast stages: aer
 prandtl run designs/gmt.yaml --stages fea                     # CalculiX solid FEA with centrifugal stiffening
 prandtl run designs/gmt.yaml --stages modal                   # Campbell diagram (prestressed modes vs rpm)
 prandtl run designs/gmt.yaml --stages cfd                     # OpenFOAM MRF hover CFD
+prandtl run designs/gmt_pa6_cf30_folding.yaml --stages envelope,mission   # 0-20 m/s map, CFD at mission points, CFD loads -> CalculiX
 prandtl loop designs/gmt.yaml                                 # BEMT -> CAD -> CFD -> calibrate -> re-trim
 prandtl optimize-molding designs/gmt.yaml --material peek-cf30   # thickness schedule for injection-molded CFRP
 prandtl run designs/gmt_peek_cf30.yaml --stages cad,mold      # full blade (root tab, bolt holes) + core/cavity mold STEP
@@ -75,6 +76,8 @@ stage is cached in a content-addressed run folder. Real runs need the XFOIL pola
 coordinates in `data/` (see `data/xfoil_polars/README.md`). See `docs/iterative_workflow.md` for the
 conventions, the verification evidence, and the planned CalculiX and OpenFOAM stages. See
 `docs/cfrp_injection_molding.md` for the molded blade and its mold, and `docs/hub.md` for the hub.
+See `docs/mission.md` for off-design performance from static to 20 m/s, flow plots, and FEA driven
+by the CFD wall loads.
 
 **Locked result caveat:** the archived solver left the tip station unconverged in both locked
 cases, and the GMT tip violates the momentum balance by 84%. A first-order estimate puts the
