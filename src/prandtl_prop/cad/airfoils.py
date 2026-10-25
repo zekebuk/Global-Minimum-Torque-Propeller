@@ -99,6 +99,8 @@ def load_airfoil(name: str, directory: Path, points_per_side: int = 80, substitu
     path = find_airfoil_file(name, directory)
     if path is not None:
         return read_airfoil_file(path, name, points_per_side)
+    if NACA4_PATTERN.match(normalize_airfoil_name(name)):
+        return naca4(name, points_per_side)  # the design names a NACA 4-digit section: generate it (not a stand-in)
     substitute = {normalize_airfoil_name(key): value for key, value in (substitutes or {}).items()}.get(normalize_airfoil_name(name)) or (
         substitutes or {}
     ).get("*")

@@ -22,6 +22,7 @@ identical input decks. Single-threaded results are bit-identical.
 
 from __future__ import annotations
 
+import math
 import os
 import re
 import shutil
@@ -428,14 +429,28 @@ def tab_clamp_nodes(
 
 
 def hub_clamp_nodes(
-    mesh: TetMesh, boss_radius_m: float, boss_thickness_m: float, z_centre_m: float, tolerance_m: float = 2.0e-4
+    mesh: TetMesh,
+    boss_radius_m: float,
+    boss_thickness_m: float,
+    z_centre_m: float,
+    tolerance_m: float = 2.0e-4,
+    blade_count: int = 2,
 ) -> np.ndarray:
-    """One-piece prop half: boss top/bottom face nodes (cap and motor face) plus the cut face at the axis (x = min)."""
+    """One-piece prop sector: boss top/bottom face nodes (clamp and motor face) plus the sector's cut faces.
+
+    Two blades: the cut is the plane x = 0 (x = min). More blades: the planes through the axis at
+    +-180 / B deg from the blade axis.
+    """
 
     surface = mesh.surface_nodes
     x, y, z = (mesh.nodes[surface, k] for k in range(3))
     on_face = (np.abs(np.abs(z - z_centre_m) - 0.5 * boss_thickness_m) <= tolerance_m) & (np.hypot(x, y) <= boss_radius_m + 1.0e-7)
-    on_cut = x <= float(mesh.nodes[:, 0].min()) + tolerance_m
+    if blade_count == 2:
+        on_cut = x <= float(mesh.nodes[:, 0].min()) + tolerance_m
+    else:
+        a = math.pi / blade_count
+        on_cut = np.minimum(np.abs(-x * math.sin(a) + y * math.cos(a)), np.abs(x * math.sin(a) + y * math.cos(a))) <= tolerance_m
+        on_cut &= np.hypot(x, y) <= boss_radius_m + 1.0e-7
     return surface[on_face | on_cut]
 
 

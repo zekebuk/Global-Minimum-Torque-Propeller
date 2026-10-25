@@ -25,6 +25,7 @@ import yaml
 from prandtl_prop import config
 from prandtl_prop.cad.hub import HubDesign
 from prandtl_prop.manufacturing.mold import MoldDesign
+from prandtl_prop.multirotor import MultirotorSpec
 
 
 @dataclass(frozen=True)
@@ -207,6 +208,28 @@ class MissionSpec:
 
 
 @dataclass(frozen=True)
+class GmtSpec:
+    """Inputs of ``prandtl design-gmt`` (prandtl_prop.gmt_design): planform family and design scan.
+
+    The chord follows the shape of ``planform_csv``'s chord_over_R, scaled so its maximum is
+    c_max/R. Each (hover rpm, c_max/R) cell gets the global-minimum-torque twist at hover
+    (prandtl_prop.aero.gmt) and a motor matched to the thrust-to-weight requirement
+    (prandtl_prop.multirotor); the feasible cell with the lowest ``objective`` is written out.
+    """
+
+    planform_csv: str = "data/geometry/final_gmt_geometry.csv"
+    airfoil: str = "NACA4410"
+    station_count: int = 40
+    root_r_R: float = 0.2
+    hover_rpm_grid: tuple[float, ...] = tuple(float(v) for v in range(4500, 9750, 250))
+    chord_max_over_R_grid: tuple[float, ...] = (0.08, 0.09, 0.10, 0.11, 0.12, 0.13, 0.14, 0.15, 0.16, 0.17, 0.18, 0.19, 0.20)
+    cl_limit: float = 1.0  # design-point Cl ceiling (stall margin for gusts and manoeuvres)
+    bending_weight: float = 0.0  # mu: 0 is the unconstrained global minimum torque
+    bending_family: tuple[float, ...] = (0.0, 0.02, 0.05, 0.1, 0.2, 0.4)
+    objective: str = "electrical_power"  # or "torque"
+
+
+@dataclass(frozen=True)
 class DesignCase:
     name: str
     geometry: GeometrySpec
@@ -223,6 +246,8 @@ class DesignCase:
     mold: MoldDesign = field(default_factory=MoldDesign)
     hub: HubDesign = field(default_factory=HubDesign)
     mission: MissionSpec = field(default_factory=MissionSpec)
+    multirotor: MultirotorSpec = field(default_factory=MultirotorSpec)
+    gmt: GmtSpec = field(default_factory=GmtSpec)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -348,6 +373,8 @@ _NESTED: dict[tuple[type, str], type] = {
     (DesignCase, "mold"): MoldDesign,
     (DesignCase, "hub"): HubDesign,
     (DesignCase, "mission"): MissionSpec,
+    (DesignCase, "multirotor"): MultirotorSpec,
+    (DesignCase, "gmt"): GmtSpec,
     (AeroSpec, "polar"): PolarSpec,
     (StructureSpec, "material"): MaterialSpec,
 }

@@ -128,8 +128,9 @@ def one_piece_solid(
     holes: Sequence[tuple[float, float, float]] = (),
     hole_diameters_m: Sequence[float] = (),
     draft_deg: float = 1.0,
+    blade_count: int = 2,
 ):
-    """One-piece two-blade prop: a hub boss plus the blade loft and its 180 deg copy.
+    """One-piece prop: a hub boss plus the blade loft and its copies every 360 / B deg.
 
     The boss is two frustums meeting at its mid-plane (the mold's parting plane), each side drafted
     by ``draft_deg`` so it releases along the rotor axis.
@@ -137,7 +138,8 @@ def one_piece_solid(
     The blade's root tab starts inside the boss and is thinner than it, so no faces coincide: the tab
     faces lie inside the boss and the tab sides cut its cylinder transversally (fusing two lofted
     halves on a shared plane at the axis was tried and failed). Holes run along z through the boss.
-    Returns (prop, half): the half is blade 1 plus the boss on its side of x = 0, for the FEA.
+    Returns (prop, sector): the sector is blade 1 plus the boss within +-180 / B deg of +x (the
+    half x >= 0 for two blades), for the FEA.
     """
 
     cq = _cq()
@@ -145,14 +147,24 @@ def one_piece_solid(
     boss = cq.Solid.makeCylinder(
         0.5 * boss_diameter_m, boss_thickness_m, cq.Vector(0, 0, z_centre_m - 0.5 * boss_thickness_m), cq.Vector(0, 0, 1)
     )
-    prop = boss.fuse(blade).fuse(blade.rotate(cq.Vector(0, 0, 0), cq.Vector(0, 0, 1), 180.0)).clean()
+    prop = boss.fuse(blade)
+    for index in range(1, blade_count):
+        prop = prop.fuse(blade.rotate(cq.Vector(0, 0, 0), cq.Vector(0, 0, 1), 360.0 * index / blade_count))
+    prop = prop.clean()
     for (x, y, z), diameter in zip(holes, hole_diameters_m, strict=True):
         length = 2.0 * boss_thickness_m
         prop = prop.cut(cq.Solid.makeCylinder(0.5 * diameter, length, cq.Vector(x, y, z - 0.5 * length), cq.Vector(0, 0, 1)))
     prop = prop.clean()
     side = 2.0 * float(np.max(np.abs(np.vstack(blade_outlines))))
-    half = prop.intersect(cq.Solid.makeBox(side, 2.0 * side, 2.0 * side, cq.Vector(0.0, -side, -side))).clean()
-    return prop, half
+    if blade_count == 2:
+        wedge = cq.Solid.makeBox(side, 2.0 * side, 2.0 * side, cq.Vector(0.0, -side, -side))
+    else:
+        angles = np.linspace(-math.pi / blade_count, math.pi / blade_count, 9)
+        corner = side / math.cos(math.pi / 8)  # polygon circumscribes the arc of radius `side`
+        points = [(0.0, 0.0)] + [(corner * math.cos(a), corner * math.sin(a)) for a in angles]
+        wedge = cq.Workplane("XY", origin=(0, 0, -side)).polyline(points).close().extrude(2.0 * side).val()
+    sector = prop.intersect(wedge).clean()
+    return prop, sector
 
 
 def outlines_solid(

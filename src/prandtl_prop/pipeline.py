@@ -338,7 +338,13 @@ def _one_piece_prop(design: DesignCase, sections: list[BladeSection]):
     holes = [(0.0, 0.0, z_centre)] + [(x, y, z_centre) for x, y in _motor_holes(hub)]
     diameters = [hub.center_bore_m] + [_motor_clearance(hub)] * hub.motor_screw_count
     return step.one_piece_solid(
-        full_blade_outlines(sections, geometry), hub.boss_diameter_m, hub.boss_thickness_m, z_centre, holes, diameters
+        full_blade_outlines(sections, geometry),
+        hub.boss_diameter_m,
+        hub.boss_thickness_m,
+        z_centre,
+        holes,
+        diameters,
+        blade_count=design.operating_point.blade_count,
     )
 
 
@@ -464,7 +470,9 @@ def _root_boundary(design: DesignCase, sections: list[BladeSection], mesh) -> tu
     inner_edge = sections[0].r_m - 0.5 * (sections[1].r_m - sections[0].r_m)
     if design.hub.variant == "one_piece":  # boss faces under the cap and on the motor, plus the cut at the axis
         radius = 0.5 * design.hub.boss_diameter_m
-        clamp = calculix.hub_clamp_nodes(mesh, radius, design.hub.boss_thickness_m, z_centre)
+        clamp = calculix.hub_clamp_nodes(
+            mesh, radius, design.hub.boss_thickness_m, z_centre, blade_count=design.operating_point.blade_count
+        )
         return clamp, inner_edge, radius + root.tab_width_m
     clamp = calculix.tab_clamp_nodes(mesh, root.tab_outer_radius_m, root.tab_thickness_m, z_centre)
     return clamp, inner_edge, root.tab_outer_radius_m + root.tab_width_m

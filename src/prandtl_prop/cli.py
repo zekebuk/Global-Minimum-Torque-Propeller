@@ -120,6 +120,16 @@ def build_parser() -> argparse.ArgumentParser:
     molding.add_argument("--set-file", dest="override_files", action="append", default=[], type=Path, metavar="PATH")
     molding.add_argument("--runs-dir", type=Path, default=config.RUNS_DIR)
 
+    gmt = commands.add_parser(
+        "design-gmt", help="Global-minimum-torque prop for a multirotor: design scan, motor match, write a new design."
+    )
+    gmt.add_argument("spec", type=Path, help="Spec design YAML (with gmt and multirotor sections).")
+    gmt.add_argument("--output", type=Path, required=True, help="Design YAML to write (its stem becomes the design name).")
+    gmt.add_argument("--report-dir", type=Path, default=None, help="Report folder (default: outputs/<design name>).")
+    gmt.add_argument("--set", dest="overrides", action="append", default=[], metavar="KEY=VALUE")
+    gmt.add_argument("--set-file", dest="override_files", action="append", default=[], type=Path, metavar="PATH")
+    gmt.add_argument("--runs-dir", type=Path, default=config.RUNS_DIR)
+
     loop = commands.add_parser("loop", help="Iterate BEMT trim, CAD, CFD, and BEMT calibration until CFD meets target thrust.")
     loop.add_argument("design", type=Path, help="Design YAML file.")
     loop.add_argument("--iterations", type=int, default=4, help="Maximum CFD runs.")
@@ -141,6 +151,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _loop(args, store, overrides)
     if args.command == "optimize-molding":
         return _optimize_molding(args, store, overrides)
+    if args.command == "design-gmt":
+        return _design_gmt(args, overrides)
     stages = [stage.strip() for stage in args.stages.split(",") if stage.strip()]
     results: dict[str, dict[str, StageOutcome]] = {}
     for path in args.designs:
@@ -190,6 +202,29 @@ def _loop(args: argparse.Namespace, store: RunStore, overrides: list[str]) -> in
     if result.corrections_csv:
         print(f"latest corrections: {config.relative(result.corrections_csv)}")
     return 0 if result.converged else 3
+
+
+def _design_gmt(args: argparse.Namespace, overrides: list[str]) -> int:
+    from prandtl_prop.gmt_design import design_gmt
+
+    report_dir = args.report_dir or config.PROJECT_ROOT / "outputs" / args.output.stem
+    try:
+        summary = design_gmt(args.spec, output_design=args.output, report_dir=report_dir, overrides=overrides)
+    except (FileNotFoundError, ValueError, KeyError) as exc:
+        print(f"design-gmt failed: {exc}", file=sys.stderr)
+        return 1
+    chosen, same = summary["selected"], summary["same_cell_comparison"]
+    print(f"selected: hover {chosen['hover_rpm']:.0f} rpm, c_max/R {chosen['chord_max_over_R']:.2f} (objective: {chosen['objective']})")
+    print(
+        f"  hover {chosen['hover_total_electrical_power_W']:.1f} W total, {chosen['hover_torque_Nm'] * 1e3:.2f} mN*m per rotor, "
+        f"endurance {chosen['hover_endurance_min']:.1f} min; full throttle {chosen['max_thrust_rpm']:.0f} rpm, "
+        f"{chosen['max_thrust_current_A']:.1f} A, Kv {chosen['motor_kv_rpm_per_V']:.0f}"
+    )
+    for name in ("gmt", "mil", "helix"):
+        print(f"  same cell, {name:>5}: torque {same[name]['torque_Nm'] * 1e3:.3f} mN*m, FM {same[name]['figure_of_merit']:.4f}")
+    print(f"design: {config.relative(Path(summary['design_file']))}")
+    print(f"report: {config.relative(report_dir)}")
+    return 0
 
 
 def _optimize_molding(args: argparse.Namespace, store: RunStore, overrides: list[str]) -> int:
