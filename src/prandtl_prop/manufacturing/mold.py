@@ -355,12 +355,13 @@ def build_one_piece_mold(
         return pieces["core"], pieces["cavity"]
 
     core, cavity = halves("upper", "lower")
-    blank_core, blank_cavity = halves("mid", "mid")
+    blank_core, blank_cavity = halves("mid", "mid")  # accounting only: steel above/below the parting surface
     boss = drafted_boss(boss_d, boss_t, z_c, boss_draft_deg)
     core, cavity = core.cut(boss).clean(), cavity.cut(boss).clean()
-    blank_core, blank_cavity = blank_core.cut(boss), blank_cavity.cut(boss)
-    impression_core = _volume(blank_core) - _volume(core) + _volume(boss.intersect(_box_above(z_c, x1, y1, z1)))
-    impression_cavity = _volume(blank_cavity) - _volume(cavity) + _volume(boss.intersect(_box_below(z_c, x1, y1, z0)))
+    # Impression = blank - finished half. (Cutting the boss from the fused blanks as well was tried and
+    # under-removed it: coplanar internal faces at the centre block confuse that boolean.)
+    impression_core = _volume(blank_core) - _volume(core)
+    impression_cavity = _volume(blank_cavity) - _volume(cavity)
     for x, y, diameter in pin_holes:
         r = 0.5 * diameter * cross
         core = core.fuse(
@@ -421,7 +422,7 @@ def build_one_piece_mold(
         "impression_volume_cm3": (impression_core + impression_cavity) * 1e6,
         "impression_over_part_volume": (impression_core + impression_cavity) / part_volume,
         "part_volume_fraction_in_cavity_half": impression_cavity / (impression_core + impression_cavity),
-        "blanks_over_block_volume": (_volume(blank_core) + _volume(blank_cavity) + _volume(boss)) / (2 * x1 * 2 * y1 * (z1 - z0)),
+        "blanks_over_block_volume": (_volume(blank_core) + _volume(blank_cavity)) / (2 * x1 * 2 * y1 * (z1 - z0)),
         "cooling_to_part_steel_mm": (design.cooling_offset_m - cooling_r) * 1000,
         "clearance_ok": bool(design.cooling_offset_m - cooling_r >= 0.003),
         "gate": "centre sprue into the boss (drill the centre bore after degating)",
@@ -429,16 +430,6 @@ def build_one_piece_mold(
         "shrink_cross": design.shrink_cross,
     }
     return MoldResult(core, cavity, cavity_part, metrics)
-
-
-def _box_above(z: float, x1: float, y1: float, z1: float):
-    cq = _cq()
-    return cq.Solid.makeBox(2 * x1, 2 * y1, z1 - z, cq.Vector(-x1, -y1, z))
-
-
-def _box_below(z: float, x1: float, y1: float, z0: float):
-    cq = _cq()
-    return cq.Solid.makeBox(2 * x1, 2 * y1, z - z0, cq.Vector(-x1, -y1, z0))
 
 
 def _volume(shape) -> float:

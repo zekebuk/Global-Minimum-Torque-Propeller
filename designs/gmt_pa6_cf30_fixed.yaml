@@ -1,5 +1,5 @@
 # Option C, fixed variant: one-piece molded PA6-CF30 prop (both blades and a hub boss), clamped to the
-# motor by a machined cap (docs/hub.md). Thickness schedule from designs/gmt_pa6_cf30.yaml.
+# motor by a machined cap (docs/hub.md). Thickness from optimize-molding with the boss-edge clamp (smoke inputs).
 name: gmt_pa6_cf30_fixed
 description: GMT blade, PA6-CF30, one-piece fixed prop (blades and hub boss molded together, machined clamp cap).
 operating_point:
@@ -20,7 +20,7 @@ airfoils:
   directory: data/airfoils
   points_per_side: 80
   substitutes: {}
-  thickness_scale: [[0.2, 1.1242], [0.45, 1.0], [0.7, 1.0], [1.0, 1.0]]
+  thickness_scale: [[0.2, 1.4822], [0.45, 1.0], [0.7, 1.1425], [1.0, 1.0]]   # optimize-molding with the 18 mm boss-edge clamp (+0.45% torque)
   trailing_edge_thickness_m: 0.0006
 structure:
   material: {name: PA6-CF30 (conditioned), E_Pa: 12.75e+9, nu: 0.35, density_kg_m3: 1280.0, allowable_stress_Pa: 60.0e+6}
