@@ -60,7 +60,8 @@ prandtl run designs/gmt.yaml --stages cfd                     # OpenFOAM MRF hov
 prandtl loop designs/gmt.yaml                                 # BEMT -> CAD -> CFD -> calibrate -> re-trim
 prandtl optimize-molding designs/gmt.yaml --material peek-cf30   # thickness schedule for injection-molded CFRP
 prandtl run designs/gmt_peek_cf30.yaml --stages cad,mold      # full blade (root tab, bolt holes) + core/cavity mold STEP
-prandtl run designs/gmt_pa6_cf30.yaml --stages hub             # center hub: machined plates, COTS fasteners, BOM, checks
+prandtl run designs/gmt_pa6_cf30_folding.yaml --stages hub,mold   # folding prop: one hinge pin per blade, center hub
+prandtl run designs/gmt_pa6_cf30_fixed.yaml --stages hub,mold     # fixed one-piece prop (blades + boss), clamp cap
 prandtl compare designs/mil.yaml designs/gmt.yaml --stages aero,beam
 prandtl run designs/gmt.yaml --set operating_point.rpm=4200   # iterate on any design value
 prandtl run designs/gmt.yaml --set-file designs/smoke_overrides.txt   # smoke test without thesis data

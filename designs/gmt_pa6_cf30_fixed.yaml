@@ -20,7 +20,7 @@ airfoils:
   directory: data/airfoils
   points_per_side: 80
   substitutes: {}
-  thickness_scale: [[0.2, 1.4822], [0.45, 1.0], [0.7, 1.1425], [1.0, 1.0]]   # optimize-molding with the 18 mm boss-edge clamp (+0.45% torque)
+  thickness_scale: [[0.2, 1.4820], [0.45, 1.0], [0.7, 1.1425], [1.0, 1.0]]   # optimize-molding with the 18 mm boss-edge clamp (+0.45% torque)
   trailing_edge_thickness_m: 0.0006
 structure:
   material: {name: PA6-CF30 (conditioned), E_Pa: 12.75e+9, nu: 0.35, density_kg_m3: 1280.0, allowable_stress_Pa: 60.0e+6}

@@ -1,21 +1,124 @@
-# Center Hub: Machined Plates and COTS Hardware
+# Center Hub and Prop Variants: Machined Parts and COTS Hardware
+
+There are two variants of the option C blade (PA6-CF30). Each has its own design file:
+
+| Variant | Design | What it is |
+| --- | --- | --- |
+| **Fixed** | `designs/gmt_pa6_cf30_fixed.yaml` | One-piece molded prop (both blades and a Ø36 mm hub boss), clamped to the motor by a machined cap. |
+| **Folding** | `designs/gmt_pa6_cf30_folding.yaml` | Two blades, each on one hinge pin parallel to the motor shaft, in a machined center hub. They fold 90 deg to one side for stowage. |
 
 ```bash
-prandtl run designs/gmt_pa6_cf30.yaml --stages hub     # about 1 min; outputs under runs/<design>/hub/<key>/
+prandtl run designs/gmt_pa6_cf30_folding.yaml --stages dfm,hub,mold   # hub ~1 min, mold ~10 min
+prandtl run designs/gmt_pa6_cf30_fixed.yaml --stages dfm,hub,mold     # mold ~30 min
 ```
 
-The hub stage (`src/prandtl_prop/cad/hub.py`) generates a two-blade hub from the blade's root tab
-and the design's `hub:` settings. It writes:
+Outputs, under `runs/<design>/<stage>/<key>/`:
 
-- `hub_top_plate.step` and `hub_bottom_plate.step` (mm), plus DXF profiles of both plates (mm), for
-  CNC, waterjet, or a print.
-- `hub_assembly.step` (mm): the plates, fasteners, and both blades.
-- `hub_bom.csv` and `hub_bom.md`: the bill of materials, with fastener lengths chosen from stock
-  ISO 4762 lengths.
-- `hub_render.png`: an exploded view.
-- Every check as a metric, plus warnings.
+- **hub stage:** STEP (mm) and DXF profiles for every machined part, and `hub_assembly.step` with the
+  blades. It also writes the BOM (`hub_bom.csv` and `hub_bom.md`), renders (`hub_render.png`
+  exploded, `prop_render.png` assembled, `folded_render.png` stowed), and every check as a metric.
+- **mold stage:** core and cavity STEP files. For the one-piece prop, one mold makes the whole part.
 
-![Hub, exploded](images/gmt_pa6_cf30_hub.png)
+`hub.variant: bolted` (the two-bolt fixed hub further down) is still available.
+
+All metal parts are 2.5D (profile, through holes, counterbores, all from one side) in 6061-T6. All
+fasteners are stock ISO parts, with lengths chosen automatically from standard sizes. The motor
+pattern (4x M3 on a 25 mm circle) is still a placeholder; see the open items below.
+
+![Folding, deployed](images/gmt_pa6_cf30_folding_prop.png)
+
+![Folding, stowed](images/gmt_pa6_cf30_folding_folded.png)
+
+## Folding variant
+
+![Folding hub, exploded](images/gmt_pa6_cf30_folding_hub.png)
+
+| Part | What it does |
+| --- | --- |
+| Top plate, 5 mm | Hull-of-circles outline (true arcs and tangent lines), 0.8 mm chamfer on the top outer edge; H7 holes for the hinge pins; motor screws pass through. |
+| Core spacer | Centre disc between the plates, 0.02 mm thinner than the tab. The light squeeze removes flap slop (the blade is clamped in flap inside the plate edge) and gives fold friction. Cut-outs clear each tab's sweep over the fold range. |
+| Bottom plate, 8 mm | Same outline, chamfered bottom edge. The hinge pins are pressed in 6.5 mm and flush with both faces, so nothing threads near the motor. |
+| 2x ISO 8734 6x20 m6 hardened dowels | Hinge pins. |
+| 2x 6x8x8 PTFE-lined bushings (DU type) | Pressed into each blade's hinge bore, so the polymer never wears. |
+| 4x ISO 7380 M3x25 button heads | Through the whole stack into the motor (3.5 mm engagement). |
+
+**Blade root.** The tab ends in a semicircle (R 14 mm) centred on the hinge at r = 29 mm, the
+smallest radius at which the fold sweep clears the motor screws with 1.5 mm of core wall. The plates
+end at r = 45 mm, where the blade is clamped in flap. The beam model, the optimizer, and the CalculiX
+stages all clamp there.
+
+**Hinge dynamics, from first principles.**
+
+- **Running lag angle.** A free in-plane hinge settles where the centrifugal force (along the line
+  from the rotor axis through the blade CG) balances the drag moment about the pin.
+  `lag_equilibrium` solves for that angle and `ideal_pin_y` places the pin so it is zero. With the
+  tab at `tab_centre_s_m: 0.0017`, the blade runs 0.2 deg behind radial.
+- **Rigid lag mode: 0.45/rev.** Centrifugal stiffness about a small hinge offset gives
+  nu = sqrt(e m d / I_pin); a point mass gives sqrt(e/d). That is well below 1P, as for any folding
+  prop. The fold friction damps it.
+
+| Check (folding, smoke inputs) | Value | Margin |
+| --- | --- | --- |
+| Centrifugal load per blade | 1229 N | - |
+| Hinge pin, double shear | 22 MPa | +11.7 vs 550 MPa / 2 |
+| Bushing pressure (static) | 26 MPa | +3.9 vs 250 MPa / 2 |
+| Tab bearing behind the bushing | 18 MPa | +2.3 vs 60 MPa (PA6-CF30 design allowable) |
+| Tab end shear-out (edge distance 1.75 x OD) | 7.2 MPa | +3.2 vs half the allowable |
+| Plate bearing; plate shear-out | - | +5.7; +15.9 |
+| Plate centre, tension + bending (fatigue) | 11.7 MPa | +3.1 vs 96 MPa / 2 |
+| Running lag angle; rigid lag mode | -0.2 deg; 0.45/rev | - |
+| Same-side fold before contact (blade-blade and blade-hub, 3D) | 90 deg | target 90 deg |
+| Core wall at the motor screws | 1.7 mm | 1.5 mm minimum |
+| Hub mass (with fasteners); span x width x stack | 122 g; 90 x 35 x 21.5 mm | - |
+| Beam flap margin over 0.9-1.1 x rpm (DFM, root-aware) | 13.2% | 10% required |
+| Thickness change from option C | none (0.6 mm TE only: +0.17% torque) | - |
+| Mold: impression / part, split | 0.99997, 50.0% / 50.0% | - |
+
+## Fixed variant (one-piece prop)
+
+![One-piece prop](images/gmt_pa6_cf30_fixed_prop.png)
+
+![One-piece prop and cap, exploded](images/gmt_pa6_cf30_fixed_hub.png)
+
+| Part | What it does |
+| --- | --- |
+| Molded one-piece prop | Both blades and a Ø36 x 10 mm hub boss with 1 deg draft each side of its mid-plane (the parting plane). Each 8.5 mm root tab starts inside the 10 mm boss, so no faces coincide and the part is one valid solid. Centre-gated: one sprue feeds the boss and the melt flows out to both tips, aligning the fibres spanwise. Drill the 10 mm bore after degating. |
+| Cap, Ø36 x 3 mm | Clamps the boss to the motor face. 6061-T6, chamfered top edge. |
+| 4x ISO 7380 M3x16 button heads | Through cap and boss into the motor (3.0 mm engagement). |
+
+**Loads.** The two blades' centrifugal loads (1376 N across the axis) balance inside the part, so
+the motor screws carry only thrust (8.8 N each) and torque. The boss carries the centrifugal tension
+and the root flap moment across its centre, and the neck where each blade leaves the boss carries
+both too.
+
+**Stiffness.** The clamp edge moves in to the boss radius (18 mm), the longest free length of the
+layouts. The thickness optimizer, now clamp-aware, thickens the root ×1.48 and mid-span ×1.14 to keep
+flap 1 in the soft window. That costs +0.45% torque (8.2 mm maximum thickness, within the 9 mm cap).
+
+| Check (fixed, smoke inputs) | Value | Margin (PA6-CF30 allowable 60 MPa, SF 1.5) |
+| --- | --- | --- |
+| Boss section at the axis, tension + flap bending | 13.0 MPa | +2.1 |
+| Boss section through the motor holes | 13.7 MPa | +1.9 |
+| Neck at the boss edge | 15.3 MPa | +1.6 |
+| Cap clamp pressure on the boss (1 kN per screw) | 4.4 MPa | +12.5 |
+| Torque carried by clamp friction | - | +10.7 (SF 2) |
+| Beam flap margin over 0.9-1.1 x rpm (DFM, root-aware) | 12.5% | 10% required |
+| Prop mass; cap and screws | 130 g; 12 g | - |
+| Mold (one tool, both blades): impression / part, split | 1.0002, 50.0% / 50.0% | - |
+| Mold insert size | 610 x 133 x 72 mm | - |
+
+**Choosing between them.**
+- **Fixed:** the lightest and simplest assembly, with a single molded part. But it needs one large
+  mold (610 mm long) and pays +0.45% torque for stiffness.
+- **Folding:**
+  - It keeps option C's thickness (+0.17% torque) and uses a 320 mm single-blade mold run twice
+    per prop.
+  - It folds from a 559 mm disc to a 113 x 267 mm footprint for transport.
+  - It weighs 122 g of hub.
+  - It adds a hinge, whose rigid lag mode (0.45/rev) needs the fold friction to damp it.
+
+
+## Bolted hub (two bolts per blade)
 
 ## Concept
 
