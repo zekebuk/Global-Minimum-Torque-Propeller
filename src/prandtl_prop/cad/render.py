@@ -107,7 +107,11 @@ def draw_data(
     factor = (1.0 - shading) + shading * np.abs(normals @ light)
     colours = np.asarray(cmap(norm(values)))[:, :3] * factor[:, None]
     axes.add_collection(PolyCollection(projected[order], facecolors=colours[order], edgecolors=colours[order], linewidths=0.2))
-    axes.autoscale_view()
+    flat = projected.reshape(-1, 2)
+    low, high = flat.min(axis=0), flat.max(axis=0)
+    pad = 0.03 * float((high - low).max())
+    axes.set_xlim(low[0] - pad, high[0] + pad)  # explicit: autoscale on a collection can clip the extremes
+    axes.set_ylim(low[1] - pad, high[1] + pad)
     axes.set_aspect("equal")
     axes.set_axis_off()
 
