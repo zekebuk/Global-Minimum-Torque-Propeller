@@ -38,6 +38,8 @@ root:
   tab_thickness_m: 0.0085
   bolt_diameter_m: 0.0053
   bolt_radii_m: [0.020, 0.029]
+  corner_exponent: 8          # flat clamp faces: 74% of the width within 0.05 mm of the crest (p = 4: 43%)
+  tab_centre_s_m: 0.0021      # on the centrifugal load line through the blade CG (hub stage: ideal_tab_centre_s_m)
 fea:
   campbell_rpm_fractions: [0.0, 0.9, 1.0, 1.1]
 cad:

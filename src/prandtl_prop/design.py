@@ -23,6 +23,7 @@ from typing import Any, get_type_hints
 import yaml
 
 from prandtl_prop import config
+from prandtl_prop.cad.hub import HubDesign
 from prandtl_prop.manufacturing.mold import MoldDesign
 
 
@@ -82,6 +83,7 @@ class RootSpec:
     transition_sections: int = 10
     bolt_diameter_m: float = 0.0053
     bolt_radii_m: tuple[float, ...] = (0.020, 0.029)
+    tab_centre_s_m: float | None = None  # None: chord midpoint (see prandtl_prop.cad.root.RootGeometry)
 
     def geometry(self):
         from prandtl_prop.cad.root import RootGeometry
@@ -188,6 +190,7 @@ class DesignCase:
     molding: MoldingSpec = field(default_factory=MoldingSpec)
     root: RootSpec = field(default_factory=RootSpec)
     mold: MoldDesign = field(default_factory=MoldDesign)
+    hub: HubDesign = field(default_factory=HubDesign)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -311,6 +314,7 @@ _NESTED: dict[tuple[type, str], type] = {
     (DesignCase, "molding"): MoldingSpec,
     (DesignCase, "root"): RootSpec,
     (DesignCase, "mold"): MoldDesign,
+    (DesignCase, "hub"): HubDesign,
     (AeroSpec, "polar"): PolarSpec,
     (StructureSpec, "material"): MaterialSpec,
 }

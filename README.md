@@ -60,6 +60,7 @@ prandtl run designs/gmt.yaml --stages cfd                     # OpenFOAM MRF hov
 prandtl loop designs/gmt.yaml                                 # BEMT -> CAD -> CFD -> calibrate -> re-trim
 prandtl optimize-molding designs/gmt.yaml --material peek-cf30   # thickness schedule for injection-molded CFRP
 prandtl run designs/gmt_peek_cf30.yaml --stages cad,mold      # full blade (root tab, bolt holes) + core/cavity mold STEP
+prandtl run designs/gmt_pa6_cf30.yaml --stages hub             # center hub: machined plates, COTS fasteners, BOM, checks
 prandtl compare designs/mil.yaml designs/gmt.yaml --stages aero,beam
 prandtl run designs/gmt.yaml --set operating_point.rpm=4200   # iterate on any design value
 prandtl run designs/gmt.yaml --set-file designs/smoke_overrides.txt   # smoke test without thesis data
@@ -71,7 +72,8 @@ and a CalculiX solid FEA with centrifugal stiffening, and runs OpenFOAM hover CF
 calibrates BEMT against the CFD station loads and re-trims until CFD meets the target thrust. Each
 stage is cached in a content-addressed run folder. Real runs need the XFOIL polars and airfoil
 coordinates in `data/` (see `data/xfoil_polars/README.md`). See `docs/iterative_workflow.md` for the
-conventions, the verification evidence, and the planned CalculiX and OpenFOAM stages.
+conventions, the verification evidence, and the planned CalculiX and OpenFOAM stages. See
+`docs/cfrp_injection_molding.md` for the molded blade and its mold, and `docs/hub.md` for the hub.
 
 **Locked result caveat:** the archived solver left the tip station unconverged in both locked
 cases, and the GMT tip violates the momentum balance by 84%. A first-order estimate puts the

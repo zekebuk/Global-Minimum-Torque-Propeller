@@ -35,6 +35,15 @@ HEADLINE = {
         "root_centrifugal_ratio_fea_over_beam",
     ),
     "modal": ("mode1_flap_hz", "mode1_margin", "min_frequency_margin", "min_frequency_margin_over_band"),
+    "hub": (
+        "blade_bolt",
+        "motor_screw",
+        "bolt_max_shear_N",
+        "root_inplane_moment_Nm",
+        "slip_margin",
+        "plate_fatigue_margin",
+        "hub_mass_kg",
+    ),
     "mold": ("core_valid", "cavity_valid", "impression_over_part_volume", "part_volume_fraction_in_cavity_half", "clearance_ok"),
     "cfd": (
         "cell_count",
@@ -223,7 +232,7 @@ def _print_design(name: str, outcomes: dict[str, StageOutcome]) -> None:
     for stage, outcome in outcomes.items():
         state = "cached" if outcome.cached else "ran"
         print(f"  {stage:<9} {state:<6} {config.relative(outcome.run.final_directory)}")
-        for metric in HEADLINE[stage]:
+        for metric in HEADLINE.get(stage, ()):
             if metric in outcome.run.metrics:
                 print(f"      {metric:<40} {_format(outcome.run.metrics[metric])}")
         for warning in outcome.run.manifest.get("warnings", []):
@@ -237,7 +246,7 @@ def _print_comparison(results: dict[str, dict[str, StageOutcome]]) -> None:
     for stage in STAGES:
         if not all(stage in results[name] for name in names):
             continue
-        for metric in HEADLINE[stage]:
+        for metric in HEADLINE.get(stage, ()):
             values = [results[name][stage].run.metrics.get(metric) for name in names]
             line = f"{stage + '.' + metric:<48}" + "".join(f"{_format(value):>16}" for value in values)
             if len(values) == 2 and all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in values) and values[0]:

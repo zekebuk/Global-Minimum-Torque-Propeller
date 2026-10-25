@@ -38,6 +38,11 @@ class RootGeometry:
     transition_sections: int = 10
     bolt_diameter_m: float = 0.0053
     bolt_radii_m: tuple[float, ...] = (0.020, 0.029)
+    # Chordwise position of the tab centre in the root section's (s, t) frame, from the pitch axis
+    # (+s toward the TE). None centres it on the chord midpoint. The centrifugal resultant runs
+    # through the rotation axis, so a tab off the line from the axis through the blade's centre of
+    # mass puts an in-plane moment F_c * offset on the hub joint (see prandtl_prop.cad.hub).
+    tab_centre_s_m: float | None = None
 
 
 def _superellipse(
@@ -47,7 +52,8 @@ def _superellipse(
     cos, sin = np.cos(theta), np.sin(theta)
     u = half_width * np.sign(cos) * np.abs(cos) ** (2.0 / exponent)
     v = half_thickness * np.sign(sin) * np.abs(sin) ** (2.0 / exponent)
-    v = v + (1.0 if upper else -1.0) * 0.5 * te_gap * 0.5 * (1.0 + cos)  # keep the airfoil's blunt-TE gap
+    # Keep the airfoil's blunt-TE gap at the TE end, confined there so the clamp faces stay flat.
+    v = v + (1.0 if upper else -1.0) * 0.5 * te_gap * (0.5 * (1.0 + cos)) ** 8
     return u, v
 
 
@@ -56,7 +62,7 @@ def tab_local_outline(root: BladeSection, geometry: RootGeometry) -> np.ndarray:
 
     airfoil = root.airfoil
     te_gap = airfoil.trailing_edge_gap * root.chord_m
-    centre_s = (0.5 - root.pitch_axis_chord_fraction) * root.chord_m  # chord midpoint
+    centre_s = (0.5 - root.pitch_axis_chord_fraction) * root.chord_m if geometry.tab_centre_s_m is None else geometry.tab_centre_s_m
     half_w, half_t = 0.5 * geometry.tab_width_m, 0.5 * geometry.tab_thickness_m
     u_up, v_up = _superellipse(airfoil.x, True, half_w, half_t, geometry.corner_exponent, te_gap)
     u_lo, v_lo = _superellipse(airfoil.x, False, half_w, half_t, geometry.corner_exponent, te_gap)

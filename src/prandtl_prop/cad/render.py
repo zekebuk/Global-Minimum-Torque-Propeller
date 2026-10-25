@@ -230,9 +230,22 @@ def render_comparison(
 
 
 def render_mold(
-    parts: Sequence[tuple[Path, Sequence[float], Sequence[float]]], output: Path, *, title: str = "", scale: float = 1000.0
+    parts: Sequence[tuple[Path, Sequence[float], Sequence[float]]],
+    output: Path,
+    *,
+    title: str = "",
+    scale: float = 1000.0,
+    views: Sequence[tuple[str, float, float]] = (
+        ("Exploded, from above the leading edge", 28.0, 62.0),
+        ("Exploded, from the root end", 12.0, 160.0),
+    ),
+    clip_radius_m: float | None = None,
 ) -> Path:
-    """Exploded view of mold inserts and part. ``parts``: (STL in metres, colour, offset in metres)."""
+    """Exploded view of parts (mold inserts, hub). ``parts``: (STL in metres, colour, offset in metres).
+
+    ``clip_radius_m`` keeps only triangles within that distance of the rotor axis (e.g. to show the hub
+    without the full blades).
+    """
 
     import matplotlib
 
@@ -242,17 +255,17 @@ def render_mold(
     def scene(items):
         triangles, colours = [], []
         for path, colour, offset in items:
-            t = read_stl(path) * scale + np.asarray(offset) * scale
-            t = subdivide(t, 6.0)
+            t = read_stl(path)
+            if clip_radius_m is not None:
+                t = t[np.hypot(t[:, :, 0], t[:, :, 1]).max(axis=1) <= clip_radius_m]
+            t = subdivide(t * scale + np.asarray(offset) * scale, 6.0 if clip_radius_m is None else 2.0)
             triangles.append(t)
             colours.append(np.tile(np.asarray(colour, dtype=float), (len(t), 1)))
         return np.concatenate(triangles), np.concatenate(colours)
 
     figure = plt.figure(figsize=(14, 7.5), facecolor="white")
     triangles, colours = scene(parts)
-    for index, (name, elevation, azimuth) in enumerate(
-        (("Exploded, from above the leading edge", 28.0, 62.0), ("Exploded, from the root end", 12.0, 160.0))
-    ):
+    for index, (name, elevation, azimuth) in enumerate(views):
         axes = figure.add_subplot(1, 2, index + 1)
         draw_shaded(axes, triangles, elevation, azimuth, colours, light=(0.3, 0.6, 1.0))
         axes.set_title(name, fontsize=10)

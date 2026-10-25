@@ -131,6 +131,13 @@ net section 7.9 MPa, shear-out 7.4 MPa; margin 3.4 after knockdowns of 3 on net 
 concentration) and 2 on shear-out. The inner bolt's edge distance is only 1.13 D. Short-fibre CFRP
 practice wants at least 2-3 D, so extend the tab inward (tab_inner_radius_m about 0.009) if the hub allows.
 
+**Superseded by the hub design (`docs/hub.md`).** The bolt figures above count only the radial
+load. The hub stage found that a tab centred on the chord midpoint sits 11 mm off the centrifugal load
+line, which passes through the rotation axis. That adds a 17 N·m in-plane couple, and 2.1 kN on the
+worst bolt. Both designs now centre the tab on the load line (`root.tab_centre_s_m: 0.0021`) and use
+flat clamp faces (`root.corner_exponent: 8`). The full-blade CalculiX, mold, and render numbers in
+this section are for the earlier tab. The modal finding below does not depend on the change.
+
 **The clamp location moves the first flap frequency by 14%, and option A no longer clears 2P.** The
 optimiser's beam model clamped the blade at the first aero station. The hub actually grips the tab
 inside r = 34 mm, so the free length grows from 223 to 245 mm (f ~ 1/L^2 predicts 0.83x; CalculiX

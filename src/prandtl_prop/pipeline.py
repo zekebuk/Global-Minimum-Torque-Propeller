@@ -25,7 +25,7 @@ from prandtl_prop.cad.sections import BladeSection, build_sections, section_tabl
 from prandtl_prop.design import DesignCase, resolve_path
 from prandtl_prop.runs import RunStore, StageRun, stage_key
 
-STAGES = ("aero", "sections", "dfm", "cad", "beam", "fea", "modal", "mold", "cfd")
+STAGES = ("aero", "sections", "dfm", "cad", "beam", "fea", "modal", "mold", "hub", "cfd")
 DEFAULT_STAGES = ("aero", "sections", "dfm", "cad", "beam")  # seconds; fea, modal, and cfd take minutes to hours
 STAGE_UPSTREAM = {
     "aero": (),
@@ -36,6 +36,7 @@ STAGE_UPSTREAM = {
     "fea": ("aero", "sections", "cad", "beam"),
     "modal": ("aero", "cad"),
     "mold": ("aero", "cad"),
+    "hub": ("aero", "cad"),
     "cfd": ("aero", "cad"),
 }
 STAGE_MODULES = {
@@ -59,6 +60,7 @@ STAGE_MODULES = {
         "prandtl_prop.cad.render",
         "prandtl_prop.pipeline",
     ),
+    "hub": ("prandtl_prop.cad.hub", "prandtl_prop.cad.step", "prandtl_prop.cad.root", "prandtl_prop.cad.render", "prandtl_prop.pipeline"),
     "cfd": ("prandtl_prop.cfd.openfoam", "prandtl_prop.pipeline"),
 }
 
@@ -356,7 +358,7 @@ def _stage_fea(design: DesignCase, run: StageRun, upstream: dict[str, StageRun])
         mesh, result, sections, allowable_stress_Pa=material.allowable_stress_Pa, clamp_zone_end_m=clamp_zone_end
     )
     if design.root.enabled:
-        metrics.update(_bolt_checks(design, -metrics["root_reaction_x_N"]))
+        metrics.update(_bolt_checks(design, sections, upstream["cad"].metrics))
     beam = upstream["beam"].metrics
     metrics["applied_aero_force_N"] = forces.sum(axis=0).tolist()
     metrics["tip_deflection_z_ratio_fea_over_beam"] = metrics["tip_deflection_z_m"] / beam["tip_deflection_z_m"]
@@ -396,24 +398,32 @@ def _root_boundary(design: DesignCase, sections: list[BladeSection], mesh) -> tu
     return clamp, inner_edge, root.tab_outer_radius_m + root.tab_width_m
 
 
-def _bolt_checks(design: DesignCase, radial_force_N: float) -> dict[str, float]:
-    """Root bolts carrying the radial (centrifugal) load: bolt shear, bearing on the tab, net tension, and shear-out.
+def _bolt_checks(design: DesignCase, sections: list[BladeSection], cad_metrics: dict[str, Any]) -> dict[str, float]:
+    """Root bolts after any loss of clamp preload: bolt shear, bearing on the tab, net tension, and shear-out.
 
-    The hub plates clamp the tab top and bottom; conservatively the bolts take all of the radial force,
-    shared equally, each in double shear.
+    The bolts take the whole centrifugal load, each in double shear, including the couple from the
+    load line (which runs through the rotation axis) missing the bolt-group centroid
+    (``prandtl_prop.cad.hub.root_joint_loads``). The hub stage checks the friction path as well.
     """
+
+    from prandtl_prop.cad.hub import root_joint_loads
+    from prandtl_prop.cad.root import bolt_centres
 
     root = design.root
     d, t, w = root.bolt_diameter_m, root.tab_thickness_m, root.tab_width_m
     count = len(root.bolt_radii_m)
-    per_bolt = radial_force_N / count
+    bolts = np.array([c[:2] for c in bolt_centres(sections, root.geometry())])
+    joint = root_joint_loads(cad_metrics["blade_mass_kg"], cad_metrics["blade_center_of_mass_m"], design.operating_point.rpm, bolts)
+    per_bolt, radial = joint["bolt_max_shear_N"], joint["centrifugal_force_N"]
     edge = min(root.bolt_radii_m) - root.tab_inner_radius_m
     allowable = design.structure.material.allowable_stress_Pa
     checks = {
         "bolt_count": count,
+        "root_inplane_moment_Nm": joint["root_inplane_moment_Nm"],
+        "bolt_max_shear_N": per_bolt,
         "bolt_double_shear_stress_Pa": per_bolt / (2.0 * math.pi * (0.5 * d) ** 2),
         "tab_bearing_stress_Pa": per_bolt / (d * t),
-        "tab_net_section_stress_Pa": radial_force_N / ((w - d) * t),
+        "tab_net_section_stress_Pa": radial / ((w - d) * t),
         "tab_shear_out_stress_Pa": per_bolt / (2.0 * edge * t),
         "tab_edge_distance_over_diameter": edge / d,
     }
@@ -558,6 +568,59 @@ def _stage_mold(design: DesignCase, run: StageRun, upstream: dict[str, StageRun]
     return metrics, warnings
 
 
+def _stage_hub(design: DesignCase, run: StageRun, upstream: dict[str, StageRun]) -> tuple[dict[str, Any], list[str]]:
+    """Center hub (prandtl_prop.cad.hub): machined plates + COTS fasteners clamping both root tabs."""
+
+    import cadquery as cq
+
+    from prandtl_prop.cad.hub import build_hub, export_hub
+    from prandtl_prop.cad.render import render_mold
+    from prandtl_prop.cad.root import bolt_centres, root_outlines
+
+    if not design.root.enabled:
+        raise ValueError("The hub stage needs the blade root tab: set root.enabled: true")
+    sections = design_sections(design, upstream["aero"])
+    geometry = design.root.geometry()
+    cad = upstream["cad"].metrics
+    op = _operating_point(design)
+    blades = design.operating_point.blade_count
+    r_o = geometry.tab_outer_radius_m
+    stations = _read_csv(upstream["aero"].output("stations.csv"))
+    flap_moment = sum(float(row["qz_N_per_m"]) / blades * (float(row["r_m"]) - r_o) * float(row["dr_m"]) for row in stations)
+    result = build_hub(
+        geometry,
+        bolt_centres(sections, geometry),
+        root_outlines(sections[0], geometry)[0],
+        blade_mass_kg=cad["blade_mass_kg"],
+        blade_cg_m=cad["blade_center_of_mass_m"],
+        rpm=op.rpm,
+        thrust_N=float(upstream["aero"].metrics["thrust_N"]),
+        torque_Nm=float(upstream["aero"].metrics["torque_Nm"]),
+        blade_count=blades,
+        root_flap_moment_Nm=flap_moment,
+        tab_allowable_Pa=design.structure.material.allowable_stress_Pa,
+        design=design.hub,
+    )
+    blade = cq.Shape.importBrep(str(upstream["cad"].output("blade_m.brep")))
+    paths = export_hub(result, run.directory, blade)
+    lift = 0.03
+    render_mold(
+        [
+            (paths["blades_stl"], (0.20, 0.22, 0.25), (0.0, 0.0, 0.0)),
+            (paths["bottom_stl"], (0.70, 0.72, 0.76), (0.0, 0.0, -lift)),
+            (paths["top_stl"], (0.70, 0.72, 0.76), (0.0, 0.0, lift)),
+            (paths["fasteners_stl"], (0.85, 0.65, 0.25), (0.0, 0.0, 0.0)),
+        ],
+        run.path("hub_render.png"),
+        title=f"{design.name}: center hub, plates exploded along the rotor axis (fasteners in place)",
+        views=(("From above the leading edge", 35.0, 60.0), ("From below (motor side)", -35.0, 120.0)),
+        clip_radius_m=0.06,
+    )
+    metrics = dict(result.metrics)
+    metrics["root_flap_moment_at_clamp_Nm"] = flap_moment
+    return metrics, list(result.warnings)
+
+
 def _stage_cfd(design: DesignCase, run: StageRun, upstream: dict[str, StageRun]) -> tuple[dict[str, Any], list[str]]:
     import os
     import shutil
@@ -672,6 +735,7 @@ STAGE_FUNCTIONS: dict[str, Callable[[DesignCase, StageRun, dict[str, StageRun]],
     "fea": _stage_fea,
     "modal": _stage_modal,
     "mold": _stage_mold,
+    "hub": _stage_hub,
     "cfd": _stage_cfd,
 }
 
@@ -684,6 +748,7 @@ STAGE_DESIGN_INPUTS = {
     "fea": ("operating_point", "structure", "fea"),
     "modal": ("operating_point", "structure", "fea"),
     "mold": ("mold", "root"),
+    "hub": ("hub", "root", "operating_point", "structure"),
     "cfd": ("operating_point", "cfd"),
 }
 
