@@ -193,6 +193,11 @@ class MissionSpec:
     stall_cl: float = 1.2  # flag sections at or above this Cl (polar stall margin indicator)
     cfd_points: tuple[int, ...] = (0, 1, 2, 3, 4)
     fea_points: tuple[int, ...] = (0, 2, 4)
+    # CFD rpm trim: re-solve each CFD point until CFD thrust is within cfd_trim_tolerance of the target
+    # (0 iterations keeps the BEMT-trimmed rpm). Re-solves warm-start from the previous fields.
+    cfd_trim_iterations: int = 3
+    cfd_trim_tolerance: float = 0.01
+    cfd_trim_warm_iterations: int = 700
 
     def points(self, default_thrust_N: float) -> list[tuple[float, float]]:
         thrusts = self.thrust_N or tuple(default_thrust_N for _ in self.v_inf_m_s)

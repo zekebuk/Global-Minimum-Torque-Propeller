@@ -250,43 +250,116 @@ def run_mission(design, run, upstream) -> tuple[dict[str, Any], list[str]]:
     section_data: dict[str, Any] = {}
     labels: dict[str, str] = {}
     warnings: list[str] = []
-    for index in spec.cfd_points:
-        point = points[index]
-        name, rpm, v = point["name"], float(point["rpm"]), float(point["v_inf_m_s"])
-        omega = rpm * math.pi / 30.0
-        case = openfoam.write_case(run.path(f"cfd/{name}"), stl, params(rpm, v))
+    stations_ctx, polar, corrections, collective, _ = bemt_context(design, upstream["aero"])
+
+    def bemt_at(rpm: float, v: float) -> BemtResult:
+        return solve_rotor(
+            stations_ctx,
+            replace(op, rpm=rpm, v_inf_m_s=v),
+            polar,
+            collective_offset_deg=collective,
+            tip_loss=design.aero.tip_loss,
+            corrections=corrections,
+        )
+
+    def solve(case_dir: Path, rpm: float, v: float, warm_from: Path | None):
+        """One CFD solve on the shared mesh; a warm start copies the previous final fields into 0/."""
+
+        iterations = cfd.iterations if warm_from is None else spec.cfd_trim_warm_iterations
+        case = openfoam.write_case(case_dir, stl, replace(params(rpm, v), iterations=iterations))
         openfoam.reuse_mesh(mesh_case, case)
+        if warm_from is not None:
+            for field_file in warm_from.iterdir():
+                if field_file.is_file():
+                    shutil.copy2(field_file, case / "0" / field_file.name)
         openfoam.run_case(case, processors=processors, bashrc=cfd.openfoam_bashrc, timeout_s=cfd.timeout_s, phase="solve")
+        for path in case.glob("processor*"):
+            shutil.rmtree(path)
         times = openfoam.solution_times(case)
         loads = [openfoam.wall_loads(case, t, rho_kg_m3=op.rho_kg_m3, nu_m2_s=nu, mesh=mesh) for t in times[-2:]]
+        for old in times[:-1]:
+            shutil.rmtree(old)
         wall = loads[-1]
-        far = openfoam.farfield_thrust(case, times[-1], rho_kg_m3=op.rho_kg_m3, mesh=mesh, v_inf_m_s=v)
         thrust = float(wall.force_N[:, 2].sum())
         torque = -float((wall.centres[:, 0] * wall.force_N[:, 1] - wall.centres[:, 1] * wall.force_N[:, 0]).sum())
-        previous = float(loads[0].force_N[:, 2].sum())
+        return case, times[-1], wall, thrust, torque, float(loads[0].force_N[:, 2].sum())
+
+    solves: list[dict[str, Any]] = []  # every CFD solve, trim iterations included (effective-polar data)
+    for index in spec.cfd_points:
+        point = points[index]
+        name, v, target = point["name"], float(point["v_inf_m_s"]), float(point["target_thrust_N"])
+        bemt_rpm = float(point["rpm"])
+        # CFD rpm trim. Step 1 assumes the CFD/BEMT thrust ratio holds near this point and re-trims BEMT
+        # to target / ratio; later steps are secant steps on the CFD thrust itself.
+        history: list[tuple[float, float]] = []
+        rpm, warm, case, last_time = bemt_rpm, None, None, None
+        for iteration in range(spec.cfd_trim_iterations + 1):
+            if case is not None:
+                warm = case.parent / f"{name}_warm"
+                if warm.exists():
+                    shutil.rmtree(warm)
+                shutil.move(str(last_time), warm)  # keep the fields to warm-start from
+                shutil.rmtree(case)
+            case, last_time, wall, thrust, torque, previous = solve(run.path(f"cfd/{name}"), rpm, v, warm)
+            history.append((rpm, thrust))
+            solves.append(
+                {"point": index, "iteration": iteration, "v_inf_m_s": v, "rpm": rpm, "cfd_thrust_N": thrust, "cfd_torque_Nm": torque}
+            )
+            if abs(thrust / target - 1.0) <= spec.cfd_trim_tolerance or iteration == spec.cfd_trim_iterations:
+                break
+            if len(history) == 1:
+                ratio = thrust / float(bemt_at(rpm, v).summary["thrust_N"])
+                rpm = float(
+                    trim_rpm_to_thrust(
+                        stations_ctx,
+                        replace(op, v_inf_m_s=v),
+                        polar,
+                        target / ratio,
+                        collective_offset_deg=collective,
+                        tip_loss=design.aero.tip_loss,
+                        corrections=corrections,
+                    ).summary["rpm"]
+                )
+            else:
+                (n0, t0), (n1, t1) = history[-2], history[-1]
+                rpm = n1 + (target - t1) * (n1 - n0) / (t1 - t0) if t1 != t0 else n1
+        if warm is not None and warm.exists():
+            shutil.rmtree(warm)
+        if abs(thrust / target - 1.0) > spec.cfd_trim_tolerance and spec.cfd_trim_iterations > 0:
+            warnings.append(f"{name}: CFD rpm trim stopped {thrust / target - 1.0:+.1%} from the target thrust")
+        omega = rpm * math.pi / 30.0
+        far = openfoam.farfield_thrust(case, last_time, rho_kg_m3=op.rho_kg_m3, mesh=mesh, v_inf_m_s=v)
         power = torque * omega
-        stations = pipeline._read_csv(upstream["envelope"].output(f"stations_{name}.csv"))
+        bemt = bemt_at(rpm, v)  # BEMT at the CFD rpm: same operating point, so the gap is model error only
+        stations = bemt.station_rows()
         r_st = np.array([float(row["r_m"]) for row in stations])
         dT, dQ = openfoam.station_loads(wall, r_st)
         record = {
             "point": index,
             "name": name,
             "v_inf_m_s": v,
+            "target_thrust_N": target,
+            "bemt_trim_rpm": bemt_rpm,
+            "bemt_trim_power_W": float(point["power_W"]),
             "rpm": rpm,
-            "bemt_thrust_N": float(point["thrust_N"]),
-            "bemt_power_W": float(point["power_W"]),
+            "cfd_trim_iterations": len(history) - 1,
+            "cfd_trim_rpm_history": " ".join(f"{n:.0f}" for n, _ in history),
+            "cfd_trim_thrust_history_N": " ".join(f"{t:.2f}" for _, t in history),
+            "bemt_thrust_N": float(bemt.summary["thrust_N"]),
+            "bemt_power_W": float(bemt.summary["power_W"]),
             "cfd_thrust_N": thrust,
             "cfd_thrust_farfield_N": far["thrust_N"],
             "cfd_torque_Nm": torque,
             "cfd_power_W": power,
-            "cfd_over_bemt_thrust": thrust / float(point["thrust_N"]),
-            "cfd_over_bemt_power": power / float(point["power_W"]),
+            "cfd_over_bemt_thrust": thrust / float(bemt.summary["thrust_N"]),
+            "cfd_over_bemt_power": power / float(bemt.summary["power_W"]),
             "wall_vs_farfield_fraction": (thrust - far["thrust_N"]) / thrust if thrust else math.nan,
             "last_interval_thrust_change_fraction": abs(thrust - previous) / abs(thrust) if thrust else math.nan,
             "cfd_propulsive_efficiency": thrust * v / power if power > 0 and v > 0 else math.nan,
             "cfd_figure_of_merit": thrust**1.5 / math.sqrt(2.0 * op.rho_kg_m3 * math.pi * radius**2) / power
             if thrust > 0 and power > 0 and v == 0
             else math.nan,
+            "rpm_within_limit": rpm <= spec.max_rpm,
         }
         records.append(record)
         pipeline._write_csv(
@@ -302,12 +375,12 @@ def run_mission(design, run, upstream) -> tuple[dict[str, Any], list[str]]:
                 for i, row in enumerate(stations)
             ],
         )
-        U = openfoam.read_field(times[-1] / "U", 3)
-        p = openfoam.read_field(times[-1] / "p", 1)
+        U = openfoam.read_field(last_time / "U", 3)
+        p = openfoam.read_field(last_time / "p", 1)
         owners = mesh.owner[blade_faces]
         p_wall = p.boundary.get("blade")
         p_wall = p.internal[owners] if p_wall is None else np.asarray(p_wall).reshape(-1)
-        title = f"{design.name}: V = {v:.0f} m/s, {rpm:.0f} rpm, CFD thrust {thrust:.1f} N (BEMT {point['thrust_N']:.1f} N)"
+        title = f"{design.name}: V = {v:.0f} m/s, {rpm:.0f} rpm (CFD trim), CFD thrust {thrust:.1f} N"
         window = (-1.6 * radius, 1.6 * radius, -3.0 * radius, 1.0 * radius)
         flowplots.plot_meridional(
             flowplots.meridional_slice(centres, U.internal, p.internal, radius_m=radius, omega_rad_s=omega, v_inf_m_s=v, window=window),
@@ -328,10 +401,14 @@ def run_mission(design, run, upstream) -> tuple[dict[str, Any], list[str]]:
             warnings.append(
                 f"{name}: thrust still changing {record['last_interval_thrust_change_fraction']:.2%} between the last snapshots"
             )
-        for path in case.glob("processor*"):
-            shutil.rmtree(path)
-        for old in times[:-1]:
-            shutil.rmtree(old)
+        if rpm > spec.max_rpm:
+            warnings.append(f"{name}: CFD-trimmed rpm {rpm:.0f} is above the {spec.max_rpm:.0f} rpm limit")
+    pipeline._write_csv(run.path("cfd_solves.csv"), solves)
+    effective = effective_polar(
+        polar, solves, bemt_at_polar=lambda pol, n, v: _bemt_tq(stations_ctx, op, pol, n, v, collective, design.aero.tip_loss, corrections)
+    )
+    if effective:
+        pipeline._write_csv(run.path("effective_polar.csv"), [effective])
     pipeline._write_csv(run.path("cfd_points.csv"), records)
     flowplots.plot_section_cp(
         section_data, labels, run.path("section_cp.png"), f"{design.name}: chordwise pressure on blade 1 across the mission (CFD)"
@@ -341,8 +418,64 @@ def run_mission(design, run, upstream) -> tuple[dict[str, Any], list[str]]:
     fea_records = _mission_fea(design, run, upstream, sections, wall_by_point, face_areas) if spec.fea_points else []
     if fea_records:
         pipeline._write_csv(run.path("fea_points.csv"), fea_records)
-    metrics: dict[str, Any] = {"cfd_points": records, "fea_points": fea_records, "cell_count": int(len(centres))}
+    metrics: dict[str, Any] = {
+        "cfd_points": records,
+        "fea_points": fea_records,
+        "effective_polar": effective,
+        "cell_count": int(len(centres)),
+    }
     return metrics, warnings
+
+
+def _bemt_tq(stations, op, polar, rpm, v, collective, tip_loss, corrections) -> tuple[float, float]:
+    result = solve_rotor(
+        stations, replace(op, rpm=rpm, v_inf_m_s=v), polar, collective_offset_deg=collective, tip_loss=tip_loss, corrections=corrections
+    )
+    return float(result.summary["thrust_N"]), float(result.summary["torque_Nm"])
+
+
+def effective_polar(polar, solves: list[dict[str, Any]], *, bemt_at_polar) -> dict[str, Any]:
+    """The single analytic polar (a, alpha0, cd0, k) that makes BEMT reproduce every CFD solve's thrust and torque.
+
+    A diagnostic, not a calibration: if one polar fits all speeds, the CFD-BEMT gap is a section-polar
+    mismatch (the CFD sees a different lift curve) rather than a breakdown of momentum theory off
+    design. Thrust and torque give two numbers per solve, so the split between cd0 and k is weakly
+    determined; a parameter at its bound is reported. Only for analytic polars.
+    """
+
+    from scipy.optimize import least_squares
+
+    from prandtl_prop.aero.polars import AnalyticPolar
+
+    if not isinstance(polar, AnalyticPolar) or len(solves) < 2:
+        return {}
+    data = [(float(row["v_inf_m_s"]), float(row["rpm"]), float(row["cfd_thrust_N"]), float(row["cfd_torque_Nm"])) for row in solves]
+
+    def residuals(x: np.ndarray) -> np.ndarray:
+        candidate = replace(polar, cl_alpha_per_rad=x[0], alpha0_deg=x[1], cd0=x[2], k=x[3])
+        out = [bemt_at_polar(candidate, n, v) for v, n, _, _ in data]
+        return np.array(
+            [o[0] / t - 1.0 for o, (_, _, t, _) in zip(out, data, strict=True)]
+            + [o[1] / q - 1.0 for o, (_, _, _, q) in zip(out, data, strict=True)]
+        )
+
+    x0 = np.array([polar.cl_alpha_per_rad, polar.alpha0_deg, polar.cd0, polar.k])
+    lower, upper = np.array([2.0, -8.0, 0.002, 0.0]), np.array([7.0, 2.0, 0.06, 0.05])
+    baseline = residuals(x0)
+    fit = least_squares(residuals, x0, bounds=(lower, upper))
+    names = ("cl_alpha_per_rad", "alpha0_deg", "cd0", "k")
+    at_bound = [n for n, x, lo, hi in zip(names, fit.x, lower, upper, strict=True) if np.isclose(x, lo) or np.isclose(x, hi)]
+    half = len(data)
+    return {
+        **{f"baseline_{n}": float(x) for n, x in zip(names, x0, strict=True)},
+        **{f"fit_{n}": float(x) for n, x in zip(names, fit.x, strict=True)},
+        "solves": len(data),
+        "baseline_max_thrust_error": float(np.abs(baseline[:half]).max()),
+        "baseline_max_torque_error": float(np.abs(baseline[half:]).max()),
+        "fit_max_thrust_error": float(np.abs(fit.fun[:half]).max()),
+        "fit_max_torque_error": float(np.abs(fit.fun[half:]).max()),
+        "parameters_at_bound": " ".join(at_bound),
+    }
 
 
 def _mission_fea(design, run, upstream, sections, wall_by_point, face_areas: np.ndarray) -> list[dict[str, Any]]:
@@ -433,50 +566,60 @@ def _mission_fea(design, run, upstream, sections, wall_by_point, face_areas: np.
 
 
 def _plot_mission_cfd(records, run, design, radius) -> None:
+    """Four panels: spanwise loading (CFD vs BEMT at the same rpm), rpm to hold the target thrust
+    (BEMT trim vs CFD trim, motor limit), shaft power at trim, and the CFD trim convergence."""
+
     import matplotlib.pyplot as plt
 
     from prandtl_prop import pipeline
-    from prandtl_prop.plot_style import INK_2, SERIES, ordinal, style
+    from prandtl_prop.plot_style import INK_2, REFERENCE, SERIES, ordinal, style
 
     style()
-    figure, axes = plt.subplots(1, 3, figsize=(16, 4.8))
+    figure, axes = plt.subplots(1, 4, figsize=(21, 4.9))
     colors = ordinal(len(records))
     for record, color in zip(records, colors, strict=True):
         rows = pipeline._read_csv(run.path(f"loads_{record['name']}.csv"))
         r = np.array([float(row["r_R"]) for row in rows])
         dr = np.gradient(r) * radius
-        axes[0].plot(
-            r, np.array([float(row["cfd_dT_N"]) for row in rows]) / dr, color=color, label=f"CFD, V = {record['v_inf_m_s']:.0f} m/s"
-        )
+        axes[0].plot(r, np.array([float(row["cfd_dT_N"]) for row in rows]) / dr, color=color, label=f"V = {record['v_inf_m_s']:.0f} m/s")
         axes[0].plot(r, np.array([float(row["bemt_dT_N"]) for row in rows]) / dr, color=color, linestyle="--", linewidth=1.2)
-    axes[0].set_title("Spanwise thrust loading (solid CFD, dashed BEMT)")
+    axes[0].set_title("Spanwise thrust loading at the CFD-trimmed rpm\n(solid CFD, dashed BEMT at the same rpm)")
     axes[0].set_xlabel("r / R")
     axes[0].set_ylabel("dT/dr, both blades (N/m)")
     axes[0].legend(loc="upper left")
     v = [r_["v_inf_m_s"] for r_ in records]
-    axes[1].plot(v, [r_["cfd_thrust_N"] for r_ in records], color=SERIES[0], marker="o", label="CFD")
-    axes[1].plot(v, [r_["bemt_thrust_N"] for r_ in records], color=SERIES[1], marker="s", label="BEMT (trim target)")
-    axes[1].set_title("Thrust at the BEMT-trimmed rpm")
+    axes[1].plot(v, [r_["bemt_trim_rpm"] for r_ in records], color=SERIES[1], marker="s", label="BEMT trim (analytic polar)")
+    axes[1].plot(v, [r_["rpm"] for r_ in records], color=SERIES[0], marker="o", label="CFD trim")
+    axes[1].axhline(design.mission.max_rpm, color=REFERENCE, linestyle="--", linewidth=1.0)
+    axes[1].annotate(
+        f"motor limit {design.mission.max_rpm:.0f} rpm",
+        (0.0, design.mission.max_rpm),
+        xytext=(2, 4),
+        textcoords="offset points",
+        fontsize=8,
+        color=INK_2,
+    )
+    axes[1].set_title(f"rpm to hold {records[0]['target_thrust_N']:.0f} N (fixed pitch)")
     axes[1].set_xlabel("free stream V (m/s)")
-    axes[1].set_ylabel("thrust (N)")
-    axes[1].legend()
-    axes[2].plot(v, [r_["cfd_power_W"] for r_ in records], color=SERIES[0], marker="o", label="CFD")
-    axes[2].plot(v, [r_["bemt_power_W"] for r_ in records], color=SERIES[1], marker="s", label="BEMT")
-    axes[2].set_title("Shaft power")
+    axes[1].set_ylabel("rpm")
+    axes[1].legend(loc="lower right")
+    axes[2].plot(v, [r_["bemt_trim_power_W"] for r_ in records], color=SERIES[1], marker="s", label="BEMT at BEMT trim")
+    axes[2].plot(v, [r_["cfd_power_W"] for r_ in records], color=SERIES[0], marker="o", label="CFD at CFD trim")
+    axes[2].set_title("Shaft power at trim")
     axes[2].set_xlabel("free stream V (m/s)")
     axes[2].set_ylabel("power (W)")
-    axes[2].legend()
-    for record in records:
-        axes[1].annotate(
-            f"{record['rpm']:.0f} rpm",
-            (record["v_inf_m_s"], record["cfd_thrust_N"]),
-            xytext=(0, -14),
-            textcoords="offset points",
-            ha="center",
-            fontsize=8,
-            color=INK_2,
-        )
-    figure.suptitle(f"{design.name}: CFD across the mission (frozen geometry, rpm from BEMT trim)", fontsize=12)
+    axes[2].legend(loc="upper left")
+    for record, color in zip(records, colors, strict=True):
+        thrusts = [float(t) for t in str(record["cfd_trim_thrust_history_N"]).split()]
+        error = np.abs(np.array(thrusts) / record["target_thrust_N"] - 1.0) * 100.0
+        axes[3].semilogy(range(len(error)), np.maximum(error, 1e-3), color=color, marker="o", label=f"V = {record['v_inf_m_s']:.0f} m/s")
+    axes[3].axhline(design.mission.cfd_trim_tolerance * 100.0, color=REFERENCE, linestyle="--", linewidth=1.0)
+    axes[3].set_title("CFD rpm trim convergence\n(iteration 0 = BEMT-trimmed rpm)")
+    axes[3].set_xlabel("CFD solve")
+    axes[3].set_ylabel("|T / T_target - 1| (%)")
+    axes[3].set_xticks(range(design.mission.cfd_trim_iterations + 1))
+    axes[3].legend(loc="upper right")
+    figure.suptitle(f"{design.name}: CFD across the mission (frozen geometry and collective, rpm control only)", fontsize=12)
     figure.tight_layout()
     figure.savefig(run.path("mission_cfd.png"), dpi=150)
     plt.close(figure)
