@@ -66,7 +66,14 @@ def envelope(design, aero_run) -> dict[str, Any]:
     target = float(design.operating_point.target_thrust_N)
     for index, (v, thrust) in enumerate(spec.points(target)):
         result = trim_rpm_to_thrust(
-            stations, replace(op, v_inf_m_s=v), polar, thrust, collective_offset_deg=collective, tip_loss=tip_loss, corrections=corrections
+            stations,
+            replace(op, v_inf_m_s=v),
+            polar,
+            thrust,
+            collective_offset_deg=collective,
+            tip_loss=tip_loss,
+            corrections=corrections,
+            rpm_bracket=rpm_search(spec),
         )
         row = _row(result, spec.stall_cl)
         row.update(
@@ -75,6 +82,12 @@ def envelope(design, aero_run) -> dict[str, Any]:
         points.append(row)
         solutions.append(result)
     return {"grid": grid, "points": points, "solutions": solutions, "collective_offset_deg": collective, "radius_m": op.radius_m}
+
+
+def rpm_search(spec) -> tuple[float, float]:
+    """rpm range for the trims: wide enough for small fast props (twice the motor limit, at least 12,000 rpm)."""
+
+    return (300.0, max(12000.0, 2.0 * spec.max_rpm))
 
 
 def point_name(v_inf_m_s: float, thrust_N: float) -> str:
@@ -318,6 +331,7 @@ def run_mission(design, run, upstream) -> tuple[dict[str, Any], list[str]]:
                         collective_offset_deg=collective,
                         tip_loss=design.aero.tip_loss,
                         corrections=corrections,
+                        rpm_bracket=rpm_search(spec),
                     ).summary["rpm"]
                 )
             else:
