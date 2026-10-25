@@ -60,6 +60,7 @@ class CaseParameters:
     snapshots: int = 5
     processors: int = 1
     function_objects: bool = False
+    v_inf_m_s: float = 0.0  # axial free stream along -z (the rotor moves toward +z, its thrust direction)
 
 
 def _write(path: Path, cls: str, body: str) -> None:
@@ -270,20 +271,21 @@ relaxationFactors { fields { p 0.3; } equations { U 0.7; "(k|omega)" 0.7; } }
         f"hierarchicalCoeffs {{ n ({nx_p} {ny_p} {nz_p}); delta 0.001; order xyz; }}\n",
     )
 
-    k0, omega0 = 1.0e-4, 10.0
+    v = params.v_inf_m_s
+    k0, omega0 = max(1.0e-4, 1.5 * (0.01 * v) ** 2), 10.0
+    if v > 0.0:
+        # Axial flight: the free stream enters through whichever far-field faces have inflow; the
+        # freestream conditions switch between inlet and outlet behaviour face by face.
+        u_internal = f"uniform (0 0 {-v})"
+        u_far = f"farfield {{ type freestreamVelocity; freestreamValue uniform (0 0 {-v}); value uniform (0 0 {-v}); }}"
+        p_far = "farfield { type freestreamPressure; freestreamValue uniform 0; value uniform 0; }"
+    else:
+        u_internal = "uniform (0 0 0)"
+        u_far = "farfield { type pressureInletOutletVelocity; value uniform (0 0 0); }"
+        p_far = "farfield { type totalPressure; p0 uniform 0; value uniform 0; }"
     fields = {
-        "U": (
-            "volVectorField",
-            "[0 1 -1 0 0 0 0]",
-            "uniform (0 0 0)",
-            "farfield { type pressureInletOutletVelocity; value uniform (0 0 0); }\n    blade { type fixedValue; value uniform (0 0 0); }",
-        ),
-        "p": (
-            "volScalarField",
-            "[0 2 -2 0 0 0 0]",
-            "uniform 0",
-            "farfield { type totalPressure; p0 uniform 0; value uniform 0; }\n    blade { type zeroGradient; }",
-        ),
+        "U": ("volVectorField", "[0 1 -1 0 0 0 0]", u_internal, u_far + "\n    blade { type fixedValue; value uniform (0 0 0); }"),
+        "p": ("volScalarField", "[0 2 -2 0 0 0 0]", "uniform 0", p_far + "\n    blade { type zeroGradient; }"),
         "k": (
             "volScalarField",
             "[0 2 -2 0 0 0 0]",
@@ -325,27 +327,35 @@ def _processor_grid(count: int) -> tuple[int, int, int]:
     return grid[0], grid[1], grid[2]
 
 
-def run_case(case: Path, *, processors: int = 1, bashrc: str | None = None, timeout_s: int = 6 * 3600) -> Path:
-    """Mesh and solve the case. Writes ``log.<step>`` files; raises with the failing step's log tail."""
+def run_case(case: Path, *, processors: int = 1, bashrc: str | None = None, timeout_s: int = 6 * 3600, phase: str = "all") -> Path:
+    """Mesh and/or solve the case (``phase``: "all", "mesh", or "solve"). Writes ``log.<step>`` files.
+
+    Raises with the failing step's log tail. "solve" expects a mesh in constant/polyMesh, e.g. copied
+    from another case of the same geometry with ``reuse_mesh``.
+    """
 
     bashrc = bashrc or _default_bashrc()
     if not Path(bashrc).is_file() and shutil.which("blockMesh") is None:
         raise FileNotFoundError(f"OpenFOAM not found (no {bashrc} and no blockMesh on PATH); install OpenFOAM or set cfd.openfoam_bashrc")
-    steps = [
-        ("blockMesh", "blockMesh"),
-        ("surfaceFeatureExtract", "surfaceFeatureExtract"),
-        ("snappyHexMesh", "snappyHexMesh -overwrite"),
-        ("topoSet", "topoSet"),
-        ("checkMesh", "checkMesh"),
-    ]
-    if processors > 1:
+    steps = []
+    if phase in ("all", "mesh"):
+        steps += [
+            ("blockMesh", "blockMesh"),
+            ("surfaceFeatureExtract", "surfaceFeatureExtract"),
+            ("snappyHexMesh", "snappyHexMesh -overwrite"),
+            ("topoSet", "topoSet"),
+            ("checkMesh", "checkMesh"),
+        ]
+    if phase != "mesh" and processors > 1:
         steps += [
             ("decomposePar", "decomposePar -force"),
             ("simpleFoam", f"mpirun --allow-run-as-root --oversubscribe -np {processors} simpleFoam -parallel"),
             ("reconstructPar", "reconstructPar"),
         ]
-    else:
+    elif phase != "mesh":
         steps.append(("simpleFoam", "simpleFoam"))
+    if phase not in ("all", "mesh", "solve"):
+        raise ValueError(f"phase must be all, mesh, or solve, not {phase!r}")
     for name, command in steps:
         log = case / f"log.{name}"
         script = f"source {bashrc} >/dev/null 2>&1 || true; cd '{case}' && {command}"
@@ -362,6 +372,15 @@ def run_case(case: Path, *, processors: int = 1, bashrc: str | None = None, time
                 f"OpenFOAM step {name} failed (exit {completed.returncode}); last lines:\n" + "\n".join(text.splitlines()[-25:])
             )
     return case
+
+
+def reuse_mesh(source_case: Path, target_case: Path) -> None:
+    """Copy a meshed case's polyMesh (with the MRF cellZone) into another case of the same geometry."""
+
+    target = Path(target_case) / "constant" / "polyMesh"
+    if target.exists():
+        shutil.rmtree(target)
+    shutil.copytree(Path(source_case) / "constant" / "polyMesh", target)
 
 
 def _default_bashrc() -> str:
@@ -511,7 +530,7 @@ def wall_loads(
 
 
 def farfield_thrust(
-    case: Path, time_dir: Path, *, rho_kg_m3: float, patch: str = "farfield", mesh: PolyMesh | None = None
+    case: Path, time_dir: Path, *, rho_kg_m3: float, patch: str = "farfield", mesh: PolyMesh | None = None, v_inf_m_s: float = 0.0
 ) -> dict[str, float]:
     """Thrust from the axial momentum balance over the far field (independent of wall loads).
 
@@ -519,6 +538,10 @@ def farfield_thrust(
     integral(rho (U_z (U.n) + p n_z)) over the far field, with n outward. The MRF source
     Omega x U has no z component, so the balance is exact up to far-field viscous stress.
     Rotor thrust is the negative of the force on the fluid.
+
+    With a free stream (U_inf = -V z), the momentum flux uses U_z - U_inf,z: identical when mass is
+    conserved, but immune to the small far-field mass imbalance of a converging solution, which
+    otherwise carries free-stream momentum (1% of the flux at 10 m/s was 3.6 N, a 9% error).
     """
 
     mesh = mesh or read_mesh(case)
@@ -527,7 +550,7 @@ def farfield_thrust(
     p = read_field(time_dir / "p", 1).boundary[patch]
     U = read_field(time_dir / "U", 3).boundary[patch]
     flux = (U * areas).sum(axis=1)
-    momentum_z = rho_kg_m3 * (U[:, 2] * flux + np.asarray(p).reshape(-1) * areas[:, 2])
+    momentum_z = rho_kg_m3 * ((U[:, 2] + v_inf_m_s) * flux + np.asarray(p).reshape(-1) * areas[:, 2])
     return {"thrust_N": float(-momentum_z.sum()), "net_volume_flux_m3_s": float(flux.sum()), "outflow_m3_s": float(flux[flux > 0].sum())}
 
 

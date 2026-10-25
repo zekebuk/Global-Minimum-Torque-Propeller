@@ -87,6 +87,31 @@ def draw_shaded(
     axes.set_axis_off()
 
 
+def draw_data(
+    axes, triangles: np.ndarray, values: np.ndarray, cmap, norm, elevation_deg: float, azimuth_deg: float, shading: float = 0.25
+) -> None:
+    """Orthographic render coloured by a per-triangle scalar, with only mild shading.
+
+    Full Lambert shading would darken colours and blur the value they encode; ``shading`` sets how
+    much of the colour is modulated by surface orientation (0 = flat colour).
+    """
+
+    from matplotlib.collections import PolyCollection
+
+    right, up, toward = _camera(elevation_deg, azimuth_deg)
+    projected = np.stack([triangles @ right, triangles @ up], axis=-1)
+    order = np.argsort((triangles @ toward).mean(axis=1))
+    normals = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
+    normals /= np.maximum(np.linalg.norm(normals, axis=1, keepdims=True), 1.0e-300)
+    light = np.array([0.3, 0.6, 1.0]) / np.linalg.norm([0.3, 0.6, 1.0])
+    factor = (1.0 - shading) + shading * np.abs(normals @ light)
+    colours = np.asarray(cmap(norm(values)))[:, :3] * factor[:, None]
+    axes.add_collection(PolyCollection(projected[order], facecolors=colours[order], edgecolors=colours[order], linewidths=0.2))
+    axes.autoscale_view()
+    axes.set_aspect("equal")
+    axes.set_axis_off()
+
+
 def render(
     stl_path: Path,
     output: Path,

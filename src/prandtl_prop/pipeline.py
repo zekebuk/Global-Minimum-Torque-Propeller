@@ -25,7 +25,7 @@ from prandtl_prop.cad.sections import BladeSection, build_sections, section_tabl
 from prandtl_prop.design import DesignCase, resolve_path
 from prandtl_prop.runs import RunStore, StageRun, stage_key
 
-STAGES = ("aero", "sections", "dfm", "cad", "beam", "fea", "modal", "mold", "hub", "cfd", "envelope")
+STAGES = ("aero", "sections", "dfm", "cad", "beam", "fea", "modal", "mold", "hub", "cfd", "envelope", "mission")
 DEFAULT_STAGES = ("aero", "sections", "dfm", "cad", "beam")  # seconds; fea, modal, and cfd take minutes to hours
 STAGE_UPSTREAM = {
     "aero": (),
@@ -39,6 +39,7 @@ STAGE_UPSTREAM = {
     "hub": ("aero", "cad"),
     "cfd": ("aero", "cad"),
     "envelope": ("aero",),
+    "mission": ("aero", "cad", "envelope"),
 }
 STAGE_MODULES = {
     "aero": (
@@ -77,6 +78,17 @@ STAGE_MODULES = {
     ),
     "cfd": ("prandtl_prop.cfd.openfoam", "prandtl_prop.pipeline"),
     "envelope": ("prandtl_prop.mission", "prandtl_prop.aero.bemt", "prandtl_prop.plot_style", "prandtl_prop.pipeline"),
+    "mission": (
+        "prandtl_prop.mission",
+        "prandtl_prop.cfd.openfoam",
+        "prandtl_prop.cfd.flowplots",
+        "prandtl_prop.structures.calculix",
+        "prandtl_prop.structures.cfd_coupling",
+        "prandtl_prop.structures.loads",
+        "prandtl_prop.cad.render",
+        "prandtl_prop.plot_style",
+        "prandtl_prop.pipeline",
+    ),
 }
 
 
@@ -785,6 +797,14 @@ def _stage_envelope(design: DesignCase, run: StageRun, upstream: dict[str, Stage
     return metrics, warnings
 
 
+def _stage_mission(design: DesignCase, run: StageRun, upstream: dict[str, StageRun]) -> tuple[dict[str, Any], list[str]]:
+    """CFD at the mission points (shared mesh), flow plots, and CFD-loaded FEA (prandtl_prop.mission.run_mission)."""
+
+    from prandtl_prop import mission
+
+    return mission.run_mission(design, run, upstream)
+
+
 def _stage_cfd(design: DesignCase, run: StageRun, upstream: dict[str, StageRun]) -> tuple[dict[str, Any], list[str]]:
     import os
     import shutil
@@ -818,6 +838,7 @@ def _stage_cfd(design: DesignCase, run: StageRun, upstream: dict[str, StageRun])
         snapshots=spec.snapshots,
         processors=processors,
         function_objects=spec.function_objects,
+        v_inf_m_s=op.v_inf_m_s,
     )
     case = openfoam.write_case(run.path("case"), stl, params)
     openfoam.run_case(case, processors=processors, bashrc=spec.openfoam_bashrc, timeout_s=spec.timeout_s)
@@ -826,7 +847,7 @@ def _stage_cfd(design: DesignCase, run: StageRun, upstream: dict[str, StageRun])
     history = []
     for time_dir in openfoam.solution_times(case):
         wall = openfoam.wall_loads(case, time_dir, rho_kg_m3=op.rho_kg_m3, nu_m2_s=nu, mesh=mesh)
-        far = openfoam.farfield_thrust(case, time_dir, rho_kg_m3=op.rho_kg_m3, mesh=mesh)
+        far = openfoam.farfield_thrust(case, time_dir, rho_kg_m3=op.rho_kg_m3, mesh=mesh, v_inf_m_s=op.v_inf_m_s)
         torque = -float((wall.centres[:, 0] * wall.force_N[:, 1] - wall.centres[:, 1] * wall.force_N[:, 0]).sum())
         history.append(
             {
@@ -861,7 +882,7 @@ def _stage_cfd(design: DesignCase, run: StageRun, upstream: dict[str, StageRun])
     power = torque * op.omega_rad_s
     ideal = thrust**1.5 / math.sqrt(2.0 * op.rho_kg_m3 * op.disk_area_m2) if thrust > 0 else math.nan
     metrics: dict[str, Any] = {
-        "cell_count": int(mesh.owner.max()) + 1,
+        "cell_count": int(max(mesh.owner.max(), mesh.neighbour.max())) + 1,
         "thrust_N": thrust,
         "torque_Nm": torque,
         "power_W": power,
@@ -902,6 +923,7 @@ STAGE_FUNCTIONS: dict[str, Callable[[DesignCase, StageRun, dict[str, StageRun]],
     "hub": _stage_hub,
     "cfd": _stage_cfd,
     "envelope": _stage_envelope,
+    "mission": _stage_mission,
 }
 
 STAGE_DESIGN_INPUTS = {
@@ -916,6 +938,7 @@ STAGE_DESIGN_INPUTS = {
     "hub": ("hub", "root", "operating_point", "structure"),
     "cfd": ("operating_point", "cfd"),
     "envelope": ("operating_point", "geometry", "aero", "airfoils.thickness_scale", "airfoils.trailing_edge_thickness_m", "mission"),
+    "mission": ("operating_point", "structure", "fea", "cfd", "mission", "root", "hub"),
 }
 
 
