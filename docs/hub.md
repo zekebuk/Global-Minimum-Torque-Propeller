@@ -71,6 +71,8 @@ stages all clamp there.
 | Core wall at the motor screws | 1.7 mm | 1.5 mm minimum |
 | Hub mass (with fasteners); span x width x stack | 122 g; 90 x 35 x 21.5 mm | - |
 | Beam flap margin over 0.9-1.1 x rpm (DFM, root-aware) | 13.2% | 10% required |
+| CalculiX confirmation (C3D10, clamped at r = 45 mm): band margin; flap 1 | 14.4%; 108 Hz | 10% required |
+| CalculiX hover stress (aero + centrifugal) outside the clamp; tip flap | 14.2 MPa; 3.5 mm | +3.22 |
 | Thickness change from option C | none (0.6 mm TE only: +0.17% torque) | - |
 | Mold: impression / part, split | 0.99997, 50.0% / 50.0% | - |
 
@@ -103,7 +105,7 @@ flap 1 in the soft window. That costs +0.45% torque (8.2 mm maximum thickness, w
 | Cap clamp pressure on the boss (1 kN per screw) | 4.4 MPa | +12.5 |
 | Torque carried by clamp friction | - | +10.7 (SF 2) |
 | Beam flap margin over 0.9-1.1 x rpm (DFM, root-aware) | 12.5% | 10% required |
-| Prop mass; cap and screws | 130 g; 12 g | - |
+| Prop mass; cap and screws | 143 g; 12 g | - |
 | Mold (one tool, both blades): impression / part, split | 1.0002, 50.0% / 50.0% | - |
 | Mold insert size | 610 x 133 x 72 mm | - |
 

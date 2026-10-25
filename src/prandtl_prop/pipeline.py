@@ -192,10 +192,12 @@ def _stage_sections(design: DesignCase, run: StageRun, upstream: dict[str, Stage
             ],
         },
     )
-    substituted = sorted({row["airfoil_source"] for row in rows if str(row["airfoil_source"]).startswith("SUBSTITUTE")})
+    # The source text carries each station's thickness scale and TE floor, so group by the airfoil it stands in for.
+    stand_ins = [str(row["airfoil_source"]) for row in rows if str(row["airfoil_source"]).startswith("SUBSTITUTE")]
+    substituted = sorted({text.split(":", 1)[0] + ": " + text.split(":", 1)[1].split(";", 1)[0].strip() for text in stand_ins})
     metrics = {
         "section_count": len(sections),
-        "substituted_airfoil_count": len(substituted),
+        "substituted_airfoil_count": len(stand_ins),
         "trim_offset_applied_deg": _trim_offset(design, upstream["aero"]),
     }
     return metrics, [f"Airfoil stand-in used: {text}" for text in substituted]
