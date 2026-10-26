@@ -7,7 +7,7 @@ pipeline from a vehicle specification, not scaled from the 22 in thesis prop.
 ```bash
 prandtl design-gmt designs/fpv10_tri_spec.yaml --output designs/gmt_fpv10_tri.yaml   # ~4 min
 prandtl run designs/gmt_fpv10_tri.yaml --stages aero,sections,dfm,cad,beam,multirotor,modal
-prandtl run designs/gmt_fpv10_tri.yaml --stages envelope,mission   # CFD at hover and full throttle, CFD-loaded FEA
+prandtl run designs/gmt_fpv10_tri.yaml --stages envelope,mission   # CFD at hover and full throttle, CFD-loaded FEA (~2.5 h)
 ```
 
 The design report is in `outputs/gmt_fpv10_tri/`. Tests: `tests/test_gmt_multirotor.py`.
@@ -199,6 +199,49 @@ Prestressed modal analysis of the clamped blade sector at 0-16,500 rpm:
 - **Raising flap 2** about 2% would clear 10%. Stiffening mid-span (around r/R 0.5-0.7) rather than
   the root does it, and costs little torque. That is a one-line change to the thickness schedule
   once XFOIL polars replace the smoke inputs.
+
+## CFD and CFD-loaded FEA (`envelope`, `mission`)
+
+MRF CFD on one shared mesh at hover (3.54 N) and full throttle (14.18 N, T/W 4), each trimmed in rpm
+on the CFD thrust; then CalculiX with the CFD wall pressure and shear mapped onto the blade, plus
+the centrifugal load at that rpm.
+
+| Point | rpm: BEMT → CFD trim | CFD thrust | CFD / BEMT power at the same rpm | FM | Wall vs far field |
+| --- | --- | --- | --- | --- | --- |
+| Hover | 7500 → 7400 (1 extra solve) | 3.54 N | 1.27 | 0.44 | 0.17% |
+| Full throttle | 15,000 → 14,756 (1 extra solve) | 14.17 N | 1.25 | 0.45 | 0.16% |
+
+- **Thrust transfers; drag does not.** The polar fitted to the 22 in CFD predicts the 10 in thrust
+  within 3% (`effective_polar.csv`: lift slope 4.36/rad, alpha0 -5.26 deg against the 4.22 and
+  -5.19 the design used). The profile drag the CFD sees is about 60% higher: cd0 0.029 against
+  0.018. Plausible causes:
+  - lower Reynolds number (about 1e5 at 0.75R in hover);
+  - the 1.5× thickened root;
+  - the 0.4 mm blunt trailing edge.
+- **Hover power is about 25% above the designer's.** So hover is about 240 W rather than 194 W,
+  and hover endurance is closer to 17-18 min than 22. Size the battery, motor and ESC on the CFD
+  numbers. Re-running `design-gmt` with the CFD-fitted polar is the consistent next iteration (the
+  twist barely changes, since torque scales almost uniformly).
+
+![Full-throttle flow](images/fpv10_flow_full_throttle.png)
+
+![Full-throttle blade Cp](images/fpv10_blade_cp_full_throttle.png)
+
+| FEA point | Load source | Aero Fz per blade | Peak von Mises outside the clamp | Margin (60 MPa) | Tip flap |
+| --- | --- | --- | --- | --- | --- |
+| Hover, 7400 rpm | CFD | ~1.18 N (thrust / 3) | 9.1 MPa | +5.6 | 0.91 mm |
+| **Full throttle, 14,756 rpm** | **CFD** | **4.79 N** | **30.5 MPa** | **+0.97** | **1.35 mm** |
+| Full throttle, 14,756 rpm | BEMT | 4.57 N | 30.3 MPa | +0.98 | 1.18 mm |
+
+- **Full throttle is the structural case.** The peak stays below the 40 MPa design allowable
+  (60 MPa / 1.5). The designer's screen put it at exactly 40 MPa; it neglects centrifugal relief
+  of bending and is conservative once the section is pitched, so the solid model is 24% lower, as
+  expected.
+- **Load transfer:** force mapped within 1.0%, torque within 4.0%; median mapping distance 0.2 mm.
+- **BEMT strip loads** give nearly the same peak stress, but 12% less tip flap: the CFD puts more
+  load outboard.
+
+![Full-throttle stress and deflection, CFD loads](images/fpv10_fea_full_throttle_cfd.png)
 
 ## Limits
 
