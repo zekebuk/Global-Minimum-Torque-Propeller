@@ -1,5 +1,9 @@
 # Efficiency: where the energy goes, what to change, and what to work on next
 
+![Annotated system](images/system_annotated.png)
+
+*Annotated system (regenerate with `python scripts/draw_system.py`; every number is read from the pipeline outputs).*
+
 ```
 prandtl sitl-audit    designs/gmt_fpv10_tri.yaml --stations "new=outputs/.../stations.csv" --motor "T-Motor MN3110 KV780"
 prandtl sitl-optimize designs/gmt_fpv10_tri.yaml --motor "T-Motor MN3110 KV780"     # twist, bell, and chord + twist families

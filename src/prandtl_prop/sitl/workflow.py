@@ -336,7 +336,7 @@ def mission_study(
         tb.write_cpp_tables(best_table, folder / "rotor_tables.hpp")
         shutil.copyfile(HEADER_SOURCE, folder / "prandtl_rotor.hpp")
         _write_stations(folder / "stations.csv", best_stations, ctx["op"].radius_m)
-        fit = px4.fit_parameters(motor, best_table, battery, vehicle, ctx["hover_thrust_N"])
+        fit = px4.fit_parameters(motor, best_table, battery, vehicle, vehicle.mass_kg * vh.G / vehicle.rotor_count)  # the flown AUW
         px4.write_params(fit["params"], folder / "px4_params.txt", f"Mission-selected prop '{best['label']}' for design '{design.name}'.")
         echo(f"best: {best['label']} ({best['delta_energy_vs_built_pct']:+.2f} % energy vs as built); tables and PX4 params in {folder}")
     else:
