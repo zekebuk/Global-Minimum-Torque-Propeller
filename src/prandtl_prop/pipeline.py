@@ -25,7 +25,7 @@ from prandtl_prop.cad.sections import BladeSection, build_sections, section_tabl
 from prandtl_prop.design import DesignCase, resolve_path
 from prandtl_prop.runs import RunStore, StageRun, stage_key
 
-STAGES = ("aero", "sections", "dfm", "cad", "beam", "fea", "modal", "mold", "hub", "cfd", "envelope", "mission", "multirotor", "acoustics")
+STAGES = ("aero", "sections", "dfm", "cad", "beam", "fea", "modal", "mold", "hub", "cfd", "envelope", "mission", "multirotor", "acoustics", "sitl")
 DEFAULT_STAGES = ("aero", "sections", "dfm", "cad", "beam")  # seconds; fea, modal, and cfd take minutes to hours
 STAGE_UPSTREAM = {
     "aero": (),
@@ -42,6 +42,7 @@ STAGE_UPSTREAM = {
     "mission": ("aero", "cad", "envelope"),
     "multirotor": ("aero", "cad"),
     "acoustics": ("aero",),
+    "sitl": ("aero", "cad", "multirotor"),
 }
 STAGE_MODULES = {
     "aero": (
@@ -105,6 +106,18 @@ STAGE_MODULES = {
         "prandtl_prop.acoustics.workflow",
         "prandtl_prop.acoustics.plots",
         "prandtl_prop.aero.gmt",
+        "prandtl_prop.mission",
+        "prandtl_prop.pipeline",
+    ),
+    "sitl": (
+        "prandtl_prop.sitl.tables",
+        "prandtl_prop.sitl.motor",
+        "prandtl_prop.sitl.vehicle",
+        "prandtl_prop.sitl.replay",
+        "prandtl_prop.sitl.missions",
+        "prandtl_prop.sitl.px4",
+        "prandtl_prop.sitl.workflow",
+        "prandtl_prop.multirotor",
         "prandtl_prop.mission",
         "prandtl_prop.pipeline",
     ),
@@ -910,6 +923,41 @@ def _stage_acoustics(design: DesignCase, run: StageRun, upstream: dict[str, Stag
     return metrics, warnings
 
 
+def _stage_sitl(design: DesignCase, run: StageRun, upstream: dict[str, StageRun]) -> tuple[dict[str, Any], list[str]]:
+    """SITL export (prandtl_prop.sitl): rotor tables (JSON + C++), motor/battery card, PX4 parameters, reference missions."""
+
+    from prandtl_prop.sitl import workflow
+
+    ctx = workflow.context(design, upstream["aero"], upstream["multirotor"])
+    out = workflow.export(design, ctx, run.directory)
+    hist = [row for result in out["results"] for row in workflow.histogram_rows(result)]
+    _write_csv(run.path("operating_histogram.csv"), hist)
+    _write_csv(run.path("reference_missions.csv"), [workflow.summary(r) for r in out["results"]])
+    fit = out["fit"]
+    metrics: dict[str, Any] = {
+        "table_cells": int(out["table"].ct.size),
+        "vrs_cells": int(out["table"].vrs.sum()),
+        "thr_mdl_fac": fit["params"]["THR_MDL_FAC"],
+        "thr_mdl_fac_fit_max_error": fit["thr_mdl_fac_fit_max_error"],
+        "ca_rotor_ct_N": fit["params"]["CA_ROTOR0_CT"],
+        "ca_rotor_km_m": fit["torque_per_thrust_m"],
+        "mpc_thr_hover": fit["params"]["MPC_THR_HOVER"],
+        "hover_duty": fit["hover_duty"],
+        "motor_time_constant_ms": fit["motor_time_constant_ms"],
+    }
+    warnings = []
+    for result, weight in zip(out["results"], out["weights"], strict=True):
+        name = result["mission"]
+        for key in ("energy_Wh", "mean_battery_power_W", "saturated_fraction", "duty_p99", "vrs_fraction", "peak_motor_current_A"):
+            metrics[f"{name}_{key}"] = result[key]
+        if result["saturated_fraction"] > design.sitl.allowed_saturation_fraction:
+            warnings.append(f"{name}: saturated {100 * result['saturated_fraction']:.2f} % of the time")
+        if result["over_current_fraction"] > 0:
+            warnings.append(f"{name}: above the {ctx['motor'].max_current_A:.0f} A motor limit {100 * result['over_current_fraction']:.2f} % of the time")
+    metrics["weighted_energy_Wh"] = float(sum(w * r["energy_Wh"] for w, r in zip(out["weights"], out["results"], strict=True)))
+    return metrics, warnings
+
+
 def _reference_bands(noise: dict[str, Any]) -> list[dict[str, float]]:
     import numpy as np
 
@@ -1043,6 +1091,7 @@ STAGE_FUNCTIONS: dict[str, Callable[[DesignCase, StageRun, dict[str, StageRun]],
     "mission": _stage_mission,
     "multirotor": _stage_multirotor,
     "acoustics": _stage_acoustics,
+    "sitl": _stage_sitl,
 }
 
 STAGE_DESIGN_INPUTS = {
@@ -1060,6 +1109,7 @@ STAGE_DESIGN_INPUTS = {
     "mission": ("operating_point", "structure", "fea", "cfd", "mission", "root", "hub"),
     "multirotor": ("operating_point", "geometry", "aero", "airfoils.thickness_scale", "airfoils.trailing_edge_thickness_m", "multirotor"),
     "acoustics": ("operating_point", "geometry", "aero", "airfoils", "gmt.cl_limit", "acoustics"),
+    "sitl": ("operating_point", "geometry", "aero", "airfoils.thickness_scale", "airfoils.trailing_edge_thickness_m", "multirotor", "sitl"),
 }
 
 

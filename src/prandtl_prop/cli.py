@@ -36,6 +36,17 @@ HEADLINE = {
         "delta_loading_pwl_vs_MIL_dB",
         "bvi_proxy_delta_vs_MIL_dB",
     ),
+    "sitl": (
+        "thr_mdl_fac",
+        "ca_rotor_ct_N",
+        "ca_rotor_km_m",
+        "mpc_thr_hover",
+        "motor_time_constant_ms",
+        "hover_mean_battery_power_W",
+        "survey_energy_Wh",
+        "freestyle_saturated_fraction",
+        "weighted_energy_Wh",
+    ),
     "multirotor": (
         "hover_rpm",
         "hover_total_electrical_power_W",

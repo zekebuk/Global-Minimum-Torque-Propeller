@@ -27,6 +27,7 @@ from prandtl_prop.acoustics.rotor import AcousticsSpec
 from prandtl_prop.cad.hub import HubDesign
 from prandtl_prop.manufacturing.mold import MoldDesign
 from prandtl_prop.multirotor import MultirotorSpec
+from prandtl_prop.sitl.spec import SitlSpec
 
 
 @dataclass(frozen=True)
@@ -252,6 +253,7 @@ class DesignCase:
     multirotor: MultirotorSpec = field(default_factory=MultirotorSpec)
     gmt: GmtSpec = field(default_factory=GmtSpec)
     acoustics: AcousticsSpec = field(default_factory=AcousticsSpec)
+    sitl: SitlSpec = field(default_factory=SitlSpec)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -380,6 +382,7 @@ _NESTED: dict[tuple[type, str], type] = {
     (DesignCase, "multirotor"): MultirotorSpec,
     (DesignCase, "gmt"): GmtSpec,
     (DesignCase, "acoustics"): AcousticsSpec,
+    (DesignCase, "sitl"): SitlSpec,
     (AeroSpec, "polar"): PolarSpec,
     (StructureSpec, "material"): MaterialSpec,
 }

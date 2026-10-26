@@ -24,7 +24,8 @@ Assumptions (first principles):
   with v_i uniform around the azimuth, and the blade-element loads are averaged over the azimuth:
   U_T = omega r + V cos(theta) sin(psi), U_P = V sin(theta) + v_i. With no edgewise speed this is
   exactly the axial BEMT of ``aero/bemt.py``. The in-plane H-force (rearward) is the azimuth average
-  of the tangential force times sin(psi). Reverse flow (U_T <= 0) carries no load. The polar has no
+  of the tangential force times sin(psi). The hub roll moment (rigid, unhinged blades) is the
+  azimuth average of r dT sin(psi): the advancing side's extra lift. Reverse flow (U_T <= 0) carries no load. The polar has no
   stall drag rise, so stall is checked instead: the peak Cl over the loaded azimuth points
   (dynamic pressure >= 5% of the tip's) must stay below ``forward_cl_limit`` at ``max_speed_m_s``;
   the retreating blade (U_T = omega r - V cos(theta) |sin(psi)|) sets it. Blade flapping,
@@ -182,7 +183,7 @@ def rotor_forward(
     sin_psi = np.sin(psi)
     omega = op.omega_rad_s
     B, rho = op.blade_count, op.rho_kg_m3
-    thrust_ps, torque_ps, h_ps, vi_out = [], [], [], []
+    thrust_ps, torque_ps, h_ps, roll_ps, vi_out = [], [], [], [], []
     peak_cl = -math.inf  # over azimuth points carrying >= 5% of the tip dynamic pressure (stall check)
     q_tip = (omega * op.radius_m) ** 2
     for i, r in enumerate(stations.r_m):
@@ -219,7 +220,14 @@ def rotor_forward(
             momentum = 4.0 * math.pi * rho * r * factor * vi * math.sqrt(v_edge_m_s**2 + up**2)
             loaded = live & (w2 >= 0.05 * q_tip)
             cl_peak = float(cl[loaded].max()) if loaded.any() else -math.inf
-            return float(dT.mean()) - momentum, float(dT.mean()), float(dF.mean()) * r, float((dF * sin_psi).mean()), cl_peak
+            return (
+                float(dT.mean()) - momentum,
+                float(dT.mean()),
+                float(dF.mean()) * r,
+                float((dF * sin_psi).mean()),
+                cl_peak,
+                float((dT * sin_psi).mean()) * r,
+            )
 
         if loads(0.0)[0] <= 0.0:
             vi = 0.0
@@ -228,8 +236,9 @@ def rotor_forward(
             while loads(upper)[0] > 0.0:
                 upper *= 2.0
             vi = brentq(lambda v: loads(v)[0], 0.0, upper, xtol=1e-12, rtol=1e-12, maxiter=200)
-        _, t, q, h, cl_peak = loads(vi)
+        _, t, q, h, cl_peak, roll = loads(vi)
         peak_cl = max(peak_cl, cl_peak)
+        roll_ps.append(roll)
         thrust_ps.append(t)
         torque_ps.append(q)
         h_ps.append(h)
@@ -241,6 +250,7 @@ def rotor_forward(
         "thrust_N": thrust,
         "torque_Nm": torque,
         "h_force_N": float((np.array(h_ps) * dr).sum()),
+        "hub_roll_moment_Nm": float((np.array(roll_ps) * dr).sum()),  # advancing side up
         "power_W": torque * omega,
         "mean_induced_m_s": float(np.average(vi_out, weights=stations.r_m * dr)),
         "advance_ratio_mu": v_edge_m_s / (omega * op.radius_m),
