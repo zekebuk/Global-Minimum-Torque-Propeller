@@ -58,6 +58,8 @@ prandtl run designs/gmt.yaml --stages fea                     # CalculiX solid F
 prandtl run designs/gmt.yaml --stages modal                   # Campbell diagram (prestressed modes vs rpm)
 prandtl run designs/gmt.yaml --stages cfd                     # OpenFOAM MRF hover CFD
 prandtl run designs/gmt.yaml --stages acoustics               # FW-H tonal + BPM broadband noise, twist comparison
+prandtl run designs/gmt_fpv10_tri.yaml --stages sitl          # rotor tables, C++ header, PX4 params for a simulator
+prandtl sitl-optimize designs/gmt_fpv10_tri.yaml --log a.ulg  # rank GMT twists by mission energy on flown missions
 prandtl run designs/gmt_pa6_cf30_folding.yaml --stages envelope,mission   # 0-20 m/s map, CFD at mission points, CFD loads -> CalculiX
 prandtl design-gmt designs/fpv10_tri_spec.yaml --output designs/gmt_fpv10_tri.yaml   # 10 in tri-blade FPV: GMT twist, vehicle sizing
 prandtl run designs/gmt_fpv10_tri.yaml --stages aero,sections,dfm,cad,beam,multirotor   # ... and the pipeline on it
@@ -81,6 +83,7 @@ coordinates in `data/` (see `data/xfoil_polars/README.md`). See `docs/iterative_
 conventions, the verification evidence, and the planned CalculiX and OpenFOAM stages. See
 `docs/cfrp_injection_molding.md` for the molded blade and its mold, and `docs/hub.md` for the hub.
 See `docs/production.md` for the production hardware stack and cost per prop by route.
+See `docs/sitl.md` for the SITL bridge (custom simulator + PX4): rotor tables, motor/battery model, PX4 parameters, log replay, and mission-weighted prop selection.
 See `docs/acoustics.md` for the aeroacoustic stage (FW-H tonal + BPM broadband) and what GMT twist does to rotor noise.
 See `docs/fpv10_tri.md` for the 10 in tri-blade FPV variant (global-minimum-torque twist with the
 multirotor sized around it). See `docs/mission.md` for off-design performance from static to 20 m/s, flow plots, and FEA driven

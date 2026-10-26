@@ -964,7 +964,15 @@ def _stage_sitl(design: DesignCase, run: StageRun, upstream: dict[str, StageRun]
     warnings = []
     for result in out["results"]:
         name = result["mission"]
-        for key in ("energy_Wh", "mean_battery_power_W", "saturated_fraction", "duty_p99", "vrs_fraction", "peak_motor_current_A"):
+        for key in (
+            "energy_Wh",
+            "mean_battery_power_W",
+            "saturated_fraction",
+            "duty_p99",
+            "vrs_fraction",
+            "stall_fraction",
+            "peak_motor_current_A",
+        ):
             metrics[f"{name}_{key}"] = result[key]
         if result["saturated_fraction"] > design.sitl.allowed_saturation_fraction:
             warnings.append(f"{name}: saturated {100 * result['saturated_fraction']:.2f} % of the time")

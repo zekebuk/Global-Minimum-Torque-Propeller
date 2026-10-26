@@ -127,7 +127,10 @@ def export(design, ctx: dict[str, Any], out: Path) -> dict[str, Any]:
     }
     (out / "sitl_model.json").write_text(json.dumps(card, indent=2), encoding="utf-8")
     traces, weights = reference_traces(design, vehicle)
-    results = [replay(t, vehicle, table, motor, battery, max_throttle=design.sitl.max_throttle) for t in traces]
+    results = [
+        replay(t, vehicle, table, motor, battery, max_throttle=design.sitl.max_throttle, cl_limit=design.multirotor.forward_cl_limit)
+        for t in traces
+    ]
     for trace, result in zip(traces, results, strict=True):
         write_truth_csv(result, trace, out / f"mission_{trace.name}.csv")
     plot_tables(table, out / "rotor_tables.png")
@@ -251,11 +254,14 @@ def mission_study(
     if len(weights) != len(traces):
         raise ValueError(f"{len(weights)} weights for {len(traces)} missions")
     output_dir.mkdir(parents=True, exist_ok=True)
-    results = [replay(t, vehicle, table, motor, battery, max_throttle=design.sitl.max_throttle) for t in traces]
+    results = [
+        replay(t, vehicle, table, motor, battery, max_throttle=design.sitl.max_throttle, cl_limit=design.multirotor.forward_cl_limit)
+        for t in traces
+    ]
     for trace, result in zip(traces, results, strict=True):
         echo(
             f"{trace.name:>14}: {result['duration_s']:7.1f} s  {result['energy_Wh']:6.2f} Wh  {result['mean_battery_power_W']:6.1f} W  "
-            f"duty p99 {result['duty_p99']:.2f}  saturated {100 * result['saturated_fraction']:.2f} %  VRS {100 * result['vrs_fraction']:.1f} %  ({trace.source})"
+            f"duty p99 {result['duty_p99']:.2f}  saturated {100 * result['saturated_fraction']:.2f} %  stall {100 * result['stall_fraction']:.2f} %  VRS {100 * result['vrs_fraction']:.1f} %  ({trace.source})"
         )
     _write_rows(output_dir / "replay.csv", [summary(r) for r in results])
     _write_rows(output_dir / "operating_histogram.csv", [row for r in results for row in histogram_rows(r)])

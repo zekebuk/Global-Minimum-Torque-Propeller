@@ -10,8 +10,9 @@ references.
 Every candidate gets its own rotor tables and replays every mission trace with the *same motor and
 battery* (the hardware you have bought or chosen: Kv from the design as built). The objective is the
 weighted battery energy sum_m w_m E_m; a candidate is feasible when, on every mission, the time it
-spends saturated or above the motor's current limit stays within ``sitl.allowed_saturation_fraction``
-or no worse than the design as built (whichever is larger: an iteration must not make the vehicle
+spends saturated or above the motor's current limit, and separately the time it spends with a
+rotor's peak section Cl above ``multirotor.forward_cl_limit`` (retreating-blade or descent stall),
+each stay within ``sitl.allowed_saturation_fraction`` or no worse than the design as built (whichever is larger: an iteration must not make the vehicle
 worse at what it already does).
 
 Assumptions: the traces are frozen (same trajectory, see ``replay``); chord scaling changes the
@@ -88,7 +89,10 @@ def evaluate(
         candidate["label"], candidate["stations"], op, polar, spec, tip_loss=design.aero.tip_loss, corrections=corrections
     )
     rotor = replace(motor, inertia_kg_m2=motor.inertia_kg_m2 + (candidate["chord_scale"] ** 2 - 1.0) * spec_prop_inertia(design, motor))
-    results = [replay(t, vehicle, table, rotor, battery, max_throttle=spec.max_throttle) for t in traces]
+    results = [
+        replay(t, vehicle, table, rotor, battery, max_throttle=spec.max_throttle, cl_limit=design.multirotor.forward_cl_limit)
+        for t in traces
+    ]
     row = {k: v for k, v in candidate.items() if k != "stations"}
     row["weighted_energy_Wh"] = float(sum(w * r["energy_Wh"] for w, r in zip(weights, results, strict=True)))
     for r in results:
@@ -105,6 +109,7 @@ def evaluate(
         ):
             row[f"{name}_{key}"] = r[key]
     row["worst_limit_fraction"] = max(r["saturated_fraction"] + r["over_current_fraction"] for r in results)
+    row["worst_stall_fraction"] = max(r["stall_fraction"] for r in results)
     hover = table.evaluate(op.rpm, 0.0, 0.0)
     row["torque_per_thrust_m"] = float(hover["torque_Nm"] / hover["thrust_N"])
     return {"row": row, "table": table, "results": results}
@@ -119,8 +124,9 @@ def spec_prop_inertia(design, motor: Motor) -> float:
 def select(rows: list[dict[str, Any]], allowed: float) -> dict[str, Any] | None:
     built = next(r for r in rows if r["family"] == "built")
     limit = max(allowed, built["worst_limit_fraction"]) + 1.0e-9
+    stall = max(allowed, built["worst_stall_fraction"]) + 1.0e-9
     for r in rows:
-        r["feasible"] = r.get("reason") is None and r["worst_limit_fraction"] <= limit
+        r["feasible"] = r.get("reason") is None and r["worst_limit_fraction"] <= limit and r["worst_stall_fraction"] <= stall
     ranked = sorted((r for r in rows if r["feasible"]), key=lambda r: r["weighted_energy_Wh"])
     for r in rows:
         if "weighted_energy_Wh" in r:

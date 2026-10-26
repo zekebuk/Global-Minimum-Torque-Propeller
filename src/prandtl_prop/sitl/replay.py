@@ -22,7 +22,8 @@ Per sample:
 A sample is saturated when any motor needs u > ``max_throttle`` (thrust, slew rate, or yaw), when the
 wrench cannot be met inside the speed limits (a rotor would need to stop or exceed its no-load
 speed), when the battery cannot supply the power, or when a non-braking ESC would need negative
-current to decelerate.
+current to decelerate. Separately, a sample is in retreating-blade stall when any rotor's peak
+section Cl exceeds ``cl_limit`` (``multirotor.forward_cl_limit``).
 """
 
 from __future__ import annotations
@@ -90,6 +91,7 @@ def replay(
     battery: Battery,
     *,
     max_throttle: float = 1.0,
+    cl_limit: float = math.inf,
     soc_start: float = 1.0,
     newton_iterations: int = 12,
 ) -> dict[str, Any]:
@@ -142,6 +144,7 @@ def replay(
     saturated = np.any(duty > max_throttle, axis=1) | unmet | battery_limited | np.any(coast_limited, axis=1)
     time = float(dt.sum())
     vrs = np.any(loads["vrs"], axis=1)
+    stall = np.any(loads["peak_cl"] > cl_limit, axis=1)
     finite = np.isfinite(bus_current)
     electrical = v_bus * bus_current
     return {
@@ -159,6 +162,8 @@ def replay(
         "peak_motor_current_A": float(np.nanmax(current)),
         "over_current_fraction": float((np.any(current > motor.max_current_A, axis=1) * dt).sum() / time),
         "vrs_fraction": float((vrs * dt).sum() / time),
+        "stall_fraction": float((stall * dt).sum() / time),
+        "peak_section_cl": float(np.nanmax(loads["peak_cl"])),
         "min_bus_voltage_V": float(np.nanmin(v_bus)),
         "peak_rpm": float(rpm.max()),
         "wrench_rms_error": [float(e) for e in np.sqrt(np.mean((achieved - trace.wrench) ** 2, axis=0))],

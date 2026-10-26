@@ -31,7 +31,7 @@ class SitlSpec:
     missions: tuple[str, ...] = ("hover", "survey", "freestyle")
     mission_weights: tuple[float, ...] = (1.0, 1.0, 1.0)
     # Mission optimizer: GMT twist designed at (design_rpm_fraction x hover rpm, bell weight), same planform.
-    design_rpm_fractions: tuple[float, ...] = (0.9, 1.0, 1.1, 1.25, 1.4)
+    design_rpm_fractions: tuple[float, ...] = (0.6, 0.7, 0.8, 0.9, 1.0, 1.1)
     chord_scales: tuple[float, ...] = (1.0,)
     bending_weights: tuple[float, ...] = (0.0, 0.1, 0.2, 0.4)
     helix_baseline: bool = True

@@ -16,6 +16,9 @@ So a table over (lambda_c, mu) at one rpm is exact at every rpm. A Reynolds-depe
 polar adds rpm as a third axis. Interpolation is multilinear; inflow beyond the grid is clamped to
 its edge, which for Omega -> 0 still sends every load to zero with (Omega R)^2.
 
+The table also carries the peak section Cl over the loaded disk, which depends on the same two
+ratios; with a polar that has no stall drag rise it is the retreating-blade stall check.
+
 Validity. Momentum theory fails in the vortex-ring state (descending into the rotor's own wake).
 Cells inside the usual VRS boundary are flagged, not corrected: -2 < V_axial / v_h < -0.3 with
 V_edge / v_h < 1, where v_h = Omega R sqrt(C_T / 2) is the ideal hover induced velocity at that
@@ -54,6 +57,7 @@ class RotorTable:
     ch: np.ndarray
     cm: np.ndarray
     vrs: np.ndarray  # bool, same shape
+    peak_cl: np.ndarray | None = None  # peak section Cl over the loaded disk (retreating-blade stall check)
 
     @property
     def disk_area_m2(self) -> float:
@@ -66,7 +70,9 @@ class RotorTable:
             axes.insert(0, (self.rpm, rpm))
         corners = [_bracket(grid, x) for grid, x in axes]
         out = {}
-        for key in ("ct", "cq", "ch", "cm"):
+        for key in ("ct", "cq", "ch", "cm", "peak_cl"):
+            if getattr(self, key) is None:
+                continue
             table = getattr(self, key).astype(float)
             if len(self.rpm) == 1:
                 table = table[0]
@@ -95,6 +101,7 @@ class RotorTable:
             "h_force_N": scale * c["ch"],
             "roll_moment_Nm": scale * self.radius_m * c["cm"],
             "vrs": c["vrs"],
+            "peak_cl": c.get("peak_cl", np.full(np.shape(c["ct"]), np.nan)),
         }
 
     def to_dict(self) -> dict[str, Any]:
@@ -115,12 +122,14 @@ class RotorTable:
                 "h_force_N": "rho pi R^2 (Omega R)^2 C_H, in the disk plane opposing the edgewise motion",
                 "roll_moment_Nm": "rho pi R^2 (Omega R)^2 R C_M, advancing side up; body vector = -s M e_f (see docs/sitl.md)",
                 "vrs": "1 inside the vortex-ring-state boundary (momentum theory invalid there)",
+                "peak_cl": "largest section Cl over the azimuth points carrying >= 5% of the tip dynamic pressure",
             },
             "ct": self.ct.tolist(),
             "cq": self.cq.tolist(),
             "ch": self.ch.tolist(),
             "cm": self.cm.tolist(),
             "vrs": self.vrs.astype(int).tolist(),
+            **({"peak_cl": self.peak_cl.tolist()} if self.peak_cl is not None else {}),
         }
 
     @classmethod
@@ -139,6 +148,7 @@ class RotorTable:
             ch=np.array(data["ch"], float),
             cm=np.array(data["cm"], float),
             vrs=np.array(data["vrs"], bool),
+            peak_cl=np.array(data["peak_cl"], float) if "peak_cl" in data else None,
         )
 
     def save(self, path: Path) -> Path:
@@ -185,7 +195,7 @@ def build_table(
     rpms = [op.rpm] if isinstance(polar, AnalyticPolar) else [op.rpm * f for f in spec.rpm_fractions]
     lam, mu = np.array(spec.lambda_grid, float), np.array(spec.mu_grid, float)
     shape = (len(rpms), len(lam), len(mu))
-    ct, cq, ch, cm = (np.zeros(shape) for _ in range(4))
+    ct, cq, ch, cm, peak = (np.zeros(shape) for _ in range(5))
     for k, rpm in enumerate(rpms):
         point = replace(op, rpm=rpm, v_inf_m_s=0.0)
         tip = point.omega_rad_s * point.radius_m
@@ -206,8 +216,9 @@ def build_table(
                 cq[k, i, j] = out["torque_Nm"] / (scale * point.radius_m)
                 ch[k, i, j] = out["h_force_N"] / scale
                 cm[k, i, j] = out["hub_roll_moment_Nm"] / (scale * point.radius_m)
+                peak[k, i, j] = out["peak_cl"] if math.isfinite(out["peak_cl"]) else 0.0
     vrs = vrs_flag(ct, lam[None, :, None], mu[None, None, :])
-    return RotorTable(name, op.radius_m, op.rho_kg_m3, op.blade_count, np.array(rpms, float), lam, mu, ct, cq, ch, cm, vrs)
+    return RotorTable(name, op.radius_m, op.rho_kg_m3, op.blade_count, np.array(rpms, float), lam, mu, ct, cq, ch, cm, vrs, peak)
 
 
 def write_cpp_tables(table: RotorTable, path: Path) -> Path:
