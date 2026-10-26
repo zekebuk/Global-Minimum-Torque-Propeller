@@ -30,7 +30,9 @@ def _blade() -> BladeStations:
     edges = np.linspace(0.2, 1.0, 13) * RADIUS
     r = 0.5 * (edges[1:] + edges[:-1])
     pitch = 0.11
-    return BladeStations(r, np.diff(edges), np.full(len(r), 0.016), np.degrees(np.arctan(pitch / (2 * math.pi * r))), ("NACA4410",) * len(r))
+    return BladeStations(
+        r, np.diff(edges), np.full(len(r), 0.016), np.degrees(np.arctan(pitch / (2 * math.pi * r))), ("NACA4410",) * len(r)
+    )
 
 
 @pytest.fixture(scope="module")
@@ -49,7 +51,9 @@ def test_table_is_exact_at_nodes_at_any_rpm(rig):
     table, op = rig["table"], rig["op"]
     for rpm, lam, mu in ((5000.0, 0.1, 0.2), (11000.0, -0.1, 0.3), (7500.0, 0.0, 0.0)):
         tip = rpm * math.pi / 30 * RADIUS
-        direct = multirotor.rotor_forward(_blade(), replace(op, rpm=rpm), POLAR, v_edge_m_s=mu * tip, v_axial_m_s=lam * tip, azimuth_points=24)
+        direct = multirotor.rotor_forward(
+            _blade(), replace(op, rpm=rpm), POLAR, v_edge_m_s=mu * tip, v_axial_m_s=lam * tip, azimuth_points=24
+        )
         loads = table.evaluate(rpm, lam * tip, mu * tip)
         assert float(loads["thrust_N"]) == pytest.approx(direct["thrust_N"], rel=1e-9, abs=1e-12)
         assert float(loads["torque_Nm"]) == pytest.approx(direct["torque_Nm"], rel=1e-9, abs=1e-12)
@@ -140,14 +144,16 @@ def test_cpp_header_matches_python(rig, tmp_path):
     shutil.copyfile(px4.Path(tables.__file__).with_name("cpp") / "prandtl_rotor.hpp", tmp_path / "prandtl_rotor.hpp")
     points = [(7400.0, 1.2, 8.0), (5200.0, -2.5, 3.0), (11000.0, 6.0, 15.0), (300.0, -9.0, 25.0)]
     main = [
-        '#include <cstdio>',
+        "#include <cstdio>",
         '#include "rotor_tables.hpp"',
         "int main() {",
         "  const auto& t = prandtl::tables::test::table;",
     ]
     for rpm, va, ve in points:
         main.append(f"  {{ auto l = prandtl::evaluate(t, {rpm}, {va}, {ve});")
-        main.append('    std::printf("%.12g %.12g %.12g %.12g %d\\n", l.thrust_N, l.torque_Nm, l.h_force_N, l.roll_moment_Nm, (int)l.vrs); }')
+        main.append(
+            '    std::printf("%.12g %.12g %.12g %.12g %d\\n", l.thrust_N, l.torque_Nm, l.h_force_N, l.roll_moment_Nm, (int)l.vrs); }'
+        )
     main += [
         "  prandtl::Inflow f = prandtl::inflow({6.0, 1.0, -0.5}, {0.1, -0.2, 0.3}, {0.15, 0.15, 0.0});",
         "  auto l = prandtl::evaluate(t, 7400.0, f.v_axial, f.v_edge);",
@@ -190,7 +196,7 @@ def _ulog(path, topics: dict[str, tuple[list[tuple[str, str]], np.ndarray, list[
     for msg_id, (_, (fields, stamps, columns)) in enumerate(topics.items()):
         for k, stamp in enumerate(stamps):
             payload = struct.pack("<HQ", msg_id, int(stamp))
-            for (kind, field), column in zip(fields, columns, strict=True):
+            for (kind, _field), column in zip(fields, columns, strict=True):
                 base = kind.split("[")[0]
                 count = int(kind.split("[")[1][:-1]) if "[" in kind else 1
                 values = np.atleast_1d(column[k])
@@ -228,5 +234,8 @@ def test_ulog_ingest_reconstructs_rpm(rig, tmp_path):
     for k in (0, n // 2, n - 1):
         for i in range(4):
             omega = trace.rpm[k, i] * math.pi / 30
-            balance = motor.torque(motor.current(duty[k, i], 24.0, omega)) - table.evaluate(trace.rpm[k, i], flow["v_axial"][k, i], flow["v_edge"][k, i])["torque_Nm"]
+            balance = (
+                motor.torque(motor.current(duty[k, i], 24.0, omega))
+                - table.evaluate(trace.rpm[k, i], flow["v_axial"][k, i], flow["v_edge"][k, i])["torque_Nm"]
+            )
             assert abs(float(balance)) < 1e-6

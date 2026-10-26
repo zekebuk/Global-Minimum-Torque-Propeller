@@ -230,7 +230,9 @@ def _write_stations(path: Path, stations, radius_m: float) -> Path:
     return _write_rows(path, rows)
 
 
-def mission_study(design, store, logs: list[Path], weights: list[float] | None, output_dir: Path, *, optimize: bool, echo=print) -> dict[str, Any]:
+def mission_study(
+    design, store, logs: list[Path], weights: list[float] | None, output_dir: Path, *, optimize: bool, echo=print
+) -> dict[str, Any]:
     """Replay logs (or the reference missions) with the design as built; with ``optimize``, rank the GMT twist family on them."""
 
     from prandtl_prop.pipeline import run_design
@@ -273,11 +275,19 @@ def mission_study(design, store, logs: list[Path], weights: list[float] | None, 
         rows.append(evaluated["row"])
         tables[candidate["label"]] = (evaluated["table"], candidate["stations"])
         r = evaluated["row"]
-        echo(f"  [{i + 1}/{len(family)}] {candidate['label']}: {r['weighted_energy_Wh']:.3f} Wh, worst saturated/over-current {100 * r['worst_limit_fraction']:.2f} %")
+        echo(
+            f"  [{i + 1}/{len(family)}] {candidate['label']}: {r['weighted_energy_Wh']:.3f} Wh, worst saturated/over-current {100 * r['worst_limit_fraction']:.2f} %"
+        )
     best = opt.select(rows, design.sitl.allowed_saturation_fraction)
     _write_rows(output_dir / "candidates.csv", rows)
     names = [t.name for t in traces]
-    opt.plot(rows, best, names, f"{design.name}: mission-weighted prop selection (same motor, battery, and planform)", output_dir / "candidates.png")
+    opt.plot(
+        rows,
+        best,
+        names,
+        f"{design.name}: mission-weighted prop selection (same motor, battery, and planform)",
+        output_dir / "candidates.png",
+    )
     out.update({"rows": rows, "best": best})
     if best is not None:
         best_table, best_stations = tables[best["label"]]
