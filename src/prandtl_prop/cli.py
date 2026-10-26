@@ -163,6 +163,16 @@ def build_parser() -> argparse.ArgumentParser:
     cost.add_argument("--set-file", dest="override_files", action="append", default=[], type=Path, metavar="PATH")
     cost.add_argument("--runs-dir", type=Path, default=config.RUNS_DIR)
 
+    noise_cfd = commands.add_parser(
+        "noise-cfd", help="Tonal hover noise by FW-H on a CFD case's rotor wall pressure (acoustics/cfd_fwh.py)."
+    )
+    noise_cfd.add_argument("design", type=Path)
+    noise_cfd.add_argument("--case", type=Path, required=True, help="OpenFOAM case folder (a mission or cfd stage case).")
+    noise_cfd.add_argument("--rpm", type=float, required=True)
+    noise_cfd.add_argument("--set", dest="overrides", action="append", default=[], metavar="KEY=VALUE")
+    noise_cfd.add_argument("--set-file", dest="override_files", action="append", default=[], type=Path, metavar="PATH")
+    noise_cfd.add_argument("--runs-dir", type=Path, default=config.RUNS_DIR)
+
     loop = commands.add_parser("loop", help="Iterate BEMT trim, CAD, CFD, and BEMT calibration until CFD meets target thrust.")
     loop.add_argument("design", type=Path, help="Design YAML file.")
     loop.add_argument("--iterations", type=int, default=4, help="Maximum CFD runs.")
@@ -188,6 +198,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _design_gmt(args, overrides)
     if args.command == "cost":
         return _cost(args, store, overrides)
+    if args.command == "noise-cfd":
+        return _noise_cfd(args, overrides)
     stages = [stage.strip() for stage in args.stages.split(",") if stage.strip()]
     results: dict[str, dict[str, StageOutcome]] = {}
     for path in args.designs:
@@ -237,6 +249,29 @@ def _loop(args: argparse.Namespace, store: RunStore, overrides: list[str]) -> in
     if result.corrections_csv:
         print(f"latest corrections: {config.relative(result.corrections_csv)}")
     return 0 if result.converged else 3
+
+
+def _noise_cfd(args: argparse.Namespace, overrides: list[str]) -> int:
+    from prandtl_prop.acoustics import cfd_fwh
+
+    design = load_design(args.design, overrides)
+    op = design.operating_point
+    try:
+        result = cfd_fwh.cfd_surface_noise(args.case, args.rpm, op.radius_m, op.blade_count, op.rho_kg_m3, design.acoustics)
+    except (FileNotFoundError, ValueError, KeyError) as exc:
+        print(f"noise-cfd failed: {exc}", file=sys.stderr)
+        return 1
+    print(
+        f"{result['faces']} wall faces, pressure thrust {result['pressure_thrust_N']:.3f} N, observers at {result['observer_distance_m']:.2f} m"
+    )
+    print(f"{'elevation':>10}" + "".join(f"{'BPF' + str(m + 1) + ' load':>12}{'thick':>8}{'total':>8}" for m in range(3)))
+    for i, el in enumerate(result["elevations_deg"]):
+        cells = "".join(
+            f"{cfd_fwh.spl(result['loading'][i, m]):12.2f}{cfd_fwh.spl(result['thickness'][i, m]):8.2f}{cfd_fwh.spl(result['total'][i, m]):8.2f}"
+            for m in range(min(3, result["total"].shape[1]))
+        )
+        print(f"{el:10.0f}{cells}")
+    return 0
 
 
 def _usd(value: float) -> str:
