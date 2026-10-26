@@ -1,0 +1,48 @@
+# Option C: GMT blade for injection-molded PA6-CF30 with the clamped root tab (docs/cfrp_injection_molding.md).
+# From `prandtl optimize-molding designs/gmt_peek_cf30.yaml --material pa6-cf30 --model-cushion 0.02` with the root-aware
+# beam model (smoke inputs; 5% cushion on modes above flap 1). Re-run once the real airfoils and polars are in data/
+name: gmt_pa6_cf30
+description: GMT blade, PA6-CF30 injection molded, soft 1P-2P flap placement with the clamped root tab (root-aware optimum; root 12% thicker, 0.6 mm blunt TE).
+operating_point:
+  diameter_in: 22.0
+  blade_count: 2
+  rpm: 4000.0
+  target_thrust_N: 35.0
+  rho_kg_m3: 1.225
+  mu_air_kg_m_s: 1.81e-5
+geometry:
+  stations_csv: data/geometry/final_gmt_geometry.csv
+  pitch_axis_chord_fraction: 0.25
+aero:
+  polar: {type: table, directory: data/xfoil_polars}
+  tip_loss: true
+  trim_to_target_thrust: true
+airfoils:
+  directory: data/airfoils
+  points_per_side: 80
+  substitutes: {}
+  thickness_scale: [[0.2, 1.1242], [0.45, 1.0], [0.7, 1.0], [1.0, 1.0]]
+  trailing_edge_thickness_m: 0.0006
+structure:
+  material: {name: PA6-CF30 (conditioned), E_Pa: 12.75e+9, nu: 0.35, density_kg_m3: 1280.0, allowable_stress_Pa: 60.0e+6}
+molding:
+  min_trailing_edge_thickness_m: 0.0006
+  max_section_thickness_m: 0.009
+  operating_rpm_fractions: [0.9, 1.1]
+  frequency_margin: 0.10
+root:
+  enabled: true
+  tab_inner_radius_m: 0.014
+  tab_outer_radius_m: 0.034
+  tab_width_m: 0.028
+  tab_thickness_m: 0.0085
+  bolt_diameter_m: 0.0053
+  bolt_radii_m: [0.020, 0.029]
+  corner_exponent: 8          # flat clamp faces: 74% of the width within 0.05 mm of the crest (p = 4: 43%)
+  tab_centre_s_m: 0.0021      # on the centrifugal load line through the blade CG (hub stage: ideal_tab_centre_s_m)
+fea:
+  campbell_rpm_fractions: [0.0, 0.9, 1.0, 1.1]
+cad:
+  apply_trim_offset: true
+  export_rotor: true
+  export_stl: true

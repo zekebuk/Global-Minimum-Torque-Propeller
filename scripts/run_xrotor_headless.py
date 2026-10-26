@@ -7,10 +7,11 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+if str(ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(ROOT / "src"))
 
-from scripts.helpers import paths, xrotor_headless
+from prandtl_prop import config
+from prandtl_prop.external import xrotor
 
 
 def parse_args() -> argparse.Namespace:
@@ -28,17 +29,20 @@ def main() -> int:
     """Write the XROTOR status report, optionally executing XROTOR."""
 
     args = parse_args()
-    result = xrotor_headless.run_headless_xrotor(
+    result = xrotor.run_headless_xrotor(
         executable=args.xrotor_exe,
         command_file=args.command_file,
         timeout_s=args.timeout_s,
         execute=args.execute,
     )
     print("Headless XROTOR workflow complete")
-    print(f"  executable: {paths.relative(result.executable) if result.executable else 'not found'}")
-    print(f"  command file: {paths.relative(result.command_file) if result.command_file else 'not provided'}")
+    print(f"  executable: {config.relative(result.executable) if result.executable else 'not found'}")
+    print(f"  command file: {config.relative(result.command_file) if result.command_file else 'not provided'}")
     print(f"  return code: {result.returncode if result.returncode is not None else 'not run'}")
-    print(f"  {paths.relative(result.report_path)}")
+    print(f"  {config.relative(result.report_path)}")
+    if result.error:
+        print(f"  error: {result.error}", file=sys.stderr)
+        return 2
     return 0 if result.returncode in (None, 0) else result.returncode
 
 

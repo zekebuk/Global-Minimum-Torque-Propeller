@@ -1,5 +1,9 @@
 # Reproducibility Workflow
 
+> For the iterative design pipeline (design files, BEMT re-solve, CAD, beam screen, and planned
+> FEA/CFD stages) see [`iterative_workflow.md`](iterative_workflow.md). This page covers the
+> locked-result workflow.
+
 The clean public workflow uses locked geometry and BEMT postprocessing data copied into `data/`. Historical implementation attempts are preserved under `archive/` for traceability, but they are not part of the final reproducible thesis workflow.
 
 ```mermaid

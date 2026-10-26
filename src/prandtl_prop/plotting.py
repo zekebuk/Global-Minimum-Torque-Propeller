@@ -10,7 +10,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from prandtl_prop import bemt, config, geometry, metrics, structural, xrotor_io
+from prandtl_prop import config, geometry, locked_stations, metrics, structural
+from prandtl_prop.external import xrotor
 
 CASE_STYLES = {
     "MIL": {"color": "black", "linestyle": "-", "marker": "o", "hatch": ""},
@@ -45,7 +46,9 @@ def save_figure(fig: plt.Figure, output_dir: Path, stem: str) -> list[Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     outputs = [output_dir / f"{stem}.png", output_dir / f"{stem}.pdf"]
     for output in outputs:
-        fig.savefig(output, bbox_inches="tight")
+        # Drop timestamps so unchanged figures stay byte-identical across runs.
+        metadata = {"CreationDate": None} if output.suffix == ".pdf" else {}
+        fig.savefig(output, bbox_inches="tight", metadata=metadata)
     return outputs
 
 
@@ -60,12 +63,22 @@ def make_all_thesis_figures(output_dir: Path = config.OUTPUT_FIGURES_DIR) -> lis
     outputs.extend(plot_station_distribution("Cl", "Lift coefficient [-]", "fig_lift_coefficient_distribution", output_dir))
     outputs.extend(plot_station_distribution("Cd", "Drag coefficient [-]", "fig_drag_coefficient_distribution", output_dir))
     outputs.extend(plot_station_distribution("Re", "Reynolds number [-]", "fig_reynolds_distribution", output_dir))
-    outputs.extend(plot_station_distribution("qz_N_per_m", "Sectional thrust loading dT/dr [N/m]", "fig_sectional_thrust_distribution", output_dir))
-    outputs.extend(plot_station_distribution("torque_loading_Nm_per_m", "Sectional torque loading dQ/dr [N*m/m]", "fig_sectional_torque_distribution", output_dir))
-    outputs.extend(plot_station_distribution("cumulative_thrust_N", "Cumulative thrust [N]", "fig_cumulative_thrust_distribution", output_dir))
-    outputs.extend(plot_station_distribution("cumulative_torque_Nm", "Cumulative torque [N*m]", "fig_cumulative_torque_distribution", output_dir))
+    outputs.extend(
+        plot_station_distribution("qz_N_per_m", "Sectional thrust loading dT/dr [N/m]", "fig_sectional_thrust_distribution", output_dir)
+    )
+    outputs.extend(
+        plot_station_distribution(
+            "torque_loading_Nm_per_m", "Sectional torque loading dQ/dr [N*m/m]", "fig_sectional_torque_distribution", output_dir
+        )
+    )
+    outputs.extend(
+        plot_station_distribution("cumulative_thrust_N", "Cumulative thrust [N]", "fig_cumulative_thrust_distribution", output_dir)
+    )
+    outputs.extend(
+        plot_station_distribution("cumulative_torque_Nm", "Cumulative torque [N*m]", "fig_cumulative_torque_distribution", output_dir)
+    )
     outputs.extend(plot_summary_bar(output_dir))
-    outputs.extend(xrotor_io.copy_xrotor_figure(output_dir))
+    outputs.extend(xrotor.copy_xrotor_figure(output_dir))
     outputs.extend(structural.copy_structural_figures(output_dir))
     return outputs
 
@@ -95,13 +108,13 @@ def plot_geometry_distribution(column: str, ylabel: str, stem: str, output_dir: 
 def plot_station_distribution(column: str, ylabel: str, stem: str, output_dir: Path) -> list[Path]:
     """Plot one locked BEMT station distribution for MIL and GMT."""
 
-    rows_by_case = {"MIL": bemt.load_station_data("MIL"), "GMT": bemt.load_station_data("GMT")}
+    rows_by_case = {"MIL": locked_stations.load_station_data("MIL"), "GMT": locked_stations.load_station_data("GMT")}
     fig, ax = plt.subplots()
     for case, rows in rows_by_case.items():
         style = CASE_STYLES[case]
         ax.plot(
-            bemt.column_values(rows, "r_R"),
-            bemt.column_values(rows, column),
+            locked_stations.column_values(rows, "r_R"),
+            locked_stations.column_values(rows, column),
             label=case,
             color=style["color"],
             linestyle=style["linestyle"],
@@ -127,7 +140,7 @@ def plot_summary_bar(output_dir: Path) -> list[Path]:
         ("Torque [N*m]", [case.torque_nm for case in cases]),
         ("Power [W]", [case.power_w for case in cases]),
     ]
-    for ax, (ylabel, values) in zip(axes, series):
+    for ax, (ylabel, values) in zip(axes, series, strict=True):
         bars = ax.bar(
             x_positions,
             values,

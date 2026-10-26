@@ -1,0 +1,55 @@
+# Option C, folding variant: two PA6-CF30 blades, each on one hinge pin, in a machined center hub
+# (docs/hub.md). Thickness from optimize-molding with the folding clamp (smoke inputs).
+name: gmt_pa6_cf30_folding
+description: GMT blade, PA6-CF30, folding two-blade prop with center hub (one hinge pin per blade).
+operating_point:
+  diameter_in: 22.0
+  blade_count: 2
+  rpm: 4000.0
+  target_thrust_N: 35.0
+  rho_kg_m3: 1.225
+  mu_air_kg_m_s: 1.81e-5
+geometry:
+  stations_csv: data/geometry/final_gmt_geometry.csv
+  pitch_axis_chord_fraction: 0.25
+aero:
+  polar: {type: table, directory: data/xfoil_polars}
+  tip_loss: true
+  trim_to_target_thrust: true
+airfoils:
+  directory: data/airfoils
+  points_per_side: 80
+  substitutes: {}
+  thickness_scale: [[0.2, 1.0], [0.45, 1.0], [0.7, 1.0], [1.0, 1.0]]   # optimize-molding with the 45 mm plate-edge clamp: no thickening
+  trailing_edge_thickness_m: 0.0006
+structure:
+  material: {name: PA6-CF30 (conditioned), E_Pa: 12.75e+9, nu: 0.35, density_kg_m3: 1280.0, allowable_stress_Pa: 60.0e+6}
+molding:
+  min_trailing_edge_thickness_m: 0.0006
+  max_section_thickness_m: 0.009
+  operating_rpm_fractions: [0.9, 1.1]
+  frequency_margin: 0.10
+  pull_angle_deg: 0.0         # the mold opens along the rotor axis
+root:
+  enabled: true
+  tab_end: round              # semicircular end around the single hinge pin
+  bolt_radii_m: [0.029]       # hinge pin radius: the fold sweep clears the motor screws with >= 1.5 mm of core wall
+  bolt_diameter_m: 0.008      # bore for the 6 x 8 x 8 PTFE-lined bushing
+  tab_inner_radius_m: 0.015   # pin - tab_width / 2
+  tab_outer_radius_m: 0.045   # plate edge: pin + tab_width / 2 + 2 mm; the blade is clamped in flap inside it
+  tab_width_m: 0.028
+  tab_thickness_m: 0.0085
+  transition_sections: 3
+  corner_exponent: 8
+  tab_centre_s_m: 0.0017      # pin placed for zero running lag (hub stage: -ideal_pin_y_m)
+mold:
+  ejector_radii_m: [0.019, 0.040]   # on the tab, clear of the 8 mm bushing bore at r = 29 mm
+hub:
+  variant: folding
+  fold_angle_deg: 90
+fea:
+  campbell_rpm_fractions: [0.0, 0.9, 1.0, 1.1]
+cad:
+  apply_trim_offset: true
+  export_rotor: true
+  export_stl: true

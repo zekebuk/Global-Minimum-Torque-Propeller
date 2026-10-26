@@ -1,0 +1,48 @@
+# Option A: GMT blade for injection-molded PEEK-CF30 (docs/cfrp_injection_molding.md).
+# Thickness schedule from `prandtl optimize-molding designs/gmt.yaml --material peek-cf30 --max-thickness-mm 9`
+# (smoke inputs: re-run the optimiser once the real airfoils and polars are in data/, then update thickness_scale).
+name: gmt_peek_cf30
+description: GMT blade, PEEK-CF30 injection molded, stiff 2P-3P flap placement, clamped root tab.
+operating_point:
+  diameter_in: 22.0
+  blade_count: 2
+  rpm: 4000.0
+  target_thrust_N: 35.0
+  rho_kg_m3: 1.225
+  mu_air_kg_m_s: 1.81e-5
+geometry:
+  stations_csv: data/geometry/final_gmt_geometry.csv
+  pitch_axis_chord_fraction: 0.25
+aero:
+  polar: {type: table, directory: data/xfoil_polars}
+  tip_loss: true
+  trim_to_target_thrust: true
+airfoils:
+  directory: data/airfoils
+  points_per_side: 80
+  substitutes: {}
+  thickness_scale: [[0.2, 1.6068], [0.45, 1.147], [0.7, 1.0], [1.0, 1.0]]
+  trailing_edge_thickness_m: 0.0006
+structure:
+  material: {name: PEEK-CF30, E_Pa: 20.4e+9, nu: 0.40, density_kg_m3: 1410.0, allowable_stress_Pa: 104.0e+6}
+molding:
+  min_trailing_edge_thickness_m: 0.0006
+  max_section_thickness_m: 0.009
+  operating_rpm_fractions: [0.9, 1.1]
+  frequency_margin: 0.10
+root:
+  enabled: true
+  tab_inner_radius_m: 0.014
+  tab_outer_radius_m: 0.034
+  tab_width_m: 0.028
+  tab_thickness_m: 0.0085
+  bolt_diameter_m: 0.0053
+  bolt_radii_m: [0.020, 0.029]
+  corner_exponent: 8          # flat clamp faces: 74% of the width within 0.05 mm of the crest (p = 4: 43%)
+  tab_centre_s_m: 0.0021      # on the centrifugal load line through the blade CG (hub stage: ideal_tab_centre_s_m)
+fea:
+  campbell_rpm_fractions: [0.0, 0.9, 1.0, 1.1]
+cad:
+  apply_trim_offset: true
+  export_rotor: true
+  export_stl: true

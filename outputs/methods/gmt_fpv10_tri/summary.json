@@ -1,0 +1,253 @@
+{
+ "hover": {
+  "rpm": 7500.0,
+  "bemt": {
+   "thrust_N": 3.5441655246736454,
+   "torque_Nm": 0.044766081296448476,
+   "figure_of_merit": 0.538604943475825
+  },
+  "fvw": {
+   "thrust_N": 3.2307922570284644,
+   "torque_Nm": 0.04202748671877796,
+   "figure_of_merit": 0.49931952606355823
+  }
+ },
+ "edgewise": {
+  "v_m_s": 10.0,
+  "tilt_deg": 6.7,
+  "rpm": 6798.0,
+  "bemt": {
+   "thrust_N": 3.5578060108471314,
+   "torque_Nm": 0.03672679997152996,
+   "peak_cl_outer": 0.9325859704274101
+  },
+  "fvw": {
+   "thrust_N": 3.1910899393109076,
+   "torque_Nm": 0.034331471455798394,
+   "peak_cl_outer": 0.6430621096743826
+  }
+ },
+ "aeroelastic": {
+  "hover": {
+   "thrust_N": 3.544165524673646,
+   "tip_elastic_twist_deg": 0.14700070629258502,
+   "rigid_power_W": 35.15919803273151,
+   "flown_power_W": 34.92319724565146,
+   "delta_power_pct": -0.6712348411938907
+  },
+  "full_throttle": {
+   "thrust_N": 14.18,
+   "tip_elastic_twist_deg": 0.6095596964553087,
+   "rigid_power_W": 281.37292909203904,
+   "flown_power_W": 273.92481213878625,
+   "delta_power_pct": -2.647062379912346
+  },
+  "fatigue_hover": {
+   "location": "tension fibre",
+   "r_m": 0.025400000000000002,
+   "stress_mean_MPa": 10.306724959089427,
+   "stress_amplitude_MPa": 0.09880917821653094,
+   "goodman_utilisation": 0.13377452089944442,
+   "root_flap_moment_mean_Nm": 0.016922436479519472,
+   "root_flap_moment_amplitude_Nm": 0.0013364769083998446,
+   "fatigue_margin": 6.475265045065492,
+   "steady_bemt_root_stress_max_MPa": 10.496763737220284
+  },
+  "fatigue_edgewise": {
+   "location": "tension fibre",
+   "r_m": 0.025400000000000002,
+   "stress_mean_MPa": 9.037193784707743,
+   "stress_amplitude_MPa": 2.7564123280783317,
+   "goodman_utilisation": 0.2507855387127634,
+   "root_flap_moment_mean_Nm": 0.006215058143441137,
+   "root_flap_moment_amplitude_Nm": 0.03613766707782044,
+   "fatigue_margin": 2.987470749441209,
+   "steady_bemt_root_stress_max_MPa": 8.623731292843878
+  }
+ },
+ "edgewise_noise": {
+  "observer_distance_m": 1.27,
+  "bpf_hz": 339.9,
+  "blade_thrust_mean_N": 1.0636210597906828,
+  "blade_thrust_harmonics_N": [
+   0.5517143651274339,
+   0.12402582502680808,
+   0.07620812931029826,
+   0.03439437640346293,
+   0.022944642955632755,
+   0.011910770798081553,
+   0.012689423574214294,
+   0.015425798111969308
+  ],
+  "observers": {
+   "in plane, ahead": {
+    "steady_bpf_dB": [
+     45.7,
+     14.5,
+     -15.0,
+     -43.8,
+     -72.3,
+     -84.2,
+     -86.0,
+     -87.9
+    ],
+    "unsteady_bpf_dB": [
+     58.0,
+     37.4,
+     38.4,
+     34.9,
+     39.1,
+     34.5,
+     28.0,
+     21.1
+    ],
+    "steady_oaspl_dB": 45.7,
+    "unsteady_oaspl_dB": 58.2
+   },
+   "in plane, advancing side": {
+    "steady_bpf_dB": [
+     45.7,
+     14.5,
+     -15.0,
+     -43.8,
+     -72.3,
+     -84.2,
+     -86.0,
+     -87.9
+    ],
+    "unsteady_bpf_dB": [
+     50.5,
+     32.4,
+     21.4,
+     16.3,
+     23.9,
+     25.2,
+     20.4,
+     18.0
+    ],
+    "steady_oaspl_dB": 45.7,
+    "unsteady_oaspl_dB": 50.6
+   },
+   "in plane, retreating side": {
+    "steady_bpf_dB": [
+     45.7,
+     14.5,
+     -15.0,
+     -43.8,
+     -72.3,
+     -84.2,
+     -86.0,
+     -87.9
+    ],
+    "unsteady_bpf_dB": [
+     49.8,
+     32.8,
+     33.7,
+     29.0,
+     29.0,
+     21.6,
+     15.5,
+     25.5
+    ],
+    "steady_oaspl_dB": 45.7,
+    "unsteady_oaspl_dB": 50.1
+   },
+   "in plane, behind": {
+    "steady_bpf_dB": [
+     45.7,
+     14.5,
+     -15.0,
+     -43.8,
+     -72.3,
+     -84.2,
+     -86.0,
+     -87.9
+    ],
+    "unsteady_bpf_dB": [
+     44.6,
+     30.0,
+     36.7,
+     37.0,
+     28.9,
+     34.5,
+     33.8,
+     27.8
+    ],
+    "steady_oaspl_dB": 45.7,
+    "unsteady_oaspl_dB": 46.7
+   },
+   "45 deg below, ahead": {
+    "steady_bpf_dB": [
+     43.4,
+     4.5,
+     -33.6,
+     -69.6,
+     -86.8,
+     -80.4,
+     -77.5,
+     -79.6
+    ],
+    "unsteady_bpf_dB": [
+     69.9,
+     60.6,
+     60.1,
+     58.7,
+     54.7,
+     49.8,
+     54.3,
+     54.3
+    ],
+    "steady_oaspl_dB": 43.4,
+    "unsteady_oaspl_dB": 71.4
+   },
+   "45 deg below, advancing side": {
+    "steady_bpf_dB": [
+     43.4,
+     4.5,
+     -33.6,
+     -69.6,
+     -86.8,
+     -80.4,
+     -77.5,
+     -79.6
+    ],
+    "unsteady_bpf_dB": [
+     66.5,
+     60.6,
+     57.4,
+     57.7,
+     57.4,
+     57.8,
+     51.1,
+     50.8
+    ],
+    "steady_oaspl_dB": 43.4,
+    "unsteady_oaspl_dB": 69.1
+   },
+   "on the axis, below": {
+    "steady_bpf_dB": [
+     -146.0,
+     -146.0,
+     -146.0,
+     -146.0,
+     -146.0,
+     -146.0,
+     -146.0,
+     -146.0
+    ],
+    "unsteady_bpf_dB": [
+     70.0,
+     59.9,
+     64.7,
+     32.4,
+     56.4,
+     50.2,
+     55.9,
+     54.2
+    ],
+    "steady_oaspl_dB": -137.0,
+    "unsteady_oaspl_dB": 71.8
+   }
+  }
+ }
+}
