@@ -219,6 +219,8 @@ header and `px4_params.txt`. Load those into the sim, fly, and log; the next ite
 
 ### Result on the 10″ GMT tri (reference missions, equal weights, motor Kv 719 fixed)
 
+> **Superseded (see docs/efficiency.md).** This search had no stress check. With the full-throttle root/mid-span stress now enforced, the GMT f = 0.9, μ = 0 twist below is structurally infeasible; the chord + twist family with a design Cl cap (f = 0.8, Cl ≤ 0.6) is the current selection (−16.8 % mission energy on the MN3110 KV780).
+
 ![Candidates](images/sitl_candidates.png)
 
 There are 27 candidates:
