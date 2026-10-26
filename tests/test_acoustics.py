@@ -179,3 +179,26 @@ def test_phi_smoothing_removes_the_in_plane_null_only() -> None:
     assert math.degrees(smooth_phi(np.array([0.0]))[0]) == pytest.approx(2.5)
     assert math.degrees(smooth_phi(np.array([math.pi]))[0]) == pytest.approx(177.5)
     assert smooth_phi(np.array([1.0]))[0] == pytest.approx(1.0)
+
+
+def test_fwh_unsteady_history_reduces_to_steady_and_matches_on_axis_dipole() -> None:
+    """A constant load history equals the steady source. A B/rev axial load seen from the axis
+    radiates the exact compact-dipole tone: B F cos(g)/(4 pi r) sqrt((B Omega/c0)^2 + 1/r^2) (r Mdot_r = c0 M^2, M_r = 0 there)."""
+
+    B, re, omega, c0, S, F = 3, 0.1, 7000 * math.pi / 30, 343.0, 5.0, 0.2
+    pos = np.array([[re, 0.0, 0.0]])
+    steady_force = np.array([[0.0, 0.01, -0.9]])
+    obs = np.array([[3.0, 1.0, -2.0], [0.0, 0.0, -S]])
+    kw = dict(omega_rad_s=omega, blade_count=B, c0=c0, samples_per_rev=720)
+    p0 = fwh.pressure_history(fwh.RotorSources(compact_positions_m=pos, compact_forces_N=steady_force), obs, **kw)["loading"]
+    history = np.repeat(steady_force[None], 36, axis=0)
+    p1 = fwh.pressure_history(fwh.RotorSources(compact_positions_m=pos, compact_force_history_N=history), obs, **kw)["loading"]
+    assert np.allclose(p1, p0, atol=1e-9 * np.abs(p0).max())
+
+    psi = np.arange(36) * 2 * math.pi / 36
+    history = np.zeros((36, 1, 3))
+    history[:, 0, 2] = -F * np.cos(B * psi)
+    p = fwh.pressure_history(fwh.RotorSources(compact_positions_m=pos, compact_force_history_N=history), obs[1:], **kw)["loading"]
+    r = math.hypot(S, re)
+    exact = B * F * (S / r) / (4 * math.pi * r) * math.sqrt((B * omega / c0) ** 2 + 1 / r**2) / math.sqrt(2)
+    assert fwh.harmonics(p, B, 1)[0, 0] == pytest.approx(exact, rel=1e-3)

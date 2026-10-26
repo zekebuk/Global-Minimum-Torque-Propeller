@@ -15,7 +15,12 @@ modelled). With r the source-to-observer distance, r_hat its unit vector, M = v 
   with L_r = L . r_hat, L_M = L . M.
 
 Rigid rotation makes every source-time derivative analytic: v = Omega x X, v_dot = Omega x v,
-n_dot = Omega x n, and a load fixed in the blade frame has L_dot = Omega x L. The integrals are
+n_dot = Omega x n, and a load fixed in the blade frame has L_dot = Omega x L. An unsteady compact
+load (edgewise flight, blade-vortex interaction: ``compact_force_history_N``, the blade-frame force
+over one revolution) adds its own rate, L_dot = Omega x L + R(psi) dL_b/dtau, with dL_b/dtau from
+the Fourier series of the periodic history. Blade k is still blade 0 shifted by k/B of a revolution
+in periodic flight with the observer fixed to the hub (convection by the free stream, Mach ~ 0.03 at
+10 m/s, is neglected). The integrals are
 evaluated **source-time dominant**: each source is sampled uniformly over one revolution, its
 reception time t = tau + r(tau)/c is computed, and its signal is interpolated (periodically) onto
 a uniform observer-time grid before summing. In hover blade k is blade 0 delayed by k/B of a
@@ -40,6 +45,7 @@ class RotorSources:
 
     compact_positions_m: np.ndarray | None = None
     compact_forces_N: np.ndarray | None = None
+    compact_force_history_N: np.ndarray | None = None  # (k, n, 3) blade-frame forces on the fluid over one revolution (unsteady)
     panel_centroids_m: np.ndarray | None = None
     panel_normals: np.ndarray | None = None
     panel_areas_m2: np.ndarray | None = None
@@ -88,10 +94,10 @@ def _thickness(X, n, area, omega, c0, rho0, r, rhat):
     return (near + far) * area / (4.0 * math.pi)
 
 
-def _loading(X, L, omega, c0, r, rhat):
+def _loading(X, L, omega, c0, r, rhat, Ldot=None):
     v = _cross_z(omega, X)
     a = _cross_z(omega, v)
-    Ldot = _cross_z(omega, L)
+    Ldot = _cross_z(omega, L) if Ldot is None else Ldot
     M = v / c0
     Mr = (M * rhat).sum(-1)
     Mdot_r = (a / c0 * rhat).sum(-1)
@@ -149,9 +155,14 @@ def pressure_history(
     thick = np.zeros((len(observers), samples_per_rev))
     load = np.zeros((len(observers), samples_per_rev))
 
+    history = None
+    if sources.compact_force_history_N is not None:
+        history, history_rate = _periodic_resample(np.asarray(sources.compact_force_history_N, float), samples_per_rev, omega_rad_s)
+
     def contributions(kind: str):
         if kind == "compact" and sources.compact_positions_m is not None:
-            return sources.compact_positions_m, sources.compact_forces_N, None, None
+            forces = sources.compact_forces_N if sources.compact_forces_N is not None else history[0]
+            return sources.compact_positions_m, forces, None, None
         if kind == "panels" and sources.panel_centroids_m is not None:
             loads = None
             if sources.panel_pressures_Pa is not None:
@@ -168,11 +179,16 @@ def pressure_history(
             sl = slice(start, start + chunk)
             X = _rotate_z(positions[sl], angles)
             F = _rotate_z(forces[sl], angles) if forces is not None else None
+            Fdot = None
+            if kind == "compact" and history is not None:
+                # unsteady blade loads: L(tau) = R(psi) L_b(tau), L_dot = Omega x L + R(psi) dL_b/dtau
+                F = _rotate_each(history[:, sl], angles)
+                Fdot = _cross_z(omega_rad_s, F) + _rotate_each(history_rate[:, sl], angles)
             N = _rotate_z(normals[sl], angles) if normals is not None else None
             for i, obs in enumerate(observers):
                 r, rhat, t_rec = _received(obs, X, tau, c0)
                 if F is not None:
-                    load[i] += _to_observer_grid(t_rec, _loading(X, F, omega_rad_s, c0, r, rhat), period, samples_per_rev)
+                    load[i] += _to_observer_grid(t_rec, _loading(X, F, omega_rad_s, c0, r, rhat, Fdot), period, samples_per_rev)
                 if N is not None and kind == "panels":
                     p = _thickness(X, N, areas[sl][None, :], omega_rad_s, c0, rho0, r, rhat)
                     thick[i] += _to_observer_grid(t_rec, p, period, samples_per_rev)
@@ -182,6 +198,30 @@ def pressure_history(
     load = sum(np.roll(load, -k * shift, axis=1) for k in range(blade_count))
     t = np.arange(samples_per_rev) * period / samples_per_rev
     return {"t": t, "thickness": thick, "loading": load}
+
+
+def _rotate_each(vectors: np.ndarray, angles: np.ndarray) -> np.ndarray:
+    """vectors (k, n, 3), each time slice k rotated about z by angles[k]."""
+
+    c, s = np.cos(angles)[:, None], np.sin(angles)[:, None]
+    x, y = vectors[..., 0], vectors[..., 1]
+    return np.stack([c * x - s * y, s * x + c * y, vectors[..., 2]], axis=-1)
+
+
+def _periodic_resample(history: np.ndarray, samples: int, omega: float) -> tuple[np.ndarray, np.ndarray]:
+    """Fourier-resample a one-revolution history (k, n, 3) to ``samples`` points and differentiate it in time."""
+
+    k = history.shape[0]
+    spectrum = np.fft.rfft(history, axis=0)
+    padded = np.zeros((samples // 2 + 1,) + history.shape[1:], dtype=complex)
+    m = min(len(spectrum), len(padded))
+    padded[:m] = spectrum[:m]
+    if k % 2 == 0 and m == len(spectrum):
+        padded[m - 1] *= 0.5  # split the Nyquist bin
+    values = np.fft.irfft(padded, n=samples, axis=0) * samples / k
+    harmonic = np.arange(len(padded))[:, None, None]
+    rate = np.fft.irfft(padded * 1j * harmonic * omega, n=samples, axis=0) * samples / k
+    return values, rate
 
 
 def harmonics(p: np.ndarray, blade_count: int, count: int) -> np.ndarray:

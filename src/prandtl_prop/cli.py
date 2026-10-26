@@ -221,6 +221,19 @@ def build_parser() -> argparse.ArgumentParser:
     audit.add_argument("--set-file", dest="override_files", action="append", default=[], type=Path, metavar="PATH")
     audit.add_argument("--runs-dir", type=Path, default=config.RUNS_DIR)
 
+    polars = commands.add_parser(
+        "section-polars", help="XFOIL polars (transition, molded sections) and their effect on the rotor (aero/reconcile.py)."
+    )
+    polars.add_argument("design", type=Path)
+    polars.add_argument(
+        "--settings", default="free_ncrit9,free_ncrit7,free_ncrit4,tripped_5pct", help="Comma-separated transition settings."
+    )
+    polars.add_argument("--cfd", default=None, help="3D CFD reference as thrust_N,power_W,rpm (e.g. 3.543,42.89,7400).")
+    polars.add_argument("--output-dir", type=Path, default=None, help="Default: data/xfoil_polars/generated/<design name>.")
+    polars.add_argument("--set", dest="overrides", action="append", default=[], metavar="KEY=VALUE")
+    polars.add_argument("--set-file", dest="override_files", action="append", default=[], type=Path, metavar="PATH")
+    polars.add_argument("--runs-dir", type=Path, default=config.RUNS_DIR)
+
     loop = commands.add_parser("loop", help="Iterate BEMT trim, CAD, CFD, and BEMT calibration until CFD meets target thrust.")
     loop.add_argument("design", type=Path, help="Design YAML file.")
     loop.add_argument("--iterations", type=int, default=4, help="Maximum CFD runs.")
@@ -248,6 +261,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _cost(args, store, overrides)
     if args.command == "noise-cfd":
         return _noise_cfd(args, overrides)
+    if args.command == "section-polars":
+        return _section_polars(args, store, overrides)
     if args.command == "sitl-audit":
         return _sitl_audit(args, store, overrides)
     if args.command == "sitl-motors":
@@ -340,6 +355,23 @@ def _sitl(args: argparse.Namespace, store: RunStore, overrides: list[str]) -> in
         )
     except (FileNotFoundError, ValueError, ImportError) as exc:
         print(f"{args.command} failed: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _section_polars(args: argparse.Namespace, store: RunStore, overrides: list[str]) -> int:
+    from prandtl_prop.aero.reconcile import reconcile
+
+    design = load_design(args.design, overrides)
+    cfd = None
+    if args.cfd:
+        t, p, rpm = (float(v) for v in args.cfd.split(","))
+        cfd = {"thrust_N": t, "power_W": p, "rpm": rpm}
+    output = args.output_dir or config.PROJECT_ROOT / "data" / "xfoil_polars" / "generated" / design.name
+    try:
+        reconcile(design, store, output, [s.strip() for s in args.settings.split(",") if s.strip()], cfd)
+    except (FileNotFoundError, ValueError, KeyError) as exc:
+        print(f"section-polars failed: {exc}", file=sys.stderr)
         return 1
     return 0
 
