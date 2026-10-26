@@ -150,7 +150,9 @@ def fly(m: Mission, vehicle: Vehicle, sample_rate_hz: float = 50.0, attitude_ban
         force[k] = state
     thrust = np.linalg.norm(force, axis=1)
     if np.any(force[:, 2] > -0.1 * vehicle.mass_kg * G):
-        raise ValueError(f"mission {m.name!r} asks for less than 0.1 g of upward thrust (inverted flight is not modelled); soften its segments")
+        raise ValueError(
+            f"mission {m.name!r} asks for less than 0.1 g of upward thrust (inverted flight is not modelled); soften its segments"
+        )
     z_b = -force / thrust[:, None]
     heading = np.column_stack([np.cos(yaw_s), np.sin(yaw_s), np.zeros_like(yaw_s)])
     y_b = np.cross(z_b, heading)

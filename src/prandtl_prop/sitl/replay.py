@@ -139,9 +139,7 @@ def replay(
             energy += float(battery.open_circuit_V(soc)) * i_bus * dt[k]
             soc -= i_bus * dt[k] / (battery.capacity_Ah * 3600.0)
     battery_limited = ~np.isfinite(v_bus)
-    saturated = (
-        np.any(duty > max_throttle, axis=1) | unmet | battery_limited | np.any(coast_limited, axis=1)
-    )
+    saturated = np.any(duty > max_throttle, axis=1) | unmet | battery_limited | np.any(coast_limited, axis=1)
     time = float(dt.sum())
     vrs = np.any(loads["vrs"], axis=1)
     finite = np.isfinite(bus_current)
@@ -192,4 +190,9 @@ def duty_histogram(result: dict[str, Any], v_axial_edges=None, v_edge_edges=None
     power = np.nan_to_num(s["battery_power_W"])
     time, _, _ = np.histogram2d(va, ve, bins=[v_axial_edges, v_edge_edges], weights=dt)
     energy, _, _ = np.histogram2d(va, ve, bins=[v_axial_edges, v_edge_edges], weights=power * dt)
-    return {"v_axial_edges": v_axial_edges, "v_edge_edges": v_edge_edges, "time_fraction": time / dt.sum(), "energy_fraction": energy / energy.sum()}
+    return {
+        "v_axial_edges": v_axial_edges,
+        "v_edge_edges": v_edge_edges,
+        "time_fraction": time / dt.sum(),
+        "energy_fraction": energy / energy.sum(),
+    }

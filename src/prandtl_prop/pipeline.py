@@ -25,7 +25,23 @@ from prandtl_prop.cad.sections import BladeSection, build_sections, section_tabl
 from prandtl_prop.design import DesignCase, resolve_path
 from prandtl_prop.runs import RunStore, StageRun, stage_key
 
-STAGES = ("aero", "sections", "dfm", "cad", "beam", "fea", "modal", "mold", "hub", "cfd", "envelope", "mission", "multirotor", "acoustics", "sitl")
+STAGES = (
+    "aero",
+    "sections",
+    "dfm",
+    "cad",
+    "beam",
+    "fea",
+    "modal",
+    "mold",
+    "hub",
+    "cfd",
+    "envelope",
+    "mission",
+    "multirotor",
+    "acoustics",
+    "sitl",
+)
 DEFAULT_STAGES = ("aero", "sections", "dfm", "cad", "beam")  # seconds; fea, modal, and cfd take minutes to hours
 STAGE_UPSTREAM = {
     "aero": (),
@@ -946,14 +962,16 @@ def _stage_sitl(design: DesignCase, run: StageRun, upstream: dict[str, StageRun]
         "motor_time_constant_ms": fit["motor_time_constant_ms"],
     }
     warnings = []
-    for result, weight in zip(out["results"], out["weights"], strict=True):
+    for result in out["results"]:
         name = result["mission"]
         for key in ("energy_Wh", "mean_battery_power_W", "saturated_fraction", "duty_p99", "vrs_fraction", "peak_motor_current_A"):
             metrics[f"{name}_{key}"] = result[key]
         if result["saturated_fraction"] > design.sitl.allowed_saturation_fraction:
             warnings.append(f"{name}: saturated {100 * result['saturated_fraction']:.2f} % of the time")
         if result["over_current_fraction"] > 0:
-            warnings.append(f"{name}: above the {ctx['motor'].max_current_A:.0f} A motor limit {100 * result['over_current_fraction']:.2f} % of the time")
+            warnings.append(
+                f"{name}: above the {ctx['motor'].max_current_A:.0f} A motor limit {100 * result['over_current_fraction']:.2f} % of the time"
+            )
     metrics["weighted_energy_Wh"] = float(sum(w * r["energy_Wh"] for w, r in zip(out["weights"], out["results"], strict=True)))
     return metrics, warnings
 

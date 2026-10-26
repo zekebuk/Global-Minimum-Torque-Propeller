@@ -65,7 +65,9 @@ def write_truth_csv(result: dict[str, Any], trace, path: Path) -> Path:
     n = s["rpm"].shape[1]
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["t_s", "vx_b", "vy_b", "vz_b", "p", "q", "r", "v_bus", *(f"rpm_{i}" for i in range(n)), *(f"duty_{i}" for i in range(n))])
+        writer.writerow(
+            ["t_s", "vx_b", "vy_b", "vz_b", "p", "q", "r", "v_bus", *(f"rpm_{i}" for i in range(n)), *(f"duty_{i}" for i in range(n))]
+        )
         for k in range(len(trace.t_s)):
             writer.writerow(
                 [
@@ -83,7 +85,9 @@ def write_truth_csv(result: dict[str, Any], trace, path: Path) -> Path:
 def export(design, ctx: dict[str, Any], out: Path) -> dict[str, Any]:
     """Rotor tables (JSON + C++), the model card, PX4 parameters, and the reference-mission replays."""
 
-    table = tb.build_table(design.name, ctx["stations"], ctx["op"], ctx["polar"], design.sitl, tip_loss=design.aero.tip_loss, corrections=ctx["corrections"])
+    table = tb.build_table(
+        design.name, ctx["stations"], ctx["op"], ctx["polar"], design.sitl, tip_loss=design.aero.tip_loss, corrections=ctx["corrections"]
+    )
     table.save(out / "rotor_table.json")
     tb.write_cpp_tables(table, out / "rotor_tables.hpp")
     shutil.copyfile(HEADER_SOURCE, out / "prandtl_rotor.hpp")
@@ -99,7 +103,11 @@ def export(design, ctx: dict[str, Any], out: Path) -> dict[str, Any]:
         "design": design.name,
         "rotor_table": "rotor_table.json",
         "motor": {**motor.__dict__},
-        "battery": {**battery.__dict__, "energy_Wh": battery.energy_Wh, "ocv_per_cell": {"soc": mo.LIPO_SOC.tolist(), "V": mo.LIPO_OCV.tolist()}},
+        "battery": {
+            **battery.__dict__,
+            "energy_Wh": battery.energy_Wh,
+            "ocv_per_cell": {"soc": mo.LIPO_SOC.tolist(), "V": mo.LIPO_OCV.tolist()},
+        },
         "vehicle": {
             "mass_kg": vehicle.mass_kg,
             "inertia_kg_m2": vehicle.inertia_kg_m2.tolist(),

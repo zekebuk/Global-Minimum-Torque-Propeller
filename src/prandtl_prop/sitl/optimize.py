@@ -48,7 +48,9 @@ def candidates(design, stations: BladeStations, op: OperatingPoint, polar, hover
                 row = {"label": f"GMT f={f:g} mu={mu:g}" + (f" c x{scale:g}" if scale != 1.0 else ""), "chord_scale": scale}
                 row.update({"family": "gmt", "design_rpm_fraction": f, "bending_weight": mu})
                 try:
-                    solution = gmt.design(planform, point, polar, hover_thrust_N, cl_limit=design.gmt.cl_limit, bending_weight=mu, tip_loss=tip_loss)
+                    solution = gmt.design(
+                        planform, point, polar, hover_thrust_N, cl_limit=design.gmt.cl_limit, bending_weight=mu, tip_loss=tip_loss
+                    )
                 except ValueError as exc:
                     out.append({**row, "stations": None, "reason": str(exc)})
                     continue
@@ -82,14 +84,25 @@ def evaluate(
     battery: Battery,
 ) -> dict[str, Any]:
     spec = design.sitl
-    table = tb.build_table(candidate["label"], candidate["stations"], op, polar, spec, tip_loss=design.aero.tip_loss, corrections=corrections)
+    table = tb.build_table(
+        candidate["label"], candidate["stations"], op, polar, spec, tip_loss=design.aero.tip_loss, corrections=corrections
+    )
     rotor = replace(motor, inertia_kg_m2=motor.inertia_kg_m2 + (candidate["chord_scale"] ** 2 - 1.0) * spec_prop_inertia(design, motor))
     results = [replay(t, vehicle, table, rotor, battery, max_throttle=spec.max_throttle) for t in traces]
     row = {k: v for k, v in candidate.items() if k != "stations"}
     row["weighted_energy_Wh"] = float(sum(w * r["energy_Wh"] for w, r in zip(weights, results, strict=True)))
     for r in results:
         name = r["mission"]
-        for key in ("energy_Wh", "mean_battery_power_W", "saturated_fraction", "over_current_fraction", "max_duty", "duty_p99", "peak_motor_current_A", "vrs_fraction"):
+        for key in (
+            "energy_Wh",
+            "mean_battery_power_W",
+            "saturated_fraction",
+            "over_current_fraction",
+            "max_duty",
+            "duty_p99",
+            "peak_motor_current_A",
+            "vrs_fraction",
+        ):
             row[f"{name}_{key}"] = r[key]
     row["worst_limit_fraction"] = max(r["saturated_fraction"] + r["over_current_fraction"] for r in results)
     hover = table.evaluate(op.rpm, 0.0, 0.0)
@@ -127,15 +140,25 @@ def plot(rows: list[dict[str, Any]], best: dict[str, Any] | None, missions: list
     ax = axes[0]
     palette = ["#86b6ef", "#2a78d6", "#1c5cab", "#0d366b", "#0b0b0b"]
     for color, mu in zip(palette, sorted({r["bending_weight"] for r in gmt_rows}), strict=False):
-        pts = sorted((r for r in gmt_rows if r["bending_weight"] == mu and r.get("chord_scale", 1.0) == 1.0), key=lambda r: r["design_rpm_fraction"])
+        pts = sorted(
+            (r for r in gmt_rows if r["bending_weight"] == mu and r.get("chord_scale", 1.0) == 1.0), key=lambda r: r["design_rpm_fraction"]
+        )
         if pts:
-            ax.plot([r["design_rpm_fraction"] for r in pts], [r["delta_energy_vs_built_pct"] for r in pts], marker="o", color=color, label=f"GMT mu = {mu:g}")
+            ax.plot(
+                [r["design_rpm_fraction"] for r in pts],
+                [r["delta_energy_vs_built_pct"] for r in pts],
+                marker="o",
+                color=color,
+                label=f"GMT mu = {mu:g}",
+            )
             for r in pts:
                 if not r["feasible"]:
                     ax.plot(r["design_rpm_fraction"], r["delta_energy_vs_built_pct"], marker="x", color="#d6336c", markersize=10)
     for r in rows:
         if r["family"] in ("mil", "helix") and "weighted_energy_Wh" in r:
-            ax.axhline(r["delta_energy_vs_built_pct"], color="#eb6834" if r["family"] == "mil" else "#1baf7a", linestyle="--", label=r["label"])
+            ax.axhline(
+                r["delta_energy_vs_built_pct"], color="#eb6834" if r["family"] == "mil" else "#1baf7a", linestyle="--", label=r["label"]
+            )
     ax.axhline(0.0, color="#52514e", linewidth=0.8)
     ax.set_xlabel("GMT design rpm / hover rpm of the design as built")
     ax.set_ylabel("mission-weighted battery energy vs as built (%)")

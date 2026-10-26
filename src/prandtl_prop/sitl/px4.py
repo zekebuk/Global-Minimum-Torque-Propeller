@@ -64,7 +64,10 @@ def fit_parameters(motor: Motor, table: RotorTable, battery: Battery, vehicle: v
     km = float(hover["torque_Nm"] / hover["thrust_N"])
     omega = hover_rpm * math.pi / 30.0
     d = 0.01 * omega
-    dq = float((table.evaluate((omega + d) * 30 / math.pi, 0, 0)["torque_Nm"] - table.evaluate((omega - d) * 30 / math.pi, 0, 0)["torque_Nm"]) / (2 * d))
+    dq = float(
+        (table.evaluate((omega + d) * 30 / math.pi, 0, 0)["torque_Nm"] - table.evaluate((omega - d) * 30 / math.pi, 0, 0)["torque_Nm"])
+        / (2 * d)
+    )
     tau = motor.inertia_kg_m2 / (motor.kt**2 / motor.resistance_ohm + dq)
     params: dict[str, float | int] = {"CA_AIRFRAME": 0, "CA_ROTOR_COUNT": vehicle.rotor_count}
     for i, ((x, y_), spin) in enumerate(zip(vehicle.positions_m, vehicle.spins, strict=True)):
