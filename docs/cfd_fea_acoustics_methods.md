@@ -135,8 +135,8 @@ thrust by 0.2 %).
 
 | Case | Quantity | BEMT | Free wake | Difference |
 | --- | --- | --- | --- | --- |
-| Hover, 7400 rpm | thrust | 3.54 N | 3.22 N | -9 % |
-| | torque | | | -5 % (FM 0.50 vs 0.54) |
+| Hover, 7500 rpm | thrust | 3.54 N | 3.23 N | -9 % |
+| | torque | 0.0448 N m | 0.0420 N m | -6 % (FM 0.50 vs 0.54) |
 | Edgewise 10 m/s, 6798 rpm | thrust | 3.56 N | 3.19 N | -10 % |
 | | torque | 0.0367 N m | 0.0343 N m | -7 % |
 | | peak outer-disk Cl | 0.93 | 0.64 | BEMT conservative |
@@ -175,10 +175,10 @@ rather than the stress scaled with the flap moment.
 
 | Quantity | Hover | Full throttle | Edgewise 10 m/s |
 | --- | --- | --- | --- |
-| elastic wash-in at the tip | +0.15 deg | +0.61 deg | |
-| rigid model's power error | small | overstates power by 2.65 % | |
+| elastic wash-in at the tip (trimmed to 3.54 N / 14.18 N) | +0.15 deg | +0.61 deg | |
+| rigid model's power error at the same thrust | overstates by 0.7 % | overstates by 2.6 % | |
 | 1/rev blade thrust (first harmonic / mean) | | | 0.55 N / 1.06 N (52 %) |
-| root stress, mean / alternating | 10.2 / 0.1 MPa | | 9.0 / 2.8 MPa |
+| root stress, mean / alternating | 10.3 / 0.1 MPa | | 9.0 / 2.8 MPa |
 | Goodman utilisation (with SF 1.5) | 0.13 | | 0.25 (margin +199 %) |
 
 Lift acts at the quarter chord, ahead of the section centroid, so the blade twists nose-up
