@@ -209,3 +209,87 @@ def histogram_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
                     }
                 )
     return rows
+
+
+def _write_rows(path: Path, rows: list[dict[str, Any]]) -> Path:
+    keys: list[str] = []
+    for row in rows:
+        keys += [k for k in row if k not in keys]
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=keys)
+        writer.writeheader()
+        writer.writerows(rows)
+    return path
+
+
+def _write_stations(path: Path, stations, radius_m: float) -> Path:
+    rows = [
+        {"r_R": r / radius_m, "dr_m": dr, "chord_m": c, "twist_deg": b, "airfoil": a}
+        for r, dr, c, b, a in zip(stations.r_m, stations.dr_m, stations.chord_m, stations.twist_deg, stations.airfoil, strict=True)
+    ]
+    return _write_rows(path, rows)
+
+
+def mission_study(design, store, logs: list[Path], weights: list[float] | None, output_dir: Path, *, optimize: bool, echo=print) -> dict[str, Any]:
+    """Replay logs (or the reference missions) with the design as built; with ``optimize``, rank the GMT twist family on them."""
+
+    from prandtl_prop.pipeline import run_design
+    from prandtl_prop.sitl import optimize as opt
+
+    outcomes = run_design(design, ["sitl"], store=store)
+    ctx = context(design, outcomes["aero"].run, outcomes["multirotor"].run)
+    table = tb.RotorTable.load(outcomes["sitl"].run.output("rotor_table.json"))
+    vehicle, motor, battery = ctx["vehicle"], ctx["motor"], ctx["battery"]
+    if logs:
+        traces = [px4.read_log(path, table, vehicle, motor) for path in logs]
+        weights = weights or [1.0] * len(traces)
+    else:
+        traces, default_weights = reference_traces(design, vehicle)
+        weights = weights or default_weights
+    if len(weights) != len(traces):
+        raise ValueError(f"{len(weights)} weights for {len(traces)} missions")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    results = [replay(t, vehicle, table, motor, battery, max_throttle=design.sitl.max_throttle) for t in traces]
+    for trace, result in zip(traces, results, strict=True):
+        echo(
+            f"{trace.name:>14}: {result['duration_s']:7.1f} s  {result['energy_Wh']:6.2f} Wh  {result['mean_battery_power_W']:6.1f} W  "
+            f"duty p99 {result['duty_p99']:.2f}  saturated {100 * result['saturated_fraction']:.2f} %  VRS {100 * result['vrs_fraction']:.1f} %  ({trace.source})"
+        )
+    _write_rows(output_dir / "replay.csv", [summary(r) for r in results])
+    _write_rows(output_dir / "operating_histogram.csv", [row for r in results for row in histogram_rows(r)])
+    plot_missions(results, output_dir / "replay.png", design.name)
+    out: dict[str, Any] = {"results": results, "weights": weights}
+    if not optimize:
+        return out
+
+    family = opt.candidates(design, ctx["stations"], ctx["op"], ctx["polar"], ctx["hover_rpm"], ctx["hover_thrust_N"])
+    rows, tables = [], {}
+    for i, candidate in enumerate(family):
+        if candidate.get("stations") is None:
+            rows.append({k: v for k, v in candidate.items() if k != "stations"})
+            echo(f"  [{i + 1}/{len(family)}] {candidate['label']}: skipped ({candidate['reason']})")
+            continue
+        evaluated = opt.evaluate(candidate, design, ctx["op"], ctx["polar"], ctx["corrections"], traces, weights, vehicle, motor, battery)
+        rows.append(evaluated["row"])
+        tables[candidate["label"]] = (evaluated["table"], candidate["stations"])
+        r = evaluated["row"]
+        echo(f"  [{i + 1}/{len(family)}] {candidate['label']}: {r['weighted_energy_Wh']:.3f} Wh, worst saturated/over-current {100 * r['worst_limit_fraction']:.2f} %")
+    best = opt.select(rows, design.sitl.allowed_saturation_fraction)
+    _write_rows(output_dir / "candidates.csv", rows)
+    names = [t.name for t in traces]
+    opt.plot(rows, best, names, f"{design.name}: mission-weighted prop selection (same motor, battery, and planform)", output_dir / "candidates.png")
+    out.update({"rows": rows, "best": best})
+    if best is not None:
+        best_table, best_stations = tables[best["label"]]
+        folder = output_dir / "best"
+        folder.mkdir(exist_ok=True)
+        best_table.save(folder / "rotor_table.json")
+        tb.write_cpp_tables(best_table, folder / "rotor_tables.hpp")
+        shutil.copyfile(HEADER_SOURCE, folder / "prandtl_rotor.hpp")
+        _write_stations(folder / "stations.csv", best_stations, ctx["op"].radius_m)
+        fit = px4.fit_parameters(motor, best_table, battery, vehicle, ctx["hover_thrust_N"])
+        px4.write_params(fit["params"], folder / "px4_params.txt", f"Mission-selected prop '{best['label']}' for design '{design.name}'.")
+        echo(f"best: {best['label']} ({best['delta_energy_vs_built_pct']:+.2f} % energy vs as built); tables and PX4 params in {folder}")
+    else:
+        echo("no candidate meets the saturation limits")
+    return out

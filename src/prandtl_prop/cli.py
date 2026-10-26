@@ -184,6 +184,19 @@ def build_parser() -> argparse.ArgumentParser:
     noise_cfd.add_argument("--set-file", dest="override_files", action="append", default=[], type=Path, metavar="PATH")
     noise_cfd.add_argument("--runs-dir", type=Path, default=config.RUNS_DIR)
 
+    for name, help_text in (
+        ("sitl-replay", "Replay PX4 ULog / truth-CSV missions (or the reference missions) with the design as built (sitl/)."),
+        ("sitl-optimize", "Rank GMT twists by mission-weighted battery energy on the same missions; export the best for SITL."),
+    ):
+        sitl = commands.add_parser(name, help=help_text)
+        sitl.add_argument("design", type=Path)
+        sitl.add_argument("--log", dest="logs", action="append", default=[], type=Path, help="PX4 .ulg or truth .csv (repeatable).")
+        sitl.add_argument("--weights", default=None, help="Comma-separated mission weights (default: equal, or sitl.mission_weights).")
+        sitl.add_argument("--output-dir", type=Path, default=None, help="Default: outputs/sitl/<design name>.")
+        sitl.add_argument("--set", dest="overrides", action="append", default=[], metavar="KEY=VALUE")
+        sitl.add_argument("--set-file", dest="override_files", action="append", default=[], type=Path, metavar="PATH")
+        sitl.add_argument("--runs-dir", type=Path, default=config.RUNS_DIR)
+
     loop = commands.add_parser("loop", help="Iterate BEMT trim, CAD, CFD, and BEMT calibration until CFD meets target thrust.")
     loop.add_argument("design", type=Path, help="Design YAML file.")
     loop.add_argument("--iterations", type=int, default=4, help="Maximum CFD runs.")
@@ -211,6 +224,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _cost(args, store, overrides)
     if args.command == "noise-cfd":
         return _noise_cfd(args, overrides)
+    if args.command in ("sitl-replay", "sitl-optimize"):
+        return _sitl(args, store, overrides)
     stages = [stage.strip() for stage in args.stages.split(",") if stage.strip()]
     results: dict[str, dict[str, StageOutcome]] = {}
     for path in args.designs:
@@ -282,6 +297,20 @@ def _noise_cfd(args: argparse.Namespace, overrides: list[str]) -> int:
             for m in range(min(3, result["total"].shape[1]))
         )
         print(f"{el:10.0f}{cells}")
+    return 0
+
+
+def _sitl(args: argparse.Namespace, store: RunStore, overrides: list[str]) -> int:
+    from prandtl_prop.sitl.workflow import mission_study
+
+    design = load_design(args.design, overrides)
+    weights = [float(w) for w in args.weights.split(",")] if args.weights else None
+    output = args.output_dir or config.PROJECT_ROOT / "outputs" / "sitl" / design.name
+    try:
+        mission_study(design, store, args.logs, weights, output, optimize=args.command == "sitl-optimize")
+    except (FileNotFoundError, ValueError, ImportError) as exc:
+        print(f"{args.command} failed: {exc}", file=sys.stderr)
+        return 1
     return 0
 
 
