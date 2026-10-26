@@ -25,7 +25,7 @@ from prandtl_prop.cad.sections import BladeSection, build_sections, section_tabl
 from prandtl_prop.design import DesignCase, resolve_path
 from prandtl_prop.runs import RunStore, StageRun, stage_key
 
-STAGES = ("aero", "sections", "dfm", "cad", "beam", "fea", "modal", "mold", "hub", "cfd", "envelope", "mission", "multirotor")
+STAGES = ("aero", "sections", "dfm", "cad", "beam", "fea", "modal", "mold", "hub", "cfd", "envelope", "mission", "multirotor", "acoustics")
 DEFAULT_STAGES = ("aero", "sections", "dfm", "cad", "beam")  # seconds; fea, modal, and cfd take minutes to hours
 STAGE_UPSTREAM = {
     "aero": (),
@@ -41,6 +41,7 @@ STAGE_UPSTREAM = {
     "envelope": ("aero",),
     "mission": ("aero", "cad", "envelope"),
     "multirotor": ("aero", "cad"),
+    "acoustics": ("aero",),
 }
 STAGE_MODULES = {
     "aero": (
@@ -95,6 +96,16 @@ STAGE_MODULES = {
         "prandtl_prop.mission",
         "prandtl_prop.aero.bemt",
         "prandtl_prop.plot_style",
+        "prandtl_prop.pipeline",
+    ),
+    "acoustics": (
+        "prandtl_prop.acoustics.fwh",
+        "prandtl_prop.acoustics.bpm",
+        "prandtl_prop.acoustics.rotor",
+        "prandtl_prop.acoustics.workflow",
+        "prandtl_prop.acoustics.plots",
+        "prandtl_prop.aero.gmt",
+        "prandtl_prop.mission",
         "prandtl_prop.pipeline",
     ),
 }
@@ -864,6 +875,53 @@ def _stage_multirotor(design: DesignCase, run: StageRun, upstream: dict[str, Sta
     return metrics, warnings
 
 
+def _stage_acoustics(design: DesignCase, run: StageRun, upstream: dict[str, StageRun]) -> tuple[dict[str, Any], list[str]]:
+    """Hover noise (prandtl_prop.acoustics): FW-H tones + BPM broadband for the design, and the twist comparison."""
+
+    import json
+
+    from prandtl_prop.acoustics import plots, workflow
+
+    spec = design.acoustics
+    _, noise = workflow.design_noise(design, upstream["aero"], spec)
+    plots.plot_design(noise, f"{design.name}: hover noise ({design.operating_point.rpm:.0f} rpm)", run.path("noise.png"))
+    _write_csv(run.path("bands_reference_observer.csv"), _reference_bands(noise))
+    metrics: dict[str, Any] = dict(noise["summary"])
+    warnings = []
+    if spec.compare_twists:
+        compare = workflow.compare_twists(design, upstream["aero"], spec)
+        rows = plots.comparison_rows(compare)
+        _write_csv(run.path("twist_comparison.csv"), rows)
+        plots.plot_comparison(
+            compare,
+            f"{design.name}: twist against noise at {compare['thrust_N']:.2f} N, {compare['rpm']:.0f} rpm",
+            run.path("twist_comparison.png"),
+        )
+        metrics["twist_comparison"] = rows
+        built = next(r for r in rows if r["case"] == "design as built")
+        metrics["delta_pwl_A_vs_MIL_dB"] = built["delta_pwl_A_dB_vs_MIL"]
+        metrics["delta_loading_pwl_vs_MIL_dB"] = built["delta_loading_pwl_dB_vs_MIL"]
+        metrics["bvi_proxy_delta_vs_MIL_dB"] = built["bvi_proxy_delta_dB_vs_MIL"]
+    run.write_json("acoustic_summary.json", json.loads(json.dumps(metrics, default=float)))
+    if metrics.get("tip_pwl_dB", -999.0) < metrics["pwl_dB"] - 40.0:
+        warnings.append(
+            "BPM tip vortex formation noise is far below the other sources (its spectrum peaks above the audible band for this tip chord)"
+        )
+    return metrics, warnings
+
+
+def _reference_bands(noise: dict[str, Any]) -> list[dict[str, float]]:
+    import numpy as np
+
+    ref = int(np.argmin(np.abs(noise["elevations_deg"] - noise["summary"]["reference_elevation_deg"])))
+    rows = []
+    for k, f in enumerate(noise["bands_hz"]):
+        row = {"band_hz": float(f), "total_Pa2": float(noise["total_bands"][ref, k])}
+        row.update({f"{name}_Pa2": float(p[ref, k]) for name, p in noise["source_bands"].items()})
+        rows.append(row)
+    return rows
+
+
 def _stage_cfd(design: DesignCase, run: StageRun, upstream: dict[str, StageRun]) -> tuple[dict[str, Any], list[str]]:
     import os
     import shutil
@@ -984,6 +1042,7 @@ STAGE_FUNCTIONS: dict[str, Callable[[DesignCase, StageRun, dict[str, StageRun]],
     "envelope": _stage_envelope,
     "mission": _stage_mission,
     "multirotor": _stage_multirotor,
+    "acoustics": _stage_acoustics,
 }
 
 STAGE_DESIGN_INPUTS = {
@@ -1000,6 +1059,7 @@ STAGE_DESIGN_INPUTS = {
     "envelope": ("operating_point", "geometry", "aero", "airfoils.thickness_scale", "airfoils.trailing_edge_thickness_m", "mission"),
     "mission": ("operating_point", "structure", "fea", "cfd", "mission", "root", "hub"),
     "multirotor": ("operating_point", "geometry", "aero", "airfoils.thickness_scale", "airfoils.trailing_edge_thickness_m", "multirotor"),
+    "acoustics": ("operating_point", "geometry", "aero", "airfoils", "gmt.cl_limit", "acoustics"),
 }
 
 

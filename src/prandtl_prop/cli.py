@@ -23,6 +23,19 @@ from prandtl_prop.runs import RunStore
 HEADLINE = {
     "aero": ("thrust_N", "torque_Nm", "power_W", "figure_of_merit", "collective_offset_deg", "nonconverged_station_count"),
     "sections": ("section_count", "substituted_airfoil_count"),
+    "acoustics": (
+        "oaspl_ref_dB",
+        "dba_ref_dB",
+        "pwl_dB",
+        "pwl_A_dB",
+        "tonal_pwl_dB",
+        "broadband_pwl_dB",
+        "tip_pwl_dB",
+        "alpha_tip_effective_deg",
+        "delta_pwl_A_vs_MIL_dB",
+        "delta_loading_pwl_vs_MIL_dB",
+        "bvi_proxy_delta_vs_MIL_dB",
+    ),
     "multirotor": (
         "hover_rpm",
         "hover_total_electrical_power_W",

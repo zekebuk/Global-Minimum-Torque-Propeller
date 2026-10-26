@@ -23,6 +23,7 @@ from typing import Any, get_type_hints
 import yaml
 
 from prandtl_prop import config
+from prandtl_prop.acoustics.rotor import AcousticsSpec
 from prandtl_prop.cad.hub import HubDesign
 from prandtl_prop.manufacturing.mold import MoldDesign
 from prandtl_prop.multirotor import MultirotorSpec
@@ -250,6 +251,7 @@ class DesignCase:
     mission: MissionSpec = field(default_factory=MissionSpec)
     multirotor: MultirotorSpec = field(default_factory=MultirotorSpec)
     gmt: GmtSpec = field(default_factory=GmtSpec)
+    acoustics: AcousticsSpec = field(default_factory=AcousticsSpec)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -377,6 +379,7 @@ _NESTED: dict[tuple[type, str], type] = {
     (DesignCase, "mission"): MissionSpec,
     (DesignCase, "multirotor"): MultirotorSpec,
     (DesignCase, "gmt"): GmtSpec,
+    (DesignCase, "acoustics"): AcousticsSpec,
     (AeroSpec, "polar"): PolarSpec,
     (StructureSpec, "material"): MaterialSpec,
 }
