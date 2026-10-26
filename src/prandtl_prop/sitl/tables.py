@@ -61,6 +61,7 @@ class RotorTable:
     cm: np.ndarray
     vrs: np.ndarray  # bool, same shape
     peak_cl: np.ndarray | None = None  # peak section Cl where q >= 25% of the tip's (stall check)
+    cq0: np.ndarray | None = None  # the section-drag (profile) part of C_Q
 
     @property
     def disk_area_m2(self) -> float:
@@ -73,7 +74,7 @@ class RotorTable:
             axes.insert(0, (self.rpm, rpm))
         corners = [_bracket(grid, x) for grid, x in axes]
         out = {}
-        for key in ("ct", "cq", "ch", "cm", "peak_cl"):
+        for key in ("ct", "cq", "ch", "cm", "peak_cl", "cq0"):
             if getattr(self, key) is None:
                 continue
             table = getattr(self, key).astype(float)
@@ -105,6 +106,7 @@ class RotorTable:
             "roll_moment_Nm": scale * self.radius_m * c["cm"],
             "vrs": c["vrs"],
             "peak_cl": c.get("peak_cl", np.full(np.shape(c["ct"]), np.nan)),
+            "profile_torque_Nm": scale * self.radius_m * c["cq0"] if "cq0" in c else np.full(np.shape(c["ct"]), np.nan),
         }
 
     def to_dict(self) -> dict[str, Any]:
@@ -126,6 +128,7 @@ class RotorTable:
                 "roll_moment_Nm": "rho pi R^2 (Omega R)^2 R C_M, advancing side up; body vector = -s M e_f (see docs/sitl.md)",
                 "vrs": "1 inside the vortex-ring-state boundary (momentum theory invalid there)",
                 "peak_cl": "largest section Cl over the azimuth points carrying >= 25% of the tip dynamic pressure",
+                "cq0": "section-drag (profile) part of C_Q: B q c Cd cos(phi) r, azimuth-averaged",
             },
             "ct": self.ct.tolist(),
             "cq": self.cq.tolist(),
@@ -133,6 +136,7 @@ class RotorTable:
             "cm": self.cm.tolist(),
             "vrs": self.vrs.astype(int).tolist(),
             **({"peak_cl": self.peak_cl.tolist()} if self.peak_cl is not None else {}),
+            **({"cq0": self.cq0.tolist()} if self.cq0 is not None else {}),
         }
 
     @classmethod
@@ -152,6 +156,7 @@ class RotorTable:
             cm=np.array(data["cm"], float),
             vrs=np.array(data["vrs"], bool),
             peak_cl=np.array(data["peak_cl"], float) if "peak_cl" in data else None,
+            cq0=np.array(data["cq0"], float) if "cq0" in data else None,
         )
 
     def save(self, path: Path) -> Path:
@@ -198,7 +203,7 @@ def build_table(
     rpms = [op.rpm] if isinstance(polar, AnalyticPolar) else [op.rpm * f for f in spec.rpm_fractions]
     lam, mu = np.array(spec.lambda_grid, float), np.array(spec.mu_grid, float)
     shape = (len(rpms), len(lam), len(mu))
-    ct, cq, ch, cm, peak = (np.zeros(shape) for _ in range(5))
+    ct, cq, ch, cm, peak, cq0 = (np.zeros(shape) for _ in range(6))
     for k, rpm in enumerate(rpms):
         point = replace(op, rpm=rpm, v_inf_m_s=0.0)
         tip = point.omega_rad_s * point.radius_m
@@ -220,8 +225,9 @@ def build_table(
                 ch[k, i, j] = out["h_force_N"] / scale
                 cm[k, i, j] = out["hub_roll_moment_Nm"] / (scale * point.radius_m)
                 peak[k, i, j] = out["peak_cl_outer"] if math.isfinite(out["peak_cl_outer"]) else 0.0
+                cq0[k, i, j] = out["profile_torque_Nm"] / (scale * point.radius_m)
     vrs = vrs_flag(ct, lam[None, :, None], mu[None, None, :])
-    return RotorTable(name, op.radius_m, op.rho_kg_m3, op.blade_count, np.array(rpms, float), lam, mu, ct, cq, ch, cm, vrs, peak)
+    return RotorTable(name, op.radius_m, op.rho_kg_m3, op.blade_count, np.array(rpms, float), lam, mu, ct, cq, ch, cm, vrs, peak, cq0)
 
 
 def write_cpp_tables(table: RotorTable, path: Path) -> Path:

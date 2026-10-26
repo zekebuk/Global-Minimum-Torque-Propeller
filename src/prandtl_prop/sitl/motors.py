@@ -53,6 +53,35 @@ def motor_constant(kv: float, resistance_ohm: float) -> float:
     return (60.0 / (2.0 * math.pi * kv)) / math.sqrt(resistance_ohm)
 
 
+def vehicle_for(entry: dict[str, Any], design, prop_mass_kg: float) -> vh.Vehicle:
+    """The vehicle with this motor: AUW re-closed, roll/yaw inertia grown by the motor's mass change at the arm tips."""
+
+    spec, sitl = design.multirotor, design.sitl
+    n = spec.rotor_count
+    payload = spec.payload_mass_kg if spec.payload_mass_kg is not None else spec.mass_kg - n * (spec.motor_base_mass_kg + prop_mass_kg)
+    base = vh.from_specs(spec, sitl, design.operating_point.rho_kg_m3)
+    a2 = float(np.mean(base.positions_m[:, 1] ** 2))
+    l2 = float(np.mean(np.sum(base.positions_m**2, axis=1)))
+    dm = entry["mass_kg"] - entry.get("_reference_mass_kg", entry["mass_kg"])
+    return replace(
+        base, mass_kg=payload + n * (entry["mass_kg"] + prop_mass_kg), inertia_kg_m2=base.inertia_kg_m2 + n * dm * np.array([a2, a2, l2])
+    )
+
+
+def motor_for(entry: dict[str, Any], design, prop_inertia_kg_m2: float) -> Motor:
+    spec = design.multirotor
+    return Motor(
+        kv_rpm_per_V=float(entry["kv"]),
+        resistance_ohm=float(entry["resistance_ohm"]) + spec.esc_resistance_ohm,
+        no_load_current_A=float(entry["no_load_A"]),
+        inertia_kg_m2=prop_inertia_kg_m2 + bell_inertia(entry["mass_kg"], entry["stator_diameter_mm"]),
+        max_current_A=float(entry["continuous_A"]),
+        esc_efficiency=spec.esc_efficiency,
+        active_braking=design.sitl.active_braking,
+        no_load_test_V=entry.get("no_load_test_V"),
+    )
+
+
 def evaluate(
     entry: dict[str, Any],
     design,
@@ -65,27 +94,12 @@ def evaluate(
 
     spec, sitl = design.multirotor, design.sitl
     n = spec.rotor_count
-    payload = spec.payload_mass_kg if spec.payload_mass_kg is not None else spec.mass_kg - n * (spec.motor_base_mass_kg + prop_mass_kg)
-    mass = payload + n * (entry["mass_kg"] + prop_mass_kg)
-    base = vh.from_specs(spec, sitl, design.operating_point.rho_kg_m3)
-    a2 = float(np.mean(base.positions_m[:, 1] ** 2))
-    l2 = float(np.mean(np.sum(base.positions_m**2, axis=1)))
-    dm = entry["mass_kg"] - entry.get("_reference_mass_kg", entry["mass_kg"])
-    inertia = base.inertia_kg_m2 + n * dm * np.array([a2, a2, l2])
-    vehicle = replace(base, mass_kg=mass, inertia_kg_m2=inertia)
+    vehicle = vehicle_for(entry, design, prop_mass_kg)
+    mass = vehicle.mass_kg
     traces = [ms.fly(ms.mission(name), vehicle, sitl.sample_rate_hz) for name in sitl.missions]
     rows = []
     for label, (table, prop_inertia) in props.items():
-        motor = Motor(
-            kv_rpm_per_V=float(entry["kv"]),
-            resistance_ohm=float(entry["resistance_ohm"]) + spec.esc_resistance_ohm,
-            no_load_current_A=float(entry["no_load_A"]),
-            inertia_kg_m2=prop_inertia + bell_inertia(entry["mass_kg"], entry["stator_diameter_mm"]),
-            max_current_A=float(entry["continuous_A"]),
-            esc_efficiency=spec.esc_efficiency,
-            active_braking=sitl.active_braking,
-            no_load_test_V=entry.get("no_load_test_V"),
-        )
+        motor = motor_for(entry, design, prop_inertia)
         results = [
             replay(t, vehicle, table, motor, battery, max_throttle=sitl.max_throttle, cl_limit=spec.forward_cl_limit) for t in traces
         ]

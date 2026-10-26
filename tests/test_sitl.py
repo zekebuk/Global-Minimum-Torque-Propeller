@@ -256,3 +256,27 @@ def test_motor_catalog_loads_and_ranks_by_motor_constant():
     assert all({"kv", "resistance_ohm", "no_load_A", "mass_kg", "continuous_A", "stator_diameter_mm"} <= set(e) for e in catalog)
     km = {e["name"]: mt.motor_constant(e["kv"], e["resistance_ohm"]) for e in catalog}
     assert km["T-Motor Velox V3115 KV640"] > km["iFlight XING2 2809 KV800"]
+
+
+def test_chord_and_twist_gmt_runs_sections_near_best_lift_to_drag():
+    """Free chord: the separable optimum puts every loaded section near Cl* = sqrt(cd0 / k) and beats fixed-chord GMT."""
+
+    from prandtl_prop.aero import gmt
+
+    op = OperatingPoint(RADIUS, 3, 7500.0)
+    blade, sol = gmt.design_with_chord(_blade(), op, POLAR, 3.5, cl_limit=1.0, chord_bounds_m=(0.03 * RADIUS, 0.3 * RADIUS), chord_count=16)
+    fixed = gmt.design(_blade(), op, POLAR, 3.5, cl_limit=1.0)
+    assert sol.thrust_N == pytest.approx(3.5, rel=2e-3)
+    assert sol.torque_Nm < fixed.torque_Nm
+    inner = slice(1, len(blade.r_m) - 2)  # off the chord bounds and the tip-loss zone
+    assert np.allclose(sol.cl[inner], math.sqrt(POLAR.cd0 / POLAR.k), atol=0.06)
+
+
+def test_energy_breakdown_closes(rig):
+    trace = missions.fly(
+        missions.Mission("hover", (missions.Segment(5.0, 4.0, climb_m_s=1.0),), gust_m_s=0.5, seed=4), rig["vehicle"], 50.0
+    )
+    result = replay(trace, rig["vehicle"], rig["table"], rig["motor"], rig["battery"])
+    b = result["energy_breakdown_Wh"]
+    assert abs(b["unaccounted"]) < 0.01 * b["cells"]
+    assert b["ideal_induced_and_climb"] > 0 and b["profile_drag"] > 0

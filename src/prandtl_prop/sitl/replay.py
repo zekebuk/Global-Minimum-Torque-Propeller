@@ -154,6 +154,15 @@ def replay(
         if i_bus == i_bus:
             energy += float(battery.open_circuit_V(soc)) * i_bus * dt[k]
             soc -= i_bus * dt[k] / (battery.capacity_Ah * 3600.0)
+    v_oc = np.empty(N)
+    soc_k = soc_start
+    for k in range(N):  # open-circuit voltage along the discharge (for the battery-loss split)
+        v_oc[k] = float(battery.open_circuit_V(soc_k))
+        if bus_current[k] == bus_current[k]:
+            soc_k -= bus_current[k] * dt[k] / (battery.capacity_Ah * 3600.0)
+    breakdown = energy_breakdown(
+        dt, omega, omega_dot, loads, current, terminal, bus_current, v_oc, motor, battery, table, v_ax, v_edge, vehicle.rho_kg_m3
+    )
     battery_limited = ~np.isfinite(v_bus)
     saturated = np.any(duty > max_throttle, axis=1) | unmet | battery_limited | np.any(coast_limited, axis=1)
     time = float(dt.sum())
@@ -163,6 +172,7 @@ def replay(
     electrical = v_bus * bus_current
     return {
         "mission": trace.name,
+        "energy_breakdown_Wh": breakdown,
         "duration_s": time,
         "energy_Wh": energy / 3600.0,
         "mean_battery_power_W": energy / time,
@@ -197,6 +207,60 @@ def replay(
             "vrs": vrs,
         },
     }
+
+
+def ideal_induced_velocity(thrust_N, v_axial, v_edge, rho: float, area_m2: float, iterations: int = 60):
+    """Momentum-theory induced velocity of an actuator disk: T = 2 rho A v sqrt(V_edge^2 + (V_axial + v)^2), v >= 0."""
+
+    thrust_N = np.maximum(np.asarray(thrust_N, float), 0.0)
+    low = np.zeros_like(thrust_N)
+    high = np.full_like(thrust_N, 200.0)
+    for _ in range(iterations):
+        mid = 0.5 * (low + high)
+        made = 2.0 * rho * area_m2 * mid * np.sqrt(v_edge**2 + (v_axial + mid) ** 2)
+        low, high = np.where(made < thrust_N, mid, low), np.where(made < thrust_N, high, mid)
+    return 0.5 * (low + high)
+
+
+def energy_breakdown(dt, omega, omega_dot, loads, current, terminal, bus_current, v_oc, motor, battery, table, v_axial, v_edge, rho):
+    """Where the cell energy goes (Wh over the mission), from the battery to the air.
+
+    cells = battery internal + ESC + motor copper (winding + ESC conduction) + motor iron/friction
+          + rotor spin-up (J omega domega/dt, regenerated on deceleration) + rotor shaft
+    rotor shaft = profile (section drag) + lift part; lift part = ideal (actuator-disk momentum
+          minimum, T (V_axial + v_ideal), includes climb work) + induced excess (tip loss, non-uniform
+          inflow, swirl, edgewise effects)
+    """
+
+    def wh(power):
+        power = np.asarray(power, float)
+        return float(np.nansum((power.sum(axis=1) if power.ndim > 1 else power) * dt) / 3600.0)
+
+    shaft = omega * loads["torque_Nm"]
+    profile = omega * loads["profile_torque_Nm"]
+    v_ideal = ideal_induced_velocity(loads["thrust_N"], v_axial, v_edge, rho, table.disk_area_m2)
+    ideal = loads["thrust_N"] * (v_axial + v_ideal)
+    iron = omega * motor.kt * motor.no_load_current(omega)
+    copper = current**2 * motor.resistance_ohm
+    spin = motor.inertia_kg_m2 * omega * omega_dot
+    terminal_power = terminal * current
+    esc = np.where(
+        terminal_power >= 0.0, terminal_power * (1.0 / motor.esc_efficiency - 1.0), -terminal_power * (1.0 - motor.esc_efficiency)
+    )
+    battery_loss = battery.resistance_ohm * bus_current**2
+    out = {
+        "cells": float(np.nansum(v_oc * bus_current * dt) / 3600.0),
+        "battery_internal": wh(battery_loss),
+        "esc": wh(esc),
+        "motor_copper": wh(copper),
+        "motor_iron_friction": wh(iron),
+        "rotor_spin_up": wh(spin),
+        "profile_drag": wh(profile),
+        "induced_excess": wh(shaft - profile - ideal),
+        "ideal_induced_and_climb": wh(ideal),
+    }
+    out["unaccounted"] = out["cells"] - sum(v for k, v in out.items() if k != "cells")
+    return out
 
 
 def duty_histogram(result: dict[str, Any], v_axial_edges=None, v_edge_edges=None) -> dict[str, np.ndarray]:

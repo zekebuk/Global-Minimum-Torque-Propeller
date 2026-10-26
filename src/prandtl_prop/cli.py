@@ -193,6 +193,8 @@ def build_parser() -> argparse.ArgumentParser:
         sitl.add_argument("--log", dest="logs", action="append", default=[], type=Path, help="PX4 .ulg or truth .csv (repeatable).")
         sitl.add_argument("--weights", default=None, help="Comma-separated mission weights (default: equal, or sitl.mission_weights).")
         sitl.add_argument("--output-dir", type=Path, default=None, help="Default: outputs/sitl/<design name>.")
+        sitl.add_argument("--motor", default=None, help="Catalogue motor name (default: the sizing-model motor).")
+        sitl.add_argument("--catalog", type=Path, default=config.PROJECT_ROOT / "data" / "motors" / "cots_6s_10in.yaml")
         sitl.add_argument("--set", dest="overrides", action="append", default=[], metavar="KEY=VALUE")
         sitl.add_argument("--set-file", dest="override_files", action="append", default=[], type=Path, metavar="PATH")
         sitl.add_argument("--runs-dir", type=Path, default=config.RUNS_DIR)
@@ -207,6 +209,17 @@ def build_parser() -> argparse.ArgumentParser:
     motors.add_argument("--set", dest="overrides", action="append", default=[], metavar="KEY=VALUE")
     motors.add_argument("--set-file", dest="override_files", action="append", default=[], type=Path, metavar="PATH")
     motors.add_argument("--runs-dir", type=Path, default=config.RUNS_DIR)
+
+    audit = commands.add_parser("sitl-audit", help="Where the mission energy goes, and which uncertain inputs move it (sitl/audit.py).")
+    audit.add_argument("design", type=Path)
+    audit.add_argument("--stations", action="append", default=[], metavar="LABEL=STATIONS.csv", help="Candidate blades (repeatable).")
+    audit.add_argument("--motor", default=None, help="Catalogue motor name (default: the sizing-model motor).")
+    audit.add_argument("--catalog", type=Path, default=config.PROJECT_ROOT / "data" / "motors" / "cots_6s_10in.yaml")
+    audit.add_argument("--no-sensitivity", action="store_true")
+    audit.add_argument("--output-dir", type=Path, default=None, help="Default: outputs/sitl/<design name>/audit.")
+    audit.add_argument("--set", dest="overrides", action="append", default=[], metavar="KEY=VALUE")
+    audit.add_argument("--set-file", dest="override_files", action="append", default=[], type=Path, metavar="PATH")
+    audit.add_argument("--runs-dir", type=Path, default=config.RUNS_DIR)
 
     loop = commands.add_parser("loop", help="Iterate BEMT trim, CAD, CFD, and BEMT calibration until CFD meets target thrust.")
     loop.add_argument("design", type=Path, help="Design YAML file.")
@@ -235,6 +248,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _cost(args, store, overrides)
     if args.command == "noise-cfd":
         return _noise_cfd(args, overrides)
+    if args.command == "sitl-audit":
+        return _sitl_audit(args, store, overrides)
     if args.command == "sitl-motors":
         return _sitl_motors(args, store, overrides)
     if args.command in ("sitl-replay", "sitl-optimize"):
@@ -320,9 +335,28 @@ def _sitl(args: argparse.Namespace, store: RunStore, overrides: list[str]) -> in
     weights = [float(w) for w in args.weights.split(",")] if args.weights else None
     output = args.output_dir or config.PROJECT_ROOT / "outputs" / "sitl" / design.name
     try:
-        mission_study(design, store, args.logs, weights, output, optimize=args.command == "sitl-optimize")
+        mission_study(
+            design, store, args.logs, weights, output, optimize=args.command == "sitl-optimize", motor_name=args.motor, catalog=args.catalog
+        )
     except (FileNotFoundError, ValueError, ImportError) as exc:
         print(f"{args.command} failed: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _sitl_audit(args: argparse.Namespace, store: RunStore, overrides: list[str]) -> int:
+    from prandtl_prop.sitl.workflow import energy_audit
+
+    design = load_design(args.design, overrides)
+    stations = {}
+    for item in args.stations:
+        label, _, path = item.rpartition("=")
+        stations[label] = Path(path)
+    output = args.output_dir or config.PROJECT_ROOT / "outputs" / "sitl" / design.name / "audit"
+    try:
+        energy_audit(design, store, args.catalog, args.motor, stations, output, sensitivity=not args.no_sensitivity)
+    except (FileNotFoundError, ValueError, ImportError, KeyError) as exc:
+        print(f"sitl-audit failed: {exc}", file=sys.stderr)
         return 1
     return 0
 

@@ -19,6 +19,13 @@ newton of thrust, and at the optimum every station has the same dQ'/dT' = lambda
   unloads and the load moves inboard: the rotor analogue of Prandtl's 1933 bell spanload (minimum
   induced drag for a given root bending moment). mu = 0 is the unconstrained global minimum torque.
 - Stall margin: candidate twists whose design-point Cl exceeds ``cl_limit`` are infeasible.
+- Chord too (``design_with_chord``). Station i's loads depend on its own chord and twist only, so
+  the same Lagrangian separates over (c_i, beta_i): each station minimises Q'_i - lambda T'_i over a
+  chord x twist grid within manufacturing bounds. That is the global minimum torque over planform and
+  twist together at the given rpm. With profile drag cd = cd0 + k Cl^2, the optimum runs each loaded
+  section near the best lift-to-drag Cl* = sqrt(cd0 / k) (torque per thrust ~ cd / Cl), with the
+  chord set by the circulation the annulus must carry; the bounds and the Cl limit cut in at the
+  root and the tip.
 
 Assumptions: steady axial flow (hover or climb), no swirl, Prandtl tip loss, positive loading at the
 design point. The vectorised station solver handles analytic polars; table polars fall back to the
@@ -64,6 +71,7 @@ class GmtSolution:
     phi_deg: np.ndarray
     thrust_per_span_N_m: np.ndarray  # all blades
     torque_per_span_N: np.ndarray
+    candidate_index: np.ndarray | None = None  # per station: the chosen column of the tables
 
 
 class InviscidPolar:
@@ -204,6 +212,7 @@ def select_twist(
         phi_deg=tables.phi_deg[rows, j],
         thrust_per_span_N_m=T,
         torque_per_span_N=tables.torque_per_span_N[rows, j],
+        candidate_index=j,
     )
 
 
@@ -241,6 +250,47 @@ def design(
         cl_limit=cl_limit,
         bending_weight=bending_weight,
     )
+
+
+def design_with_chord(
+    stations: BladeStations,
+    op: OperatingPoint,
+    polar,
+    target_thrust_N: float,
+    *,
+    cl_limit: float,
+    chord_bounds_m: tuple[float, float],
+    chord_count: int = 24,
+    bending_weight: float = 0.0,
+    tip_loss: bool = True,
+    coarse_step_deg: float = 0.5,
+    fine_step_deg: float = 0.05,
+    beta_range_deg: tuple[float, float] = (-8.0, 60.0),
+) -> tuple[BladeStations, GmtSolution]:
+    """Global minimum torque over chord and twist (separable per station). Returns the blade and the solution."""
+
+    def solve(chords: np.ndarray, betas: np.ndarray) -> tuple[GmtSolution, np.ndarray, np.ndarray]:
+        """chords (stations, n_c), betas (stations, n_b): every pairing per station as one candidate axis."""
+
+        parts = []
+        for k in range(chords.shape[1]):
+            trial = replace(stations, chord_m=chords[:, k].copy())
+            parts.append(station_tables(trial, op, polar, betas, tip_loss=tip_loss))
+        merged = StationTables(*(np.concatenate([getattr(t, f) for t in parts], axis=1) for f in StationTables.__dataclass_fields__))
+        chord_of = np.concatenate([np.repeat(chords[:, k : k + 1], betas.shape[1], axis=1) for k in range(chords.shape[1])], axis=1)
+        sol = select_twist(merged, stations, target_thrust_N, blade_count=op.blade_count, cl_limit=cl_limit, bending_weight=bending_weight)
+        rows = np.arange(len(stations.r_m))
+        return sol, chord_of[rows, sol.candidate_index], merged.beta_deg[rows, sol.candidate_index]
+
+    n = len(stations.r_m)
+    grid = np.geomspace(chord_bounds_m[0], chord_bounds_m[1], chord_count)
+    betas = np.tile(np.arange(beta_range_deg[0], beta_range_deg[1] + 1e-9, coarse_step_deg), (n, 1))
+    _, chord, beta = solve(np.tile(grid, (n, 1)), betas)
+    ratio = grid[1] / grid[0]
+    chords = np.clip(chord[:, None] * ratio ** np.linspace(-1.0, 1.0, 9)[None, :], chord_bounds_m[0], chord_bounds_m[1])
+    betas = beta[:, None] + np.arange(-1.5 * coarse_step_deg, 1.5 * coarse_step_deg + 1e-9, fine_step_deg)[None, :]
+    sol, chord, beta = solve(chords, betas)
+    return replace(stations, chord_m=chord, twist_deg=beta), sol
 
 
 def twist_grid(step_deg: float = 0.1, beta_range_deg: tuple[float, float] = (-8.0, 60.0)) -> np.ndarray:

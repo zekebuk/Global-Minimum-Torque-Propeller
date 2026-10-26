@@ -34,6 +34,10 @@ class SitlSpec:
     design_rpm_fractions: tuple[float, ...] = (0.6, 0.7, 0.8, 0.9, 1.0, 1.1)
     chord_scales: tuple[float, ...] = (1.0,)
     bending_weights: tuple[float, ...] = (0.0, 0.1, 0.2, 0.4)
+    # Chord + twist family (aero.gmt.design_with_chord): the planform is designed too.
+    planform_rpm_fractions: tuple[float, ...] = (0.5, 0.6, 0.7, 0.8, 0.9, 1.0)
+    planform_bending_weights: tuple[float, ...] = (0.0, 0.1)
+    chord_bounds_over_R: tuple[float, float] = (0.06, 0.22)  # molding / handling floor at the tip; the hub boss caps the root
     helix_baseline: bool = True
     max_throttle: float = 1.0  # a sample needing more duty than this on any motor is saturated
     allowed_saturation_fraction: float = 0.002  # of mission time, saturated or above the motor current limit

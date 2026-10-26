@@ -235,7 +235,16 @@ def _write_stations(path: Path, stations, radius_m: float) -> Path:
 
 
 def mission_study(
-    design, store, logs: list[Path], weights: list[float] | None, output_dir: Path, *, optimize: bool, echo=print
+    design,
+    store,
+    logs: list[Path],
+    weights: list[float] | None,
+    output_dir: Path,
+    *,
+    optimize: bool,
+    motor_name: str | None = None,
+    catalog: Path | None = None,
+    echo=print,
 ) -> dict[str, Any]:
     """Replay logs (or the reference missions) with the design as built; with ``optimize``, rank the GMT twist family on them."""
 
@@ -246,6 +255,22 @@ def mission_study(
     ctx = context(design, outcomes["aero"].run, outcomes["multirotor"].run)
     table = tb.RotorTable.load(outcomes["sitl"].run.output("rotor_table.json"))
     vehicle, motor, battery = ctx["vehicle"], ctx["motor"], ctx["battery"]
+    cad = outcomes["cad"].run.metrics
+    cad_mass = float(cad.get("prop_mass_kg") or 0.0)
+    cad_inertia = float(outcomes["multirotor"].run.metrics["prop_inertia_kg_m2"])
+    if motor_name:
+        from prandtl_prop import multirotor
+        from prandtl_prop.sitl import motors as mt
+
+        entry = next((m for m in mt.load_catalog(catalog) if m["name"] == motor_name), None)
+        if entry is None:
+            raise ValueError(f"motor {motor_name!r} is not in {catalog}")
+        entry["_reference_mass_kg"] = multirotor.motor_mass(
+            design.multirotor, float(outcomes["multirotor"].run.metrics["max_thrust_torque_Nm"])
+        )
+        vehicle = mt.vehicle_for(entry, design, cad_mass)
+        motor = mt.motor_for(entry, design, cad_inertia)
+        echo(f"motor: {motor_name}, AUW {vehicle.mass_kg:.3f} kg")
     if logs:
         traces = [px4.read_log(path, table, vehicle, motor) for path in logs]
         weights = weights or [1.0] * len(traces)
@@ -271,6 +296,8 @@ def mission_study(
     if not optimize:
         return out
 
+    reference = opt.structure(design, ctx["stations"], ctx["op"], ctx["polar"], ctx["corrections"], None)
+    reference.update({"cad_mass_kg": cad_mass, "cad_inertia_kg_m2": cad_inertia})
     family = opt.candidates(design, ctx["stations"], ctx["op"], ctx["polar"], ctx["hover_rpm"], ctx["hover_thrust_N"])
     rows, tables = [], {}
     for i, candidate in enumerate(family):
@@ -278,10 +305,15 @@ def mission_study(
             rows.append({k: v for k, v in candidate.items() if k != "stations"})
             echo(f"  [{i + 1}/{len(family)}] {candidate['label']}: skipped ({candidate['reason']})")
             continue
-        evaluated = opt.evaluate(candidate, design, ctx["op"], ctx["polar"], ctx["corrections"], traces, weights, vehicle, motor, battery)
+        evaluated = opt.evaluate(
+            candidate, design, ctx["op"], ctx["polar"], ctx["corrections"], traces, weights, vehicle, motor, battery, reference
+        )
         rows.append(evaluated["row"])
-        tables[candidate["label"]] = (evaluated["table"], candidate["stations"])
         r = evaluated["row"]
+        if evaluated["table"] is None:
+            echo(f"  [{i + 1}/{len(family)}] {candidate['label']}: infeasible ({r['reason']})")
+            continue
+        tables[candidate["label"]] = (evaluated["table"], candidate["stations"])
         echo(
             f"  [{i + 1}/{len(family)}] {candidate['label']}: {r['weighted_energy_Wh']:.3f} Wh, worst saturated/over-current {100 * r['worst_limit_fraction']:.2f} %, stall {100 * r['worst_stall_fraction']:.2f} %"
         )
@@ -292,7 +324,7 @@ def mission_study(
         rows,
         best,
         names,
-        f"{design.name}: mission-weighted prop selection (same motor, battery, and planform)",
+        f"{design.name}: mission-weighted prop selection (same motor and battery)",
         output_dir / "candidates.png",
     )
     out.update({"rows": rows, "best": best})
@@ -366,3 +398,57 @@ def motor_study(design, store, catalog: Path, props: dict[str, Path], output_dir
     if feasible:
         echo(f"best COTS: {feasible[0]['motor']} with {feasible[0]['prop']} ({feasible[0]['weighted_energy_Wh']:.2f} Wh)")
     return {"rows": rows, "best": feasible[0] if feasible else None}
+
+
+def energy_audit(
+    design,
+    store,
+    catalog: Path,
+    motor_name: str | None,
+    stations: dict[str, Path],
+    output_dir: Path,
+    *,
+    sensitivity: bool = True,
+    echo=print,
+):
+    """Loss breakdown and input sensitivity for the design as built and candidate blades (``sitl.audit``)."""
+
+    from prandtl_prop import multirotor
+    from prandtl_prop.aero.bemt import BladeStations
+    from prandtl_prop.pipeline import _read_csv, run_design
+    from prandtl_prop.sitl import audit as au
+    from prandtl_prop.sitl import motors as mt
+
+    outcomes = run_design(design, ["sitl"], store=store)
+    ctx = context(design, outcomes["aero"].run, outcomes["multirotor"].run)
+    metrics = outcomes["multirotor"].run.metrics
+    prop_mass = float(outcomes["cad"].run.metrics.get("prop_mass_kg") or 0.0)
+    prop_inertia = float(metrics["prop_inertia_kg_m2"])
+    reference_mass = multirotor.motor_mass(design.multirotor, float(metrics["max_thrust_torque_Nm"]))
+    if motor_name:
+        entry = next((m for m in mt.load_catalog(catalog) if m["name"] == motor_name), None)
+        if entry is None:
+            raise ValueError(f"motor {motor_name!r} is not in {catalog}")
+    else:
+        spec = design.multirotor
+        entry = {
+            "name": "sizing-model motor",
+            "kv": float(metrics["motor_kv_rpm_per_V"]),
+            "resistance_ohm": spec.motor_resistance_ohm,
+            "no_load_A": spec.motor_no_load_current_A,
+            "mass_kg": reference_mass,
+            "stator_diameter_mm": 28,
+            "continuous_A": spec.motor_max_current_A,
+            "peak_A": spec.motor_max_current_A,
+        }
+    entry["_reference_mass_kg"] = reference_mass
+    props = {"as built": ctx["stations"]}
+    for label, path in stations.items():
+        props[label] = BladeStations.from_rows(_read_csv(Path(path)), ctx["op"].radius_m)
+    result = au.audit(design, ctx, props, entry, prop_mass, prop_inertia, sensitivity=sensitivity, echo=echo)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    _write_rows(output_dir / "loss_breakdown.csv", result["breakdown"])
+    if sensitivity:
+        _write_rows(output_dir / "sensitivity.csv", result["sensitivity"])
+    au.plot(result, f"{design.name} with {entry['name']}: energy audit (reference missions)", output_dir / "audit.png")
+    return result
