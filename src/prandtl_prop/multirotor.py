@@ -185,6 +185,7 @@ def rotor_forward(
     B, rho = op.blade_count, op.rho_kg_m3
     thrust_ps, torque_ps, h_ps, roll_ps, vi_out = [], [], [], [], []
     peak_cl = -math.inf  # over azimuth points carrying >= 5% of the tip dynamic pressure (stall check)
+    peak_cl_outer = -math.inf  # over points carrying >= 25% of it: the thrust-carrying disk (root stall excluded)
     q_tip = (omega * op.radius_m) ** 2
     for i, r in enumerate(stations.r_m):
         r, c = float(r), float(stations.chord_m[i])
@@ -220,12 +221,14 @@ def rotor_forward(
             momentum = 4.0 * math.pi * rho * r * factor * vi * math.sqrt(v_edge_m_s**2 + up**2)
             loaded = live & (w2 >= 0.05 * q_tip)
             cl_peak = float(cl[loaded].max()) if loaded.any() else -math.inf
+            outer = live & (w2 >= 0.25 * q_tip)
+            cl_outer = float(cl[outer].max()) if outer.any() else -math.inf
             return (
                 float(dT.mean()) - momentum,
                 float(dT.mean()),
                 float(dF.mean()) * r,
                 float((dF * sin_psi).mean()),
-                cl_peak,
+                (cl_peak, cl_outer),
                 float((dT * sin_psi).mean()) * r,
             )
 
@@ -236,8 +239,9 @@ def rotor_forward(
             while loads(upper)[0] > 0.0:
                 upper *= 2.0
             vi = brentq(lambda v: loads(v)[0], 0.0, upper, xtol=1e-12, rtol=1e-12, maxiter=200)
-        _, t, q, h, cl_peak, roll = loads(vi)
+        _, t, q, h, (cl_peak, cl_outer), roll = loads(vi)
         peak_cl = max(peak_cl, cl_peak)
+        peak_cl_outer = max(peak_cl_outer, cl_outer)
         roll_ps.append(roll)
         thrust_ps.append(t)
         torque_ps.append(q)
@@ -255,6 +259,7 @@ def rotor_forward(
         "mean_induced_m_s": float(np.average(vi_out, weights=stations.r_m * dr)),
         "advance_ratio_mu": v_edge_m_s / (omega * op.radius_m),
         "peak_cl": peak_cl,
+        "peak_cl_outer": peak_cl_outer,
     }
 
 

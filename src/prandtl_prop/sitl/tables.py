@@ -16,8 +16,11 @@ So a table over (lambda_c, mu) at one rpm is exact at every rpm. A Reynolds-depe
 polar adds rpm as a third axis. Interpolation is multilinear; inflow beyond the grid is clamped to
 its edge, which for Omega -> 0 still sends every load to zero with (Omega R)^2.
 
-The table also carries the peak section Cl over the loaded disk, which depends on the same two
-ratios; with a polar that has no stall drag rise it is the retreating-blade stall check.
+The table also carries the peak section Cl over the thrust-carrying disk (azimuth points with at
+least 25% of the tip dynamic pressure), which depends on the same two ratios; with a polar that has
+no stall drag rise it is the stall check. Root sections inside that boundary carry little thrust and
+are excluded: GMT twists load the root hard, and their root stalls first in edgewise flow (uniform
+inflow drops with translational lift and raises every section's angle of attack).
 
 Validity. Momentum theory fails in the vortex-ring state (descending into the rotor's own wake).
 Cells inside the usual VRS boundary are flagged, not corrected: -2 < V_axial / v_h < -0.3 with
@@ -57,7 +60,7 @@ class RotorTable:
     ch: np.ndarray
     cm: np.ndarray
     vrs: np.ndarray  # bool, same shape
-    peak_cl: np.ndarray | None = None  # peak section Cl over the loaded disk (retreating-blade stall check)
+    peak_cl: np.ndarray | None = None  # peak section Cl where q >= 25% of the tip's (stall check)
 
     @property
     def disk_area_m2(self) -> float:
@@ -122,7 +125,7 @@ class RotorTable:
                 "h_force_N": "rho pi R^2 (Omega R)^2 C_H, in the disk plane opposing the edgewise motion",
                 "roll_moment_Nm": "rho pi R^2 (Omega R)^2 R C_M, advancing side up; body vector = -s M e_f (see docs/sitl.md)",
                 "vrs": "1 inside the vortex-ring-state boundary (momentum theory invalid there)",
-                "peak_cl": "largest section Cl over the azimuth points carrying >= 5% of the tip dynamic pressure",
+                "peak_cl": "largest section Cl over the azimuth points carrying >= 25% of the tip dynamic pressure",
             },
             "ct": self.ct.tolist(),
             "cq": self.cq.tolist(),
@@ -216,7 +219,7 @@ def build_table(
                 cq[k, i, j] = out["torque_Nm"] / (scale * point.radius_m)
                 ch[k, i, j] = out["h_force_N"] / scale
                 cm[k, i, j] = out["hub_roll_moment_Nm"] / (scale * point.radius_m)
-                peak[k, i, j] = out["peak_cl"] if math.isfinite(out["peak_cl"]) else 0.0
+                peak[k, i, j] = out["peak_cl_outer"] if math.isfinite(out["peak_cl_outer"]) else 0.0
     vrs = vrs_flag(ct, lam[None, :, None], mu[None, None, :])
     return RotorTable(name, op.radius_m, op.rho_kg_m3, op.blade_count, np.array(rpms, float), lam, mu, ct, cq, ch, cm, vrs, peak)
 

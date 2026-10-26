@@ -106,6 +106,8 @@ def evaluate(
             "duty_p99",
             "peak_motor_current_A",
             "vrs_fraction",
+            "stall_fraction",
+            "peak_section_cl",
         ):
             row[f"{name}_{key}"] = r[key]
     row["worst_limit_fraction"] = max(r["saturated_fraction"] + r["over_current_fraction"] for r in results)
@@ -159,7 +161,16 @@ def plot(rows: list[dict[str, Any]], best: dict[str, Any] | None, missions: list
             )
             for r in pts:
                 if not r["feasible"]:
-                    ax.plot(r["design_rpm_fraction"], r["delta_energy_vs_built_pct"], marker="x", color="#d6336c", markersize=10)
+                    ax.plot(r["design_rpm_fraction"], r["delta_energy_vs_built_pct"], marker="x", color="#d6336c", markersize=9)
+    if best is not None and best["family"] == "gmt":
+        ax.plot(
+            best["design_rpm_fraction"],
+            best["delta_energy_vs_built_pct"],
+            marker="*",
+            color="#c9a227",
+            markersize=18,
+            label=f"selected: {best['label']}",
+        )
     for r in rows:
         if r["family"] in ("mil", "helix") and "weighted_energy_Wh" in r:
             ax.axhline(
@@ -168,7 +179,7 @@ def plot(rows: list[dict[str, Any]], best: dict[str, Any] | None, missions: list
     ax.axhline(0.0, color="#52514e", linewidth=0.8)
     ax.set_xlabel("GMT design rpm / hover rpm of the design as built")
     ax.set_ylabel("mission-weighted battery energy vs as built (%)")
-    ax.set_title("Energy over the missions (x: saturates more than allowed)")
+    ax.set_title("Energy over the missions (x: saturates or stalls more than allowed)")
     ax.legend(fontsize=8)
     ax = axes[1]
     show = [r for r in (built, best) if r is not None] + [r for r in rows if r["family"] in ("mil", "helix") and "weighted_energy_Wh" in r]

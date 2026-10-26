@@ -282,7 +282,7 @@ def mission_study(
         tables[candidate["label"]] = (evaluated["table"], candidate["stations"])
         r = evaluated["row"]
         echo(
-            f"  [{i + 1}/{len(family)}] {candidate['label']}: {r['weighted_energy_Wh']:.3f} Wh, worst saturated/over-current {100 * r['worst_limit_fraction']:.2f} %"
+            f"  [{i + 1}/{len(family)}] {candidate['label']}: {r['weighted_energy_Wh']:.3f} Wh, worst saturated/over-current {100 * r['worst_limit_fraction']:.2f} %, stall {100 * r['worst_stall_fraction']:.2f} %"
         )
     best = opt.select(rows, design.sitl.allowed_saturation_fraction)
     _write_rows(output_dir / "candidates.csv", rows)

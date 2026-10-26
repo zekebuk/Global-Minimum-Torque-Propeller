@@ -159,6 +159,12 @@ A sample counts as **saturated** when any of these holds:
 - the battery cannot supply the power;
 - a non-braking ESC would need negative current.
 
+Separately, a sample counts as **stalled** when any rotor's peak section Cl exceeds
+`multirotor.forward_cl_limit` (1.15, under the polar's 1.2 clamp). The peak is taken over the
+thrust-carrying disk: azimuth points with at least 25% of the tip dynamic pressure. Root sections
+inside that boundary are excluded. GMT twists load the root hard (Cl ≈ 0.97 at r/R 0.29 on the 10″),
+so the root clamps at walking pace in edgewise flow, but it carries little thrust.
+
 The test round trip recovers logged rpm to 1e-4.
 
 **Frozen trajectory.** This is the one big assumption: the candidate flies the same path. It holds
@@ -192,6 +198,8 @@ Replay of the 10″ GMT tri as built:
 
 ![Reference missions](images/sitl_missions.png)
 
+![Rotor tables](images/sitl_rotor_tables.png)
+
 ## 3. Mission-weighted selection (`sitl-optimize`)
 
 **The candidate family.**
@@ -209,7 +217,55 @@ and battery**: the hardware you buy, with Kv as matched for the design as built.
 **What `best/` holds:** `stations.csv` (the twist, ready for a design file), the tables, the C++
 header and `px4_params.txt`. Load those into the sim, fly, and log; the next iteration starts there.
 
-RESULTS_PLACEHOLDER
+### Result on the 10″ GMT tri (reference missions, equal weights, motor Kv 719 fixed)
+
+![Candidates](images/sitl_candidates.png)
+
+There are 27 candidates:
+- GMT at f = 0.6–1.1 × 4 bell weights (f = 0.6 cannot reach hover thrust under `gmt.cl_limit`);
+- the design as built, Betz/MIL and constant pitch.
+
+| Candidate | Weighted energy | vs as built | hover / survey / freestyle power | freestyle p99 duty | worst stall time | feasible |
+| --- | --- | --- | --- | --- | --- | --- |
+| design as built (GMT, 7500 rpm, μ = 0.187) | 20.68 Wh | — | 178.6 / 156.6 / 325.2 W | 0.88 | 6.7 % | (reference) |
+| **GMT f = 0.9, μ = 0 (selected)** | **18.54 Wh** | **−10.3 %** | 162.1 / 141.7 / 284.8 W | 0.77 | 6.4 % | yes |
+| GMT f = 0.8, μ = 0 | 17.03 Wh | −17.6 % | 150.2 / 131.3 / 256.2 W | | 53 % | no: stalls |
+| GMT f = 0.7, μ = 0 | 15.96 Wh | −22.8 % | 141.8 / 123.6 / 236.7 W | | 85 % | no: stalls |
+| GMT f = 1.0, μ = 0 | 20.44 Wh | −1.1 % | 176.8 / 154.7 / 321.5 W | | 4.0 % | yes |
+| GMT f = 1.1, μ = 0 | 22.77 Wh | +10.1 % | 194.7 / 170.1 / 368.3 W | | 2.2 % | no: saturates 0.8 % |
+| Betz/MIL | 20.50 Wh | −0.9 % | 177.2 / 155.0 / 322.9 W | | 3.8 % | yes |
+| constant pitch | 20.67 Wh | −0.0 % | 178.4 / 156.2 / 326.5 W | | 2.9 % | yes |
+
+What the missions say:
+
+1. **The current prop was picked for the wrong objective for endurance.** `design-gmt` chose hover
+   *torque* (motor size). Over the missions, the same planform with a GMT twist designed for about
+   10% lower rpm (steeper pitch) uses 10% less battery on the same motor. It also has *more* duty
+   headroom: freestyle p99 duty drops from 0.88 to 0.77, because lower rpm means less back-EMF per
+   newton.
+2. **Stall in cruise is the binding constraint, not saturation.**
+   - Slower designs run every section at higher Cl.
+   - In edgewise flight the induced velocity falls (translational lift), which raises every
+     section's angle of attack.
+   - At f ≤ 0.8 the thrust-carrying disk sits at the Cl clamp for over half of some missions. The
+     polar has no stall drag rise, so their energy is optimistic, and they are rejected.
+   - The single-point check in `design-gmt` (at 25 m/s only) never saw this. At 25 m/s the steep
+     body pitch puts flow *through* the disk and relieves the blade. The stall bites at 5–15 m/s.
+3. **The bell weight costs energy and stall margin over a mission.**
+   - μ > 0 moves load inboard and raises the root Cl.
+   - At f = 0.9, μ = 0.1 already stalls 21% of a mission.
+   - The structural reason for μ (root stress) has to be re-checked for the selected twist: run
+     `prandtl design-gmt` / FEA on `best/stations.csv` before molding.
+4. **Yaw authority is unchanged.** `CA_ROTOR_KM` is 0.01269 against 0.01263 m. CT rises from 16.2 to
+   19.7 N and `MPC_THR_HOVER` falls from 0.219 to 0.180.
+
+**Next step:**
+1. Load `outputs/sitl/gmt_fpv10_tri/best/` (tables and `px4_params.txt`) into the simulator.
+2. Fly the real missions.
+3. Run `prandtl sitl-optimize ... --log <those logs>`.
+4. If the selection holds on real logs, close the structure and the mold for it with the existing
+   stages.
+
 
 ## Assumptions and limits
 
