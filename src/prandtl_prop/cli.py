@@ -197,6 +197,17 @@ def build_parser() -> argparse.ArgumentParser:
         sitl.add_argument("--set-file", dest="override_files", action="append", default=[], type=Path, metavar="PATH")
         sitl.add_argument("--runs-dir", type=Path, default=config.RUNS_DIR)
 
+    motors = commands.add_parser("sitl-motors", help="Fly every catalogue COTS motor with each prop through the reference missions.")
+    motors.add_argument("design", type=Path)
+    motors.add_argument("--catalog", type=Path, default=config.PROJECT_ROOT / "data" / "motors" / "cots_6s_10in.yaml")
+    motors.add_argument(
+        "--prop", dest="props", action="append", default=[], metavar="LABEL=TABLE.json", help="Extra prop tables (repeatable)."
+    )
+    motors.add_argument("--output-dir", type=Path, default=None, help="Default: outputs/sitl/<design name>/motors.")
+    motors.add_argument("--set", dest="overrides", action="append", default=[], metavar="KEY=VALUE")
+    motors.add_argument("--set-file", dest="override_files", action="append", default=[], type=Path, metavar="PATH")
+    motors.add_argument("--runs-dir", type=Path, default=config.RUNS_DIR)
+
     loop = commands.add_parser("loop", help="Iterate BEMT trim, CAD, CFD, and BEMT calibration until CFD meets target thrust.")
     loop.add_argument("design", type=Path, help="Design YAML file.")
     loop.add_argument("--iterations", type=int, default=4, help="Maximum CFD runs.")
@@ -224,6 +235,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _cost(args, store, overrides)
     if args.command == "noise-cfd":
         return _noise_cfd(args, overrides)
+    if args.command == "sitl-motors":
+        return _sitl_motors(args, store, overrides)
     if args.command in ("sitl-replay", "sitl-optimize"):
         return _sitl(args, store, overrides)
     stages = [stage.strip() for stage in args.stages.split(",") if stage.strip()]
@@ -310,6 +323,23 @@ def _sitl(args: argparse.Namespace, store: RunStore, overrides: list[str]) -> in
         mission_study(design, store, args.logs, weights, output, optimize=args.command == "sitl-optimize")
     except (FileNotFoundError, ValueError, ImportError) as exc:
         print(f"{args.command} failed: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _sitl_motors(args: argparse.Namespace, store: RunStore, overrides: list[str]) -> int:
+    from prandtl_prop.sitl.workflow import motor_study
+
+    design = load_design(args.design, overrides)
+    props = {}
+    for item in args.props:
+        label, _, path = item.rpartition("=")  # labels may contain "="
+        props[label] = Path(path)
+    output = args.output_dir or config.PROJECT_ROOT / "outputs" / "sitl" / design.name / "motors"
+    try:
+        motor_study(design, store, args.catalog, props, output)
+    except (FileNotFoundError, ValueError, ImportError, KeyError) as exc:
+        print(f"sitl-motors failed: {exc}", file=sys.stderr)
         return 1
     return 0
 

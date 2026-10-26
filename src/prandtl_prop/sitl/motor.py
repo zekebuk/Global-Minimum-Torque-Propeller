@@ -10,6 +10,10 @@ First principles (one motor; every rotor has its own):
 - **Motor.** Ideal DC machine with Kt = 1 / Kv (SI), winding plus ESC resistance R_m, and a no-load
   current I0 that stands for friction and iron loss:
       I = (u V_bus - omega / Kv) / R_m,   Q_motor = Kt (I - I0),   J d(omega)/dt = Q_motor - Q_aero.
+  Datasheets give I0 at one test voltage (spin speed omega_t = Kv V_t). Hysteresis loss is a constant
+  drag torque (I0 independent of speed), eddy-current loss a torque growing with speed (I0 ~ omega);
+  with ``no_load_test_V`` set, I0(omega) = I0_t (omega / omega_t)^``no_load_exponent`` (0.5: an even
+  split), otherwise I0 is constant.
 - **Battery.** n_s Li-ion polymer cells in series: open-circuit voltage from a typical LiPo
   discharge curve (per cell, against state of charge) and an internal resistance, so
       V_bus = V_oc(SoC) - R_b sum_i I_bus,i,   dSoC/dt = -sum_i I_bus,i / capacity.
@@ -42,6 +46,8 @@ class Motor:
     max_current_A: float
     esc_efficiency: float = 0.97
     active_braking: bool = True
+    no_load_test_V: float | None = None  # datasheet test voltage of no_load_current_A (None: constant I0)
+    no_load_exponent: float = 0.5
 
     @property
     def kv_rad(self) -> float:
@@ -55,8 +61,14 @@ class Motor:
         current = (np.asarray(duty) * v_bus - np.asarray(omega) / self.kv_rad) / self.resistance_ohm
         return current if self.active_braking else np.maximum(current, 0.0)
 
-    def torque(self, current):
-        return self.kt * (np.asarray(current) - self.no_load_current_A)
+    def no_load_current(self, omega=None):
+        if self.no_load_test_V is None or omega is None:
+            return self.no_load_current_A
+        ratio = np.maximum(np.asarray(omega, float), 0.0) / (self.kv_rad * self.no_load_test_V)
+        return self.no_load_current_A * ratio**self.no_load_exponent
+
+    def torque(self, current, omega=None):
+        return self.kt * (np.asarray(current) - self.no_load_current(omega))
 
     def bus_current(self, duty, current):
         current = np.asarray(current)
@@ -99,7 +111,7 @@ def from_vehicle(spec, kv_rpm_per_V: float, prop_inertia_kg_m2: float, sitl) -> 
 def required_drive(motor: Motor, omega, motor_torque_Nm):
     """Current and motor terminal voltage (u V_bus) that hold ``omega`` against ``motor_torque_Nm``."""
 
-    current = np.asarray(motor_torque_Nm) / motor.kt + motor.no_load_current_A
+    current = np.asarray(motor_torque_Nm) / motor.kt + motor.no_load_current(omega)
     return current, np.asarray(omega) / motor.kv_rad + current * motor.resistance_ohm
 
 
@@ -117,7 +129,7 @@ def steady_speed(motor: Motor, duty: float, v_bus: float, aero_torque, omega_max
     """Rotor speed (rad/s) where the motor torque at ``duty`` balances ``aero_torque(omega)`` (bisection)."""
 
     def residual(omega: float) -> float:
-        return float(motor.torque(motor.current(duty, v_bus, omega))) - float(aero_torque(omega))
+        return float(motor.torque(motor.current(duty, v_bus, omega), omega)) - float(aero_torque(omega))
 
     low, high = 1.0e-3, omega_max
     if residual(low) <= 0.0:

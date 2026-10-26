@@ -116,18 +116,24 @@ struct Motor {
   double kv_rpm_per_V, resistance_ohm, no_load_current_A, inertia_kg_m2, max_current_A;
   double esc_efficiency = 0.97;
   bool active_braking = true;
+  double no_load_test_V = 0.0;    // datasheet test voltage of no_load_current_A; 0: constant I0
+  double no_load_exponent = 0.5;  // I0(omega) = I0_t (omega / (Kv V_t))^exponent
   double kv_rad() const { return kv_rpm_per_V * 3.14159265358979323846 / 30.0; }
   double current(double duty, double v_bus, double omega) const {
     const double i = (duty * v_bus - omega / kv_rad()) / resistance_ohm;
     return active_braking ? i : std::max(i, 0.0);
   }
-  double torque(double current_A) const { return (current_A - no_load_current_A) / kv_rad(); }
+  double no_load_current(double omega) const {
+    if (no_load_test_V <= 0.0) return no_load_current_A;
+    return no_load_current_A * std::pow(std::max(omega, 0.0) / (kv_rad() * no_load_test_V), no_load_exponent);
+  }
+  double torque(double current_A, double omega) const { return (current_A - no_load_current(omega)) / kv_rad(); }
   double bus_current(double duty, double current_A) const {
     return duty * (current_A >= 0 ? current_A / esc_efficiency : current_A * esc_efficiency);
   }
   // Explicit rotor-speed step; use dt well below inertia * R / Kt^2 (the electrical-mechanical time constant).
   double step_omega(double omega, double duty, double v_bus, double aero_torque_Nm, double dt) const {
-    return std::max(0.0, omega + dt * (torque(current(duty, v_bus, omega)) - aero_torque_Nm) / inertia_kg_m2);
+    return std::max(0.0, omega + dt * (torque(current(duty, v_bus, omega), omega) - aero_torque_Nm) / inertia_kg_m2);
   }
 };
 

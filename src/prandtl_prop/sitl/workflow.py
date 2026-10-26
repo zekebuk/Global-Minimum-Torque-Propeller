@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import shutil
 from dataclasses import replace
 from pathlib import Path
@@ -309,3 +310,59 @@ def mission_study(
     else:
         echo("no candidate meets the saturation limits")
     return out
+
+
+def motor_study(design, store, catalog: Path, props: dict[str, Path], output_dir: Path, echo=print) -> dict[str, Any]:
+    """Every catalogue motor with every prop table through the reference missions (``sitl.motors``)."""
+
+    from prandtl_prop import multirotor
+    from prandtl_prop.pipeline import run_design
+    from prandtl_prop.sitl import motors as mt
+
+    outcomes = run_design(design, ["sitl"], store=store)
+    metrics = outcomes["multirotor"].run.metrics
+    prop_mass = float(outcomes["cad"].run.metrics.get("prop_mass_kg") or 0.0)
+    prop_inertia = float(metrics["prop_inertia_kg_m2"])
+    tables = {"design as built": tb.RotorTable.load(outcomes["sitl"].run.output("rotor_table.json"))}
+    tables.update({label: tb.RotorTable.load(path) for label, path in props.items()})
+    reference_mass = multirotor.motor_mass(design.multirotor, float(metrics["max_thrust_torque_Nm"]))
+    _, battery = mo.from_vehicle(design.multirotor, float(metrics["motor_kv_rpm_per_V"]), prop_inertia, design.sitl)
+    entries = mt.load_catalog(catalog)
+    spec = design.multirotor
+    entries.append(
+        {
+            "name": f"sizing-model motor (assumed, Kv {metrics['motor_kv_rpm_per_V']:.0f})",
+            "kv": float(metrics["motor_kv_rpm_per_V"]),
+            "resistance_ohm": spec.motor_resistance_ohm,
+            "no_load_A": spec.motor_no_load_current_A,
+            "mass_kg": reference_mass,
+            "stator_diameter_mm": 28,
+            "continuous_A": spec.motor_max_current_A,
+            "peak_A": spec.motor_max_current_A,
+            "confidence": "model",
+        }
+    )
+    weights = list(design.sitl.mission_weights)
+    rows = []
+    for entry in entries:
+        entry["_reference_mass_kg"] = reference_mass
+        for row in mt.evaluate(entry, design, {k: (t, prop_inertia) for k, t in tables.items()}, prop_mass, battery, weights):
+            rows.append(row)
+            echo(
+                f"{row['motor']:>44} | {row['prop']:>16}: {row['weighted_energy_Wh']:6.2f} Wh, hover {row.get('hover_endurance_min', math.nan):5.1f} min, "
+                f"AUW {row['auw_kg']:.3f} kg, T/W {row['static_thrust_to_weight_empty']:.2f}-{row['static_thrust_to_weight_full']:.2f}, "
+                f"yaw-limited {100 * row['worst_yaw_limited_fraction']:.1f} % "
+                f"{'' if row['feasible'] else '[' + row['reason'] + ']'}"
+            )
+    output_dir.mkdir(parents=True, exist_ok=True)
+    _write_rows(output_dir / "motors.csv", rows)
+    mt.plot(
+        rows,
+        list(design.sitl.missions),
+        f"{design.name}: COTS motors on 6S (reference missions, AUW re-closed per motor)",
+        output_dir / "motors.png",
+    )
+    feasible = sorted((r for r in rows if r["feasible"] and r["confidence"] != "model"), key=lambda r: r["weighted_energy_Wh"])
+    if feasible:
+        echo(f"best COTS: {feasible[0]['motor']} with {feasible[0]['prop']} ({feasible[0]['weighted_energy_Wh']:.2f} Wh)")
+    return {"rows": rows, "best": feasible[0] if feasible else None}

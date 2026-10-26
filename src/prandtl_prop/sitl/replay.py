@@ -13,15 +13,17 @@ Per sample:
    rotor's loads depend on its own speed only, so the Jacobian columns come from one perturbed
    evaluation. The full nonlinear rotor (torque, hub roll moment, H-force) enters, so a prop with
    less torque per thrust needs a larger thrust split for the same yaw moment: yaw authority is
-   priced in. More than four rotors take the minimum-norm step.
+   priced in. More than four rotors take the minimum-norm step. Samples that cannot be met are
+   re-solved without the yaw row, as PX4's allocator desaturates by giving up yaw first;
+   those that then meet thrust, roll, and pitch are counted as yaw-limited, not saturated.
 2. Motor. Q_motor = Q_aero + J d(omega)/dt; current and terminal voltage from the DC-machine model;
    the shared bus voltage from the battery's state of charge and internal resistance; duty
    u = V_terminal / V_bus.
 3. Battery. State of charge and the energy drawn from the cells (V_oc I_bus) are integrated in time.
 
 A sample is saturated when any motor needs u > ``max_throttle`` (thrust, slew rate, or yaw), when the
-wrench cannot be met inside the speed limits (a rotor would need to stop or exceed its no-load
-speed), when the battery cannot supply the power, or when a non-braking ESC would need negative
+thrust, roll, or pitch demand cannot be met inside the speed limits (a rotor would need to stop or
+exceed its no-load speed), when the battery cannot supply the power, or when a non-braking ESC would need negative
 current to decelerate. Separately, a sample is in retreating-blade stall when any rotor's peak
 section Cl exceeds ``cl_limit`` (``multirotor.forward_cl_limit``).
 """
@@ -102,21 +104,33 @@ def replay(
     rpm_min = 0.03 * rpm_max
     thrust = np.repeat(trace.wrench[:, :1] / n, n, axis=1)
     rpm, _ = solve_rpm(table, np.maximum(thrust, 0.0), v_ax, v_edge, rpm_max, rpm_min)
-    scale = np.array([1.0, 1.0, 1.0, 1.0])
-    for _ in range(newton_iterations):
-        loads = table.evaluate(rpm, v_ax, v_edge)
-        parts = vh.rotor_wrench4(vehicle, loads, e_f)
-        step = 0.002 * rpm + 1.0
-        jac = (vh.rotor_wrench4(vehicle, table.evaluate(rpm + step, v_ax, v_edge), e_f) - parts) / step[..., None]  # (N, n, 4)
-        residual = trace.wrench - parts.sum(axis=1)
-        delta = np.einsum("kij,kj->ki", np.linalg.pinv(np.transpose(jac, (0, 2, 1)) * scale[None, :, None]), residual * scale)
-        limit = 0.3 * rpm + 300.0
-        rpm = np.clip(rpm + np.clip(delta, -limit, limit), rpm_min, rpm_max)
+
+    def newton(rpm: np.ndarray, weights: np.ndarray, iterations: int) -> np.ndarray:
+        sub = (v_ax[mask], v_edge[mask], e_f[mask], trace.wrench[mask])
+        for _ in range(iterations):
+            loads = table.evaluate(rpm, sub[0], sub[1])
+            parts = vh.rotor_wrench4(vehicle, loads, sub[2])
+            step = 0.002 * rpm + 1.0
+            jac = (vh.rotor_wrench4(vehicle, table.evaluate(rpm + step, sub[0], sub[1]), sub[2]) - parts) / step[..., None]  # (N, n, 4)
+            residual = sub[3] - parts.sum(axis=1)
+            delta = np.einsum("kij,kj->ki", np.linalg.pinv(np.transpose(jac, (0, 2, 1)) * weights[None, :, None]), residual * weights)
+            limit = 0.3 * rpm + 300.0
+            rpm = np.clip(rpm + np.clip(delta, -limit, limit), rpm_min, rpm_max)
+        return rpm
+
+    mask = np.ones(len(trace.t_s), dtype=bool)
+    rpm = newton(rpm, np.ones(4), newton_iterations)
+    tolerance = np.array([0.01, 0.002, 0.002, 0.002]) * float(np.median(trace.wrench[:, 0]))
+    error = np.abs(vh.wrench4(vehicle, table.evaluate(rpm, v_ax, v_edge), e_f) - trace.wrench)
+    mask = np.any(error > tolerance, axis=1)
+    if mask.any():
+        # PX4's allocator gives up yaw first: re-solve the unmet samples without the yaw row (minimum-norm steps from the yaw-saturated point).
+        rpm[mask] = newton(rpm[mask], np.array([1.0, 1.0, 1.0, 0.0]), newton_iterations)
     loads = table.evaluate(rpm, v_ax, v_edge)
     achieved = vh.wrench4(vehicle, loads, e_f)
     error = np.abs(achieved - trace.wrench)
-    tolerance = np.array([0.01, 0.002, 0.002, 0.002]) * float(np.median(trace.wrench[:, 0])) * np.array([1.0, 1.0, 1.0, 1.0])
-    unmet = np.any(error > tolerance, axis=1)
+    unmet = np.any(error[:, :3] > tolerance[:3], axis=1)
+    yaw_limited = (error[:, 3] > tolerance[3]) & ~unmet
     at_limit = np.any((rpm <= rpm_min * 1.0001) | (rpm >= rpm_max * 0.9999), axis=1)
 
     omega = rpm * math.pi / 30.0
@@ -157,6 +171,7 @@ def replay(
         "max_duty": float(np.nanmax(np.where(np.isfinite(duty), duty, np.nan))),
         "duty_p99": float(np.nanpercentile(np.where(np.isfinite(duty), duty, np.nan).max(axis=1), 99)),
         "unmet_wrench_fraction": float((unmet * dt).sum() / time),
+        "yaw_limited_fraction": float((yaw_limited * dt).sum() / time),
         "speed_limit_fraction": float((at_limit * dt).sum() / time),
         "battery_limited_fraction": float((battery_limited * dt).sum() / time),
         "peak_motor_current_A": float(np.nanmax(current)),

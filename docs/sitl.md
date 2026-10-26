@@ -267,6 +267,77 @@ What the missions say:
    stages.
 
 
+## 4. COTS motor selection (`sitl-motors`)
+
+```
+prandtl sitl-motors designs/gmt_fpv10_tri.yaml --prop "GMT f=0.9 mu=0=outputs/sitl/gmt_fpv10_tri/best/rotor_table.json"
+```
+
+**What the motor must deliver** (selected prop, static, 6S). These figures come from the rotor
+tables; Kv is matched with `multirotor.matched_kv`.
+
+| | Hover (3.54 N) | T/W 4 (14.2 N) |
+| --- | --- | --- |
+| rpm | 6750 | 13,500 |
+| torque | 45 mN·m | 180 mN·m |
+| shaft power | 32 W | 254 W |
+| Kv to reach T/W 4 | | 643 at 22.2 V, 685 at a sagged 21 V |
+
+That is a low-Kv, high-torque motor, not a typical 1300 Kv 10″ FPV motor.
+
+**What decides between motors.** From first principles:
+- **No-load loss at hover.** I₀(ω)·V is 3–12 W per motor against 32 W of shaft power.
+- **All-up mass.** Hover power scales as AUW^1.5.
+- **Copper loss.** It is (Q/K_m)² with K_m = K_t/√R, under 2 W at hover for every candidate.
+- **Kv.** It sets T/W on an empty pack and the share of time saturated.
+
+Each motor in `data/motors/cots_6s_10in.yaml` (sources and confidence per entry) is flown with both
+props through the reference missions:
+- **Mass and inertia.** AUW is re-closed per motor as payload plus 4 × (motor + 12.9 g CAD prop),
+  and the motor's mass adds to the roll and yaw inertia.
+- **No-load current.** I₀ is scaled from the datasheet test point as (ω/ω_test)^0.5.
+- **Bell inertia.** 0.4 m (D_stator/2 + 3 mm)².
+- **Ratings.** RMS and peak current are checked against the published ratings.
+
+![COTS motors](images/sitl_motors.png)
+
+Results with the selected prop (GMT f = 0.9, μ = 0):
+
+| Motor (6S-rated) | Flying mass | AUW | Mission energy | Hover power, endurance | Static T/W empty–full pack | Freestyle p99 duty | Data |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **T-Motor MN3110 KV700** | 85 g | 1.612 kg | **18.48 Wh** | 161.5 W, **27.5 min** | 3.39–4.85 | 0.83 | mixed |
+| **T-Motor MN3110 KV780** | 85 g | 1.612 kg | 18.65 Wh | 163.1 W, 27.2 min | **4.07–5.84** | 0.74 | datasheet |
+| iFlight XING2 2809 KV800 | 61 g | 1.517 kg | 19.63 Wh | 170.8 W, 26.0 min | 4.32–6.04 | 0.75 | I₀ estimated; 28 A spikes > 25.6 A peak |
+| BrotherHobby Avenger V3 2812 KV900 | 77 g | 1.578 kg | 20.40 Wh | 178.5 W, 24.9 min | 5.08–7.19 | 0.66 | R, I₀ scaled from 1115 KV |
+| T-Motor Velox V3115 KV900 | 113 g | 1.724 kg | 23.95 Wh | 213.0 W, 20.9 min | 4.78–6.97 | 0.65 | mixed |
+| T-Motor Velox V3115 KV640 | 113 g | 1.725 kg | 24.73 Wh | 220.4 W, 20.2 min | 2.64–3.85 | 0.91 | datasheet |
+| *sizing-model motor (assumed)* | *48 g* | *1.463 kg* | *18.80 Wh* | *164.8 W, 27.0 min* | *3.63–5.38* | *0.77* | *model* |
+
+**Recommendation: T-Motor MN3110 KV780** (the Navigator series).
+- **Endurance.** Within 1% of the most efficient candidate.
+- **Thrust.** It is the only motor that keeps the design's T/W 4 even on an empty pack.
+- **Data.** Its data is the best supported: 71 mΩ, 0.4 A at 10 V, 26 A continuous.
+- **When to take the KV700 instead.** If endurance matters more than end-of-pack punch, the KV700 is
+  0.9% better but falls to T/W 3.4 when the pack is empty.
+
+**Why the heavier MN3110 beats the lighter FPV motors.** Its no-load current is three to five times
+lower (0.3–0.4 A against 0.9–1.6 A at 10 V). At hover that iron loss is a larger share of the
+power than the 24–37 g mass difference costs. The 3115 cinelifter motors have the best K_m, but
+they lose on both mass and no-load loss at this hover point.
+
+**Yaw.** Heavier motors at the arm tips add yaw inertia (+36% I_zz with 85 g motors). Combined with
+the GMT prop's low K_M, that left the yaw spin briefly at the rotors' yaw limit. The replay now
+desaturates the way PX4 does: it gives up yaw first and counts that time as yaw-limited (≈ 0% for
+the MN3110 here), not as saturated.
+
+**Fit-up.**
+- The MN3110 has a 4 mm shaft with an M6 prop adapter (or a bolt-on pattern for T-Motor CF props).
+  The molded hub's 5 mm bore needs `hub.center_bore_m: 0.006`, or the bolt-on hub variant.
+- Retailer listings disagree on the bell hole pattern, so check it against the T-Motor drawing
+  before cutting the mold.
+- Replace the catalogue figures with thrust-stand data (T, Q, I and rpm against throttle) once the
+  motors are in hand.
+
 ## Assumptions and limits
 
 - **Rotor aerodynamics.** BEMT with uniform induced velocity per annulus and Glauert momentum

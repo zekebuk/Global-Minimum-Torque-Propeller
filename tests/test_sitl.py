@@ -239,3 +239,20 @@ def test_ulog_ingest_reconstructs_rpm(rig, tmp_path):
                 - table.evaluate(trace.rpm[k, i], flow["v_axial"][k, i], flow["v_edge"][k, i])["torque_Nm"]
             )
             assert abs(float(balance)) < 1e-6
+
+
+def test_no_load_current_scales_from_the_datasheet_point():
+    m = mo.Motor(700.0, 0.097, 0.3, 4e-5, 21.0, no_load_test_V=10.0)
+    omega_test = m.kv_rad * 10.0
+    assert float(m.no_load_current(omega_test)) == pytest.approx(0.3)
+    assert float(m.no_load_current(4 * omega_test)) == pytest.approx(0.6)  # exponent 0.5
+    assert mo.Motor(700.0, 0.097, 0.3, 4e-5, 21.0).no_load_current(4 * omega_test) == 0.3
+
+
+def test_motor_catalog_loads_and_ranks_by_motor_constant():
+    from prandtl_prop.sitl import motors as mt
+
+    catalog = mt.load_catalog(px4.Path(__file__).resolve().parents[1] / "data" / "motors" / "cots_6s_10in.yaml")
+    assert all({"kv", "resistance_ohm", "no_load_A", "mass_kg", "continuous_A", "stator_diameter_mm"} <= set(e) for e in catalog)
+    km = {e["name"]: mt.motor_constant(e["kv"], e["resistance_ohm"]) for e in catalog}
+    assert km["T-Motor Velox V3115 KV640"] > km["iFlight XING2 2809 KV800"]

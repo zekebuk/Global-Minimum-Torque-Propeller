@@ -38,7 +38,7 @@ def steady_speed_vec(motor: Motor, table: RotorTable, duty, v_bus, v_axial, v_ed
     for _ in range(iterations):
         mid = 0.5 * (low + high)
         omega = mid * math.pi / 30.0
-        excess = motor.torque(motor.current(duty, v_bus, omega)) - table.evaluate(mid, v_axial, v_edge)["torque_Nm"]
+        excess = motor.torque(motor.current(duty, v_bus, omega), omega) - table.evaluate(mid, v_axial, v_edge)["torque_Nm"]
         low, high = np.where(excess > 0.0, mid, low), np.where(excess > 0.0, high, mid)
     return 0.5 * (low + high)
 
