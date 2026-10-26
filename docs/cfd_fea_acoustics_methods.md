@@ -67,14 +67,28 @@ Section, alpha = 4 deg, Re = 5e4 (outboard section, design condition):
 
 Rotor (BEMT with each polar library; `prandtl section-polars ... --cfd 3.543,42.89,7400`):
 
-RECONCILIATION_TABLE
+| Polar library | T at 7500 rpm (N) | P at 7500 rpm (W) | rpm for 3.544 N | P at 3.544 N (W) | FM |
+| --- | --- | --- | --- | --- | --- |
+| analytic (design) | 3.544 | 35.16 | 7499 | 34.78 | 0.545 |
+| XFOIL free, Ncrit 9 | 2.826 | 37.55 | 8232 | 49.76 | 0.381 |
+| XFOIL free, Ncrit 7 | 3.295 | 38.75 | 7731 | 42.44 | 0.446 |
+| XFOIL free, Ncrit 4 | 3.773 | 38.71 | 7291 | 35.65 | 0.531 |
+| XFOIL tripped 5 % | 3.757 | 40.66 | 7293 | 37.49 | 0.505 |
+| 3D CFD, k-omega SST, MRF (at 7400 rpm) | 3.543 | 42.89 | | | |
+
+Scaled to the CFD's 7400 rpm (T ~ n^2, P ~ n^3; assumes constant Cl, Cd over the 1.3 % change), the
+tripped library gives T 3.66 N (+3 % vs CFD) and P 39.1 W (-9 %). The analytic polar gives 33.8 W.
+Section Reynolds numbers run from 23,000 (root) to 63,000.
 
 ### What this means
 
 1. **The 3D CFD is a fully turbulent result, and so is the CFD-calibrated BEMT.** k-omega SST
    with no transition model behaves like a tripped section, in 2D (within 8 % of tripped XFOIL)
-   and in 3D (the rotor tables above). The +27 % torque gap between the design BEMT and the 3D
-   CFD is the analytic polar's optimistic drag at Re 2-6e4, not a 3D effect.
+   and in 3D (the rotor table above: thrust within 3 %, power within 9 %). Of the +27 % power gap
+   between the design BEMT (33.8 W at 7400 rpm) and the 3D CFD (42.9 W), the tripped section polar
+   accounts for about 60 % (39.1 W). That part is section drag at Re 2-6e4, which the analytic polar
+   underestimates. The remaining ~9 % is 3D, mesh or wall-function effects not resolved here.
+   Free transition spans FM 0.38 to 0.53 depending on Ncrit alone.
 2. **At this Reynolds number, transition is the dominant aerodynamic uncertainty**, larger than
    anything the inflow model changes (section B). Free transition with a laminar bubble can go
    either way: XFOIL's e^N gives *higher* Cl at moderate alpha, while the LM URANS shows the bubble
@@ -85,6 +99,14 @@ RECONCILIATION_TABLE
    bubble-shedding noise (the LBL-VS source in the BPM model). It is a cheap feature to add to the
    mold. Until a rotor test says otherwise, use the tripped XFOIL library as the default polar and
    treat free transition as a sensitivity case.
+
+4. **The best-L/D lift coefficient moves.** In the XFOIL libraries the sections have more drag
+   than the analytic polar at Cl < 0.6, where the GMT blade's outboard sections run, and less drag
+   near Cl ~ 1 (tripped: L/D 31 at alpha ~ 6.5 deg vs a flat 22 for the analytic polar; see
+   `polars.png`). The GMT optimum Cl* = sqrt(cd0/k) = 0.78 was derived from the analytic polar.
+   On the tripped polar the optimum is nearer Cl 1, so re-running the GMT chord + twist optimizer on
+   the tripped library should give a narrower blade at higher Cl. That is the next design step these
+   polars enable.
 
 To fly a design on the XFOIL polars, point the design at the generated station file and library:
 
