@@ -67,13 +67,14 @@ def candidates(design, stations: BladeStations, op: OperatingPoint, polar, hover
     bounds = (spec.chord_bounds_over_R[0] * radius, spec.chord_bounds_over_R[1] * radius)
     for f in spec.planform_rpm_fractions:
         point = replace(op, rpm=f * hover_rpm, v_inf_m_s=0.0)
-        for mu in spec.planform_bending_weights:
+        for mu, cap in ((m, c) for m in spec.planform_bending_weights for c in spec.planform_cl_limits):
             row = {
-                "label": f"GMT planform f={f:g} mu={mu:g}",
+                "label": f"GMT planform f={f:g} Cl<={cap:g}" + (f" mu={mu:g}" if mu else ""),
                 "chord_scale": 1.0,
                 "family": "planform",
                 "design_rpm_fraction": f,
                 "bending_weight": mu,
+                "design_cl_limit": cap,
             }
             try:
                 blade, solution = gmt.design_with_chord(
@@ -81,7 +82,7 @@ def candidates(design, stations: BladeStations, op: OperatingPoint, polar, hover
                     point,
                     polar,
                     hover_thrust_N,
-                    cl_limit=design.gmt.cl_limit,
+                    cl_limit=cap,
                     chord_bounds_m=bounds,
                     bending_weight=mu,
                     tip_loss=tip_loss,
@@ -256,20 +257,19 @@ def plot(rows: list[dict[str, Any]], best: dict[str, Any] | None, missions: list
             for r in pts:
                 if not r["feasible"]:
                     ax.plot(r["design_rpm_fraction"], r["delta_energy_vs_built_pct"], marker="x", color="#d6336c", markersize=9)
-    planform = sorted(
-        (r for r in rows if r["family"] == "planform" and "weighted_energy_Wh" in r and r["bending_weight"] == 0.0),
-        key=lambda r: r["design_rpm_fraction"],
-    )
-    if planform:
+    greens = ["#7fd6b0", "#1baf7a", "#11845b", "#0a5a3e", "#06382a"]
+    planform = [r for r in rows if r["family"] == "planform" and "weighted_energy_Wh" in r and r["bending_weight"] == 0.0]
+    for color, cap in zip(greens, sorted({r.get("design_cl_limit") for r in planform}), strict=False):
+        pts = sorted((r for r in planform if r.get("design_cl_limit") == cap), key=lambda r: r["design_rpm_fraction"])
         ax.plot(
-            [r["design_rpm_fraction"] for r in planform],
-            [r["delta_energy_vs_built_pct"] for r in planform],
+            [r["design_rpm_fraction"] for r in pts],
+            [r["delta_energy_vs_built_pct"] for r in pts],
             marker="s",
-            color="#1baf7a",
+            color=color,
             linewidth=2.0,
-            label="GMT chord + twist (mu = 0)",
+            label=f"GMT chord + twist, Cl <= {cap:g}",
         )
-        for r in planform:
+        for r in pts:
             if not r["feasible"]:
                 ax.plot(r["design_rpm_fraction"], r["delta_energy_vs_built_pct"], marker="x", color="#d6336c", markersize=9)
     if best is not None and best["family"] in ("gmt", "planform"):

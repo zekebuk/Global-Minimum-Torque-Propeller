@@ -83,6 +83,7 @@ coordinates in `data/` (see `data/xfoil_polars/README.md`). See `docs/iterative_
 conventions, the verification evidence, and the planned CalculiX and OpenFOAM stages. See
 `docs/cfrp_injection_molding.md` for the molded blade and its mold, and `docs/hub.md` for the hub.
 See `docs/production.md` for the production hardware stack and cost per prop by route.
+See `docs/efficiency.md` for the energy audit (where the battery energy goes, what to work on next) and the chord + twist GMT redesign.
 See `docs/sitl.md` for the SITL bridge (custom simulator + PX4): rotor tables, motor/battery model, PX4 parameters, log replay, and mission-weighted prop selection.
 See `docs/acoustics.md` for the aeroacoustic stage (FW-H tonal + BPM broadband) and what GMT twist does to rotor noise.
 See `docs/fpv10_tri.md` for the 10 in tri-blade FPV variant (global-minimum-torque twist with the

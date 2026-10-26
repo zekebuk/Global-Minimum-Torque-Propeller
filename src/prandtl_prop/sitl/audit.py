@@ -74,11 +74,17 @@ def stall_cl(design, polar) -> float:
     return min(design.multirotor.forward_cl_limit, cl_max - 0.05) if cl_max is not None else design.multirotor.forward_cl_limit
 
 
-def _flown(design, vehicle, tables: dict[str, tb.RotorTable], motors: dict, battery, weights, cl_limit: float) -> dict[str, dict[str, Any]]:
+def _flown(
+    design, vehicle, tables: dict[str, tb.RotorTable], motors: dict, battery, weights, cl_limit: float, mass_delta: dict[str, float]
+) -> dict[str, dict[str, Any]]:
     traces = [ms.fly(ms.mission(name), vehicle, design.sitl.sample_rate_hz) for name in design.sitl.missions]
     out = {}
     for label, table in tables.items():
-        results = [replay(t, vehicle, table, motors[label], battery, cl_limit=cl_limit) for t in traces]
+        flown_vehicle = replace(vehicle, mass_kg=vehicle.mass_kg + mass_delta[label])
+        scale = flown_vehicle.mass_kg / vehicle.mass_kg
+        results = [
+            replay(replace(t, wrench=t.wrench * scale), flown_vehicle, table, motors[label], battery, cl_limit=cl_limit) for t in traces
+        ]
         out[label] = {"results": results, "energy": float(sum(w * r["energy_Wh"] for w, r in zip(weights, results, strict=True)))}
     return out
 
@@ -105,12 +111,21 @@ def audit(
             for label, st in props.items()
         }
 
+    # Each blade's own prop mass and inertia (root thickening for full-throttle stress, scaled to the CAD of the design as built).
+    from prandtl_prop.sitl import optimize as opt
+
+    reference = opt.structure(design, props[next(iter(props))], op, polar, corrections, None)
+    reference.update({"cad_mass_kg": prop_mass_kg, "cad_inertia_kg_m2": prop_inertia_kg_m2})
+    builds = {label: opt.structure(design, st, op, polar, corrections, reference) for label, st in props.items()}
+    mass_delta = {label: b.get("_auw_delta_kg", 0.0) for label, b in builds.items()}
+    inertia = {label: prop_inertia_kg_m2 + b.get("_prop_inertia_delta_kg_m2", 0.0) for label, b in builds.items()}
+
     def motors_for(entry) -> dict:
-        return {label: mt.motor_for(entry, design, prop_inertia_kg_m2) for label in props}
+        return {label: mt.motor_for(entry, design, inertia[label]) for label in props}
 
     vehicle = mt.vehicle_for(motor_entry, design, prop_mass_kg)
     tables = build(polar, op)
-    base = _flown(design, vehicle, tables, motors_for(motor_entry), battery, weights, stall_cl(design, polar))
+    base = _flown(design, vehicle, tables, motors_for(motor_entry), battery, weights, stall_cl(design, polar), mass_delta)
     breakdown = []
     for label, flown in base.items():
         for r in flown["results"]:
@@ -149,7 +164,7 @@ def audit(
         elif kind == "battery":
             bat = replace(battery, resistance_ohm=battery.resistance_ohm * change)
         perturbed_tables = build(p, point) if kind in ("polar", "polar_set", "rho") else tables
-        flown = _flown(design, veh, perturbed_tables, motors_for(entry), bat, weights, stall_cl(design, p))
+        flown = _flown(design, veh, perturbed_tables, motors_for(entry), bat, weights, stall_cl(design, p), mass_delta)
         advantage = 100.0 * (flown[candidate]["energy"] / flown[reference]["energy"] - 1.0)
         row = {
             "input": name,

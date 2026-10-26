@@ -35,8 +35,11 @@ class SitlSpec:
     chord_scales: tuple[float, ...] = (1.0,)
     bending_weights: tuple[float, ...] = (0.0, 0.1, 0.2, 0.4)
     # Chord + twist family (aero.gmt.design_with_chord): the planform is designed too.
-    planform_rpm_fractions: tuple[float, ...] = (0.5, 0.6, 0.7, 0.8, 0.9, 1.0)
-    planform_bending_weights: tuple[float, ...] = (0.0, 0.1)
+    planform_rpm_fractions: tuple[float, ...] = (0.7, 0.8, 0.9)
+    planform_bending_weights: tuple[float, ...] = (0.0,)
+    # Design-point Cl caps: the hover optimum sits at the best lift-to-drag Cl (~0.78), which leaves no
+    # stall margin in edgewise flight; a lower cap trades profile drag for cruise margin.
+    planform_cl_limits: tuple[float, ...] = (0.5, 0.55, 0.6, 0.7)
     chord_bounds_over_R: tuple[float, float] = (0.06, 0.22)  # molding / handling floor at the tip; the hub boss caps the root
     helix_baseline: bool = True
     max_throttle: float = 1.0  # a sample needing more duty than this on any motor is saturated
