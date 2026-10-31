@@ -117,6 +117,9 @@ Set up one clip, save it as a **preset**, then add the rest to the **Render Queu
 `build_resolve_project.py` automatically uses the stabilized folder when it exists.
 Keep the full clip length (don't trim in Gyroflow), so highlight timestamps still line up.
 
+**Alternative: GoPro Player + HyperSmooth Pro** for GoPro clips (batch export with presets, CineForm output):
+see [HYPERSMOOTH_PRO.md](HYPERSMOOTH_PRO.md). Gyroflow remains the route for DJI Avata 2 footage.
+
 **Alternative: Gyroflow OpenFX plugin inside Resolve.** No intermediates. Install the OFX bundle
 (macOS `/Library/OFX/Plugins`, Windows `C:\Program Files\Common Files\OFX\Plugins`), enable it under
 Preferences ▸ Video Plugins, and add it as the **first** node on the Color page, pointing it at the original MP4

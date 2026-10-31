@@ -37,9 +37,15 @@ def try_set(obj, key, value, log):
 
 
 def footage_for(session_dir: Path, stabilized_root: Path) -> list[Path]:
-    stab = stabilized_root / session_dir.name
-    src = stab if stab.is_dir() and any(stab.iterdir()) else session_dir / "raw"
-    return sorted({p for p in src.iterdir() if p.suffix.lower() in VIDEO_EXT})
+    """Per clip: the stabilized export if there is one (Gyroflow or GoPro Player), else the original."""
+    raw = sorted({p for p in (session_dir / "raw").iterdir() if p.suffix.lower() in VIDEO_EXT})
+    stab_dir = stabilized_root / session_dir.name
+    stab = {}
+    if stab_dir.is_dir():
+        for p in stab_dir.iterdir():
+            if p.is_file() and p.suffix.lower() in VIDEO_EXT:
+                stab[clip_key(p.name)] = p
+    return [stab.get(clip_key(p.name), p) for p in raw]
 
 
 def clip_key(name: str) -> str:
