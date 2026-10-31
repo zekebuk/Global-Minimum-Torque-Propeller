@@ -16,7 +16,9 @@ Re-running is safe: existing timelines are left alone and a new suffixed one is 
 from __future__ import annotations
 
 import argparse
+import csv
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -40,9 +42,18 @@ def footage_for(session_dir: Path, stabilized_root: Path) -> list[Path]:
     return sorted({p for p in src.iterdir() if p.suffix.lower() in VIDEO_EXT})
 
 
-def original_name(item_name: str) -> str:
-    """Map 'GX010042_stabilized.mov' back to 'GX010042.MP4' to look up telemetry highlights."""
-    return item_name.split("_")[0].split(".")[0].upper() + ".MP4"
+def clip_key(name: str) -> str:
+    """'GX010042_stabilized.mov' and 'GX010042.MP4' -> 'GX010042'; works for DJI_..._D names too."""
+    stem = Path(name).stem
+    return re.sub(r"_stabili[sz]ed.*$", "", stem, flags=re.IGNORECASE).upper()
+
+
+def load_manifest(session_dir: Path) -> dict[str, dict]:
+    m = session_dir / "manifest.csv"
+    if not m.exists():
+        return {}
+    with open(m, newline="") as f:
+        return {clip_key(r["file"]): r for r in csv.DictReader(f)}
 
 
 def unique_timeline(media_pool, project, name):
@@ -65,7 +76,8 @@ def main() -> int:
     session_dir = cfg["paths"]["library"] / args.session
     clips = footage_for(session_dir, cfg["paths"]["stabilized"])
     hl_file = session_dir / "raw" / "highlights.json"
-    hl = json.loads(hl_file.read_text()) if hl_file.exists() else {}
+    hl = {clip_key(k): v for k, v in json.loads(hl_file.read_text()).items()} if hl_file.exists() else {}
+    manifest = load_manifest(session_dir)
     if not hl:
         log.append("no highlights.json - run find_highlights.py first for markers and the reel string-out")
 
@@ -104,7 +116,7 @@ def main() -> int:
     # 3. Clip markers
     by_name = {}
     for it in items:
-        key = original_name(it.GetName())
+        key = clip_key(it.GetName())
         by_name[key] = it
         fps = float(it.GetClipProperty("FPS") or cfg["project"]["source_fps"])
         info = hl.get(key, {})
@@ -119,7 +131,14 @@ def main() -> int:
     # 4a. YouTube string-out: shooting order.
     yt_tl = unique_timeline(mp, project, "YT_selects")
     project.SetCurrentTimeline(yt_tl)
-    mp.AppendToTimeline(sorted(items, key=lambda i: (i.GetName()[4:8], i.GetName()[2:4])))
+    def shoot_order(item):
+        # Chronological across cameras (camera clocks permitting); GoPro chapters stay together and in order.
+        row = manifest.get(clip_key(item.GetName()), {})
+        rec, chap = row.get("recording", ""), row.get("chapter", "")
+        first = min((r["creation_time"] for r in manifest.values() if rec and r.get("recording") == rec
+                     and r.get("camera") == row.get("camera")), default=row.get("creation_time", ""))
+        return (first, int(chap or 0), item.GetName())
+    mp.AppendToTimeline(sorted(items, key=shoot_order))
 
     # 4b. Reel string-out: highlight windows ranked by score, padded 0.75 s each side for trimming.
     reel_tl = unique_timeline(mp, project, "REEL_selects")
@@ -161,18 +180,25 @@ def main() -> int:
         else:
             log.append(f"no {beats_file.name} - run beat_map.py on the track for beat markers")
 
-    # 5. Base grade
-    drx, lut = cfg["color"]["base_grade_drx"], cfg["color"]["conversion_lut"]
+    # 5. Base grade: DRX (one camera) or the conversion LUT matching each clip's camera profile (mixed cameras).
+    drx, fallback, luts = cfg["color"]["base_grade_drx"], cfg["color"]["conversion_lut"], cfg["color"]["luts"]
     for tl in (yt_tl, reel_tl):
         tl_items = tl.GetItemListInTrack("video", 1) or []
         if drx and drx.exists():
             tl.ApplyGradeFromDRX(str(drx), 0, tl_items)
-        elif lut and lut.exists():
-            for ti in tl_items:
+            continue
+        for ti in tl_items:
+            mpi = ti.GetMediaPoolItem()
+            row = manifest.get(clip_key(mpi.GetName())) if mpi else None
+            profile = (row or {}).get("profile", "")
+            lut = luts.get(profile) or (fallback if not row else None)
+            if lut and lut.exists():
                 ti.SetLUT(1, str(lut))
-        else:
-            log.append("no base grade applied: put your GP-Log LUT in luts/ or set base_grade_drx in config.toml")
-            break
+                ti.SetClipColor({"GP-Log": "Orange", "GP-Log2": "Yellow", "D-Log M": "Teal"}.get(profile, "Blue"))
+            elif profile and "log" in profile.lower():
+                log.append(f"no LUT for profile {profile!r}: add it under [color.luts] in config.toml")
+            elif not row:
+                log.append("no manifest.csv / LUT: clips left ungraded (run ingest.py, put LUTs in luts/)")
 
     project.SetCurrentTimeline(reel_tl)
     pm.SaveProject()

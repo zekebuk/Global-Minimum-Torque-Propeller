@@ -27,6 +27,7 @@ class SensorTrack:
     samples: list[np.ndarray] = field(default_factory=list)   # one (n, axes) block per payload
     stamps_us: list[int | None] = field(default_factory=list)  # STMP for each block
     order: str = ""                                           # ORIN axis order, e.g. "ZXY"
+    strings: list[str] = field(default_factory=list)          # string-typed keys, e.g. GPSU UTC time
 
     def array(self) -> np.ndarray:
         return np.concatenate(self.samples) if self.samples else np.zeros((0, 3))
@@ -51,9 +52,15 @@ def _iter_klv(buf: bytes, start: int = 0, end: int | None = None):
         i = payload_start + ((length + 3) & ~3)
 
 
-def _decode(buf: bytes, typ: str, size: int, repeat: int, off: int) -> np.ndarray | str | None:
-    if typ == "c":
+def _decode(buf: bytes, typ: str, size: int, repeat: int, off: int, type_str: str = "") -> np.ndarray | str | None:
+    if typ in ("c", "U"):
         return buf[off:off + size * repeat].decode("latin-1").rstrip("\x00")
+    if typ == "?":  # complex structure described by the stream's TYPE key, e.g. GPS9 = "lllllllSS"
+        codes = "".join(_NUMERIC.get(c, "") for c in type_str)
+        if not codes or len(codes) != len(type_str) or struct.calcsize(f">{codes}") != size:
+            return None
+        vals = struct.unpack(f">{codes * repeat}", buf[off:off + size * repeat])
+        return np.asarray(vals, dtype=np.float64).reshape(repeat, len(codes))
     code = _NUMERIC.get(typ)
     if code is None:
         return None
@@ -76,16 +83,21 @@ def parse(buf: bytes, keys: tuple[str, ...] = ("GYRO", "ACCL")) -> dict[str, Sen
                     walk(off, off + size * repeat)
 
     def read_stream(start: int, end: int):
-        scal, stamp, orin = None, None, ""
+        scal, stamp, orin, type_str = None, None, "", ""
         for key, typ, size, repeat, off in _iter_klv(buf, start, end):
-            if key == "SCAL":
+            if key == "TYPE":
+                type_str = _decode(buf, typ, size, repeat, off)
+            elif key == "SCAL":
                 scal = _decode(buf, typ, size, repeat, off)
             elif key == "STMP":
                 stamp = int(_decode(buf, typ, size, repeat, off).ravel()[0])
             elif key == "ORIN":
                 orin = _decode(buf, typ, size, repeat, off)
             elif key in tracks:
-                raw = _decode(buf, typ, size, repeat, off)
+                raw = _decode(buf, typ, size, repeat, off, type_str)
+                if isinstance(raw, str):
+                    tracks[key].strings.append(raw)
+                    continue
                 if not isinstance(raw, np.ndarray):
                     continue
                 if scal is not None:

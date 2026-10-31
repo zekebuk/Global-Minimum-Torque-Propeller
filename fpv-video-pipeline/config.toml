@@ -12,12 +12,18 @@ exports = "~/FPV/Exports"
 music = "~/FPV/Music"
 
 [color]
-# GP-Log -> Rec.709 conversion LUT. Put GoPro's LUT (or Leeming LUT Pro, etc.) in ./luts and name it here.
-# Leave empty to skip LUT application (e.g. if you shot Flat/Natural instead of Log).
+# Fallback conversion LUT when a clip's profile has no entry in [color.luts]. Leave empty to skip.
 conversion_lut = "luts/GoPro_GP-Log_to_Rec709.cube"
 # Optional: a full grade saved from Resolve as a .drx still (see docs/PIPELINE.md, section 4).
 # When set, it replaces the single-LUT approach and is applied to every clip on the timelines.
 base_grade_drx = ""
+
+# Log -> Rec.709 conversion per camera profile (profile names as camera_report.py prints them).
+# Each camera's log curve is different: the wrong LUT gives wrong contrast and color, so mixed sessions need all three.
+[color.luts]
+"GP-Log" = "luts/GoPro_GP-Log_to_Rec709.cube"            # HERO11 (Labs) / HERO12 / HERO13
+"GP-Log2" = "luts/GoPro_GP-Log2_to_Rec709.cube"          # Mission 1 / Mission 1 Pro (LUTs ship with the camera)
+"D-Log M" = "luts/DJI_D-Log_M_to_Rec709.cube"            # DJI Avata 2 (DJI publishes this LUT)
 
 [ingest]
 # GoPro writes LRV (low-res preview) and THM (thumbnail) next to each MP4. Keep LRV as edit proxies?
@@ -54,3 +60,13 @@ height = 2160
 fps = 59.94
 codec = "H265"
 bitrate_kbps = 80000
+
+# Per-camera overrides for exposure math (scripts/camera_report.py). Built-in values live in fpvpipe/camera.py.
+# The Mission 1 Pro's aperture is not confirmed: put the f-number from GoPro's spec sheet here to get ND estimates.
+[cameras."Mission 1 Pro"]
+# f_number = 2.0
+base_iso = 100
+
+[cameras."Avata 2"]
+f_number = 2.8
+base_iso = 100

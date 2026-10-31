@@ -8,7 +8,7 @@ disagree with each other or that I could not check against official docs.
 
 | Assumption | If it's wrong |
 |---|---|
-| GoPro HERO12 or HERO13 Black recording **GP-Log, 10-bit HEVC**, with gyro metadata (GPMF) on | HERO11 gets Log through GoPro Labs firmware. 8-bit Flat footage works, but with less grading room. |
+| Cameras: **GoPro HERO13 Black** (GP-Log), **GoPro Mission 1 Pro** (GP-Log2), **DJI Avata 2** (D-Log M), all 10-bit | Per-camera settings, detection, ND estimation and mixed-camera grading: [CAMERAS.md](CAMERAS.md) |
 | The GoPro is mounted on the quad (not a "naked" GoPro) and nothing re-encodes the files before ingest | Gyroflow and the highlight finder need the original MP4. |
 | DaVinci Resolve **Studio** 19 or later (20/21 fine), on macOS or Windows | The free version blocks external scripting and is weaker at HEVC decoding. |
 | You use licensed music (Artlist, Epidemic, YouTube Audio Library, etc.) | Commercial tracks get Content ID claims on YouTube and may be muted on Instagram. |
@@ -60,7 +60,7 @@ from shutter speed is **baked in**, so stabilization can't remove it.
 - Plan reels as **moves**: a dive, a gap, a flip, a proximity pass. Plan YouTube as **lines**: long, smooth, continuous paths with a reveal.
 - Fly each line two or three times. You'll want the cleanest take.
 
-## 2. Ingest — `scripts/ingest.py`
+## 2. Ingest — `scripts/ingest.py` + `scripts/camera_report.py`
 
 ```bash
 python scripts/ingest.py /Volumes/GOPRO/DCIM --session 2026-10-31_quarry
@@ -69,6 +69,8 @@ python scripts/ingest.py /Volumes/GOPRO/DCIM --session 2026-10-31_quarry
 - Copies the MP4s into `<library>/<session>/raw/`, checks a SHA-1 of every file against the card, and only then tells you it's safe to format.
 - Writes `manifest.csv`. It flags **8-bit** clips (you forgot Log) and clips with **no gyro** (Gyroflow can't stabilize those).
 - Shows **chaptered recordings**. GoPro splits recordings at about 4 GB into `GX01xxxx`, `GX02xxxx`, and so on. Keep chapters together.
+- Records the **camera and color profile** of every clip, and copies DJI `.SRT` sidecars along with the clips.
+- Then run `python scripts/camera_report.py <session>/raw` for shutter, ISO, shutter angle, and the **estimated and recommended ND filter** ([CAMERAS.md](CAMERAS.md)).
 - LRV/THM files are skipped by default. Turn on `keep_lrv` to keep the LRVs as low-res proxies.
 
 ## 3. Shortlist + stabilize

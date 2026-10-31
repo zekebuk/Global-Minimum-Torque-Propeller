@@ -23,4 +23,5 @@ def load(path: Path | str | None = None) -> dict:
     color = cfg.setdefault("color", {})
     for key in ("conversion_lut", "base_grade_drx"):
         color[key] = _resolve(color.get(key, ""))
+    color["luts"] = {k: _resolve(v) for k, v in color.get("luts", {}).items()}
     return cfg
