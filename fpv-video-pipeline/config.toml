@@ -1,0 +1,56 @@
+# FPV video pipeline configuration.
+# Every path here is yours to change. Relative paths resolve against this file's folder.
+
+[paths]
+# Where ingest.py copies card contents. One folder per shoot day / session is created underneath.
+library = "~/FPV/Library"
+# Gyroflow writes stabilized intermediates here (ProRes / DNxHR).
+stabilized = "~/FPV/Stabilized"
+# Final renders.
+exports = "~/FPV/Exports"
+# Music you have licensed for use (Artlist, Epidemic, YouTube Audio Library, ...).
+music = "~/FPV/Music"
+
+[color]
+# GP-Log -> Rec.709 conversion LUT. Put GoPro's LUT (or Leeming LUT Pro, etc.) in ./luts and name it here.
+# Leave empty to skip LUT application (e.g. if you shot Flat/Natural instead of Log).
+conversion_lut = "luts/GoPro_GP-Log_to_Rec709.cube"
+# Optional: a full grade saved from Resolve as a .drx still (see docs/PIPELINE.md, section 4).
+# When set, it replaces the single-LUT approach and is applied to every clip on the timelines.
+base_grade_drx = ""
+
+[ingest]
+# GoPro writes LRV (low-res preview) and THM (thumbnail) next to each MP4. Keep LRV as edit proxies?
+keep_lrv = false
+keep_thm = false
+verify_checksums = true
+
+[highlights]
+# Window length (s) that is scored for "how epic is this moment".
+window_s = 3.0
+# How many highlight windows to keep per clip.
+top_k = 6
+# Seconds of separation between kept highlights.
+min_gap_s = 4.0
+
+[project]
+name_prefix = "FPV"
+# Source frame rate you shoot at. 60 gives room for 2x slow-mo and speed ramps on a 30p reel.
+source_fps = 59.94
+
+[reel]
+width = 1080
+height = 1920
+fps = 29.97
+# Instagram re-encodes everything; give it a clean, high-bitrate master.
+codec = "H264"
+bitrate_kbps = 25000
+max_seconds = 90
+
+[youtube]
+# Upload 4K even from a 2.7K/5.3K source: YouTube assigns higher-bitrate codecs (VP9/AV1) to 4K uploads.
+width = 3840
+height = 2160
+fps = 59.94
+codec = "H265"
+bitrate_kbps = 80000

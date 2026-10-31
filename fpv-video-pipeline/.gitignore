@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+luts/*.cube
+*.beats.json
+highlights.json
