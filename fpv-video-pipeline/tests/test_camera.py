@@ -94,3 +94,15 @@ def test_parse_nd_arg():
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
     from camera_report import parse_nd
     assert parse_nd("ND16") == 4 and parse_nd("none") == 0 and parse_nd("2.5") == 2.5
+
+
+def test_cut_stats_and_beat_alignment():
+    from fpvpipe import cuts
+    c = [1.0, 2.0, 2.5, 3.5, 4.0]
+    st = cuts.shot_stats(c, 6.0)
+    assert st["shots"] == 6 and st["shot_len_median_s"] == 1.0 and st["first_cut_s"] == 1.0
+    beats_s = [i * 0.5 for i in range(13)]
+    al = cuts.beat_alignment(c, beats_s, fps=30)
+    assert al["cuts_on_beat_frac"] == 1.0 and al["chance_level_frac"] == 0.13
+    off = cuts.beat_alignment([x + 0.2 for x in c], beats_s, fps=30)
+    assert off["cuts_on_beat_frac"] == 0.0

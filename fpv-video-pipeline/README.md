@@ -16,7 +16,16 @@ works **today** through Resolve's scripting API, without waiting on the MCP conn
 | 7. Deliver | `scripts/render.py` | Platform-tuned renders |
 | 8. Publish | Checklist | [PIPELINE §7](docs/PIPELINE.md) |
 
-## Quick start (on the editing computer)
+**Setting up?** Follow [docs/SETUP_DAY.md](docs/SETUP_DAY.md). On Windows it's one script, `scripts\windows\setup_windows.ps1 -Root D:\FPV`,
+then `scripts/setup_check.py` tells you what's left.
+
+**Every session after that:** `python scripts/run_session.py <card> --session <name> --music <track>` chains all the
+steps below and pauses only for the GoPro Player export.
+
+**Reference reels:** `scripts/analyze_references.py <folder>` measures cut pace, cuts on the beat and grade of the
+reels you like, and `--compare` checks your own reel against them.
+
+## Quick start (step by step)
 
 ```bash
 pip install -r requirements.txt        # numpy; also needs ffmpeg/ffprobe on PATH

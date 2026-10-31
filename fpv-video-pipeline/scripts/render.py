@@ -3,6 +3,7 @@
 
     python scripts/render.py reel    --timeline REEL_final
     python scripts/render.py youtube --timeline YT_final
+    python scripts/render.py reel --timeline REEL_selects --save-preset "FPV Reel" --no-render   # one-time
 
 Settings come from [reel] / [youtube] in config.toml. Output: <exports>/<project>/<timeline>.mp4
 Reel: 1080x1920 H.264 ~25 Mbps 29.97p, AAC 320k - Instagram re-encodes, so give it a clean master.
@@ -24,6 +25,8 @@ def main() -> int:
     ap.add_argument("target", choices=["reel", "youtube"])
     ap.add_argument("--timeline", required=True)
     ap.add_argument("--config", type=Path)
+    ap.add_argument("--save-preset", metavar="NAME", help="also save these settings as a Deliver-page render preset")
+    ap.add_argument("--no-render", action="store_true", help="only set up (and save) the settings")
     args = ap.parse_args()
     cfg = config.load(args.config)
     spec = cfg[args.target]
@@ -57,6 +60,11 @@ def main() -> int:
     }
     if not project.SetRenderSettings(settings):
         print("warning: some render settings were rejected; check the Deliver page before trusting the file")
+    if args.save_preset:
+        ok = project.SaveAsNewRenderPreset(args.save_preset)
+        print(f"render preset {args.save_preset!r} {'saved' if ok else 'NOT saved (name taken? delete it on the Deliver page)'}")
+    if args.no_render:
+        return 0
     job = project.AddRenderJob()
     if not job:
         raise SystemExit("AddRenderJob failed (is the timeline empty or the output path unwritable?)")
