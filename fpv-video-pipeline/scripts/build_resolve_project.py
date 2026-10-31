@@ -6,7 +6,7 @@
 What it does, in order:
   1. Creates (or opens) project FPV_<session>; 3840x2160 @ source fps, DaVinci YRGB (LUT-based color, section 4).
   2. Bins: 01_Footage (Gyroflow intermediates if present, else raw GoPro), 02_Music, 03_SFX.
-  3. Clip markers from highlights.json (red flip/roll, orange dive, yellow aggressive, green smooth).
+  3. Clip markers from highlights.json (red flip/roll, fuchsia dive, yellow aggressive, green smooth).
   4. Timeline YT_selects   - 16:9 4K, every clip in shooting order (chapters kept together).
      Timeline REEL_selects - 9:16 1080x1920, a string-out of the highlight windows, best first,
                              with beat/downbeat/drop markers from <track>.beats.json.
@@ -25,7 +25,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from fpvpipe import config, resolve as rlib  # noqa: E402
 
-MARKER_COLOR = {"flip/roll": "Red", "dive/hang": "Orange", "aggressive": "Yellow"}
+# Resolve marker colors: Blue Cyan Green Yellow Red Pink Purple Fuchsia Rose Lavender Sky Mint Lemon Sand Cocoa Cream
+MARKER_COLOR = {"flip/roll": "Red", "dive/hang": "Fuchsia", "aggressive": "Yellow"}
 VIDEO_EXT = {".mp4", ".mov", ".mxf"}
 
 

@@ -6,7 +6,7 @@
 Writes highlights.json next to the clips:
   { "GX010042.MP4": { "highlights": [...reel candidates...], "smooth": [[start, end], ...] } }
 build_resolve_project.py turns these into colored clip markers in Resolve:
-  red = flip/roll, orange = dive/hang time, yellow = aggressive, green = smooth stretch (YouTube).
+  red = flip/roll, fuchsia = dive/hang time, yellow = aggressive, green = smooth stretch (YouTube).
 Run it on the ORIGINAL GoPro files: re-encoded/stabilized intermediates no longer carry telemetry.
 """
 from __future__ import annotations

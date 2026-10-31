@@ -33,7 +33,7 @@ def check(ok: bool, msg: str, todo: str = "", warn: bool = False) -> bool:
 def write_root(root: Path):
     cfg = ROOT / "config.toml"
     text = cfg.read_text()
-    for key, sub in (("library", "Library"), ("stabilized", "Stabilized"), ("exports", "Exports"), ("music", "Music")):
+    for key, sub in (("library", "Library"), ("stabilized", "Stabilized"), ("exports", "Exports"), ("music", "Music"), ("sfx", "SFX")):
         p = (root / sub).as_posix()
         text = re.sub(rf'^{key} = ".*"$', f'{key} = "{p}"', text, count=1, flags=re.MULTILINE)
     cfg.write_text(text)

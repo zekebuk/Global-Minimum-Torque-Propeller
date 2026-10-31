@@ -10,6 +10,8 @@ stabilized = "~/FPV/Stabilized"
 exports = "~/FPV/Exports"
 # Music you have licensed for use (Artlist, Epidemic, YouTube Audio Library, ...).
 music = "~/FPV/Music"
+# Generated sound-effects library (make_sfx_library.py).
+sfx = "~/FPV/SFX"
 
 [color]
 # Fallback conversion LUT when a clip's profile has no entry in [color.luts]. Leave empty to skip.
@@ -70,3 +72,22 @@ base_iso = 100
 [cameras."Avata 2"]
 f_number = 2.8
 base_iso = 100
+
+[elevenlabs]
+# API key is read from the ELEVENLABS_API_KEY environment variable, never stored here.
+sfx_model = "eleven_text_to_sound_v2"
+sfx_prompt_influence = 0.4
+# music_v1 / music_v2 / music_v2_5 (per ElevenLabs docs; availability depends on your plan)
+music_model = "music_v2_5"
+
+[youtube_meta]
+# Resolve marker color used for chapter markers on the YouTube timeline (one marker per chapter, name = title).
+chapter_marker_color = "Cream"
+# 19 = Travel & Events, 17 = Sports, 28 = Science & Technology
+category_id = 19
+client_secrets = "secrets/youtube_client.json"
+token_file = "secrets/youtube_token.json"
+description_intro = """Cinematic FPV flight."""
+gear = ["Quad: <your quad>", "Cameras: GoPro HERO13 Black / GoPro Mission 1 Pro / DJI Avata 2", "Edited in DaVinci Resolve Studio"]
+hashtags = ["fpv", "cinematicfpv", "fpvdrone", "gopro"]
+tags = ["fpv", "cinematic fpv", "fpv drone", "drone video", "gopro"]

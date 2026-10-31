@@ -4,3 +4,6 @@ __pycache__/
 luts/*.cube
 *.beats.json
 highlights.json
+secrets/
+*.youtube.txt
+*.thumb.jpg

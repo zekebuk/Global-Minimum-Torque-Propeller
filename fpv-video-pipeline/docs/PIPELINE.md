@@ -86,7 +86,7 @@ FPV "epic" is mostly **physical**, and the GoPro already logs that physics at ab
 | Signal from GPMF telemetry | What it means | Marker |
 |---|---|---|
 | ≥300° net rotation on one axis within the window | flip, roll, power loop | 🔴 red |
-| \|accel\| < 0.4 g for 30% or more of the window | dive, hang time, throttle cut (near free fall) | 🟠 orange |
+| \|accel\| < 0.4 g for 30% or more of the window | dive, hang time, throttle cut (near free fall) | 🟣 fuchsia |
 | 95th-percentile angular rate ≥ 400°/s | aggressive, snappy flying | 🟡 yellow |
 | ≥8 s of calm flying (< 250°/s) | smooth line, a YouTube candidate | 🟢 green |
 

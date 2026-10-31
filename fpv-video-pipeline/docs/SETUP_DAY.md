@@ -36,7 +36,7 @@ Follow [MCP_SETUP.md](MCP_SETUP.md) using the venv Python from step 1. Test it: 
 ```
 - [ ] **ingest:** manifest shows the right camera + profile for every clip (GP-Log / GP-Log2 / D-Log M)
 - [ ] **report:** shutter, ISO and ND look plausible. Compare "ND used (est.)" against the filter you actually had on, so we know how far off it is on your footage
-- [ ] **highlights:** do the red/orange markers line up with the flips and dives you remember?
+- [ ] **highlights:** do the red/fuchsia markers line up with the flips and dives you remember?
 - [ ] **pause:** GoPro Player ▸ open `Stabilized\setup-test\_queue` ▸ select all ▸ make the `FPV Reel` HyperSmooth Pro preset ([HYPERSMOOTH_PRO.md](HYPERSMOOTH_PRO.md)), **CineForm**, same res and fps ▸ Batch Export to `Stabilized\setup-test`. Note how the export files are named
 - [ ] **check:** every export ✓ (10-bit, same fps, same length)
 - [ ] **build:** Resolve now has `REEL_selects` and `YT_selects`, with orange/yellow/teal clips (GP-Log / GP-Log2 / D-Log M), markers, beat markers on the reel
@@ -57,6 +57,12 @@ Follow [MCP_SETUP.md](MCP_SETUP.md) using the venv Python from step 1. Test it: 
 ```
 This gives median shot length, time to first cut, cuts on the beat, pace change, and black level, contrast and saturation
 for the reels you like. Later, add `--compare <your reel>` to see how close you are.
+
+## 7. Sound + publishing (optional, 20 min)
+- [ ] `setx ELEVENLABS_API_KEY "..."`, then `python scripts\make_sfx_library.py --bpm 128 --variants 3` and import `D:\FPV\SFX` into Resolve
+- [ ] `python scripts\make_music.py reel --bpm 128 --seconds 24 --mood "<your vibe>"`, then use it as `--music` in the test session
+- [ ] Put a few **Cream** markers on `YT_selects`, then run `python scripts\youtube_publish.py <export> --title "..." --chapters-from-resolve YT_selects --thumb-at 10`
+- [ ] Optional: Google Cloud OAuth client → `secrets\youtube_client.json` (see [AUDIO_AND_PUBLISHING.md](AUDIO_AND_PUBLISHING.md))
 
 ## Send me afterwards
 1. Output of `setup_check.py`, plus any ✗ lines from the session run
