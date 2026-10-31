@@ -1,0 +1,3 @@
+case,trim_offset_deg,thrust_N,torque_Nm,root_moment_Nm,figure_of_merit,locked_thrust_N,locked_torque_Nm,torque_diff_pct
+MIL,0.10376287,35,0.86327214,2.447709,0.73872254,35,0.85926578,0.46625448
+GMT,-0.021758542,35,0.84795053,2.3440596,0.75207052,34.999994,0.84640307,0.18282687

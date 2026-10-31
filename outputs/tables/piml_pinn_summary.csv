@@ -1,0 +1,2 @@
+train_steps,train_seconds,solver_samples_used,final_loss,test_residual_rms,vi_mean_abs_pct_error,vi_p99_abs_pct_error,thrust_mape_pct,torque_mape_pct
+8000,49.845578,0,7.3390882e-05,0.0080905568,0.36366908,2.3290773,0.12179665,0.032376452

@@ -67,6 +67,16 @@ The XROTOR and MATLAB commands are report-only by default. Add `--execute` only 
 5. `python scripts/make_thesis_figures.py`
    Regenerates thesis-ready PNG/PDF figures from the locked geometry and processed station data.
 
+## Optional: Surrogate Model and Physics-Informed ML
+
+`python scripts/run_surrogate_piml_study.py` (requires `torch`) builds a vectorized BEMT truth model with an analytic polar fitted to the locked XFOIL station data. On top of it, the script:
+
+- trains MLP surrogates (black-box vs rotor-coefficient encoding);
+- optimizes twist for minimum torque at 35 N and 4000 rpm across a range of root-bending-moment caps, re-checking every optimum on BEMT;
+- trains a PINN on the BEMT residual alone, with no solver data.
+
+It writes `outputs/reports/surrogate_piml_report.md`. Methods and assumptions are in `docs/surrogate_piml.md`. This extension compares models with each other and does not change the locked result.
+
 ## Interactive GUI Launchers
 
 The GUI launchers are convenience tools for inspection and development, not the locked thesis quick-start workflow.
