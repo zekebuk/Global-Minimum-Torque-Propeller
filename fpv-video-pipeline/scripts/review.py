@@ -8,7 +8,9 @@ Runs on the desktop (Resolve Studio open). Typical round, driven from the phone 
     python scripts/review.py export  --timeline REEL_selects --out D:/FPV/Review/reel.json   # or: timeline -> cut list
     #  (Claude edits reel.json from your notes using fpvpipe/cutlist.py operations)
     python scripts/review.py build   --cutlist D:/FPV/Review/reel.json                        # -> new timeline REEL_vN
-    python scripts/review.py preview --cutlist D:/FPV/Review/reel.json                        # -> small MP4 + shot sheet
+    python scripts/review.py fast    --cutlist D:/FPV/Review/reel.json --session <s>          # no Resolve needed: graded
+                                       # preview via ffmpeg, only changed shots re-render (seconds per note)
+    python scripts/review.py preview --cutlist D:/FPV/Review/reel.json                        # Resolve render of timeline vN
 
 preview renders the current version small enough to watch on a phone (reel 540x960, YouTube 960x540, ~4 Mbps)
 and makes a contact sheet: one numbered thumbnail per shot with its start time, so notes can say "shot 4".
@@ -81,6 +83,16 @@ def cmd_firstcut(args, cfg):
     moments = sorted(({"src": best_src(f), "peak_s": (h["start_s"] + h["end_s"]) / 2, "score": h["score"],
                        "label": h["label"]} for f, r in hl.items() for h in r.get("highlights", [])),
                      key=lambda m: m["score"], reverse=True)
+    if not moments:
+        # Calm flights / no gyro (DJI): evenly spaced moments across the clips, longest clips first, so a v1 still
+        # exists in the morning. Labelled "filler" on the shot sheet so you know to swap them.
+        for f, r in sorted(hl.items(), key=lambda kv: -kv[1].get("duration_s", 0)):
+            d = float(r.get("duration_s", 0))
+            moments += [{"src": best_src(f), "peak_s": t, "score": 0, "label": "filler"} for t in
+                        [d * (k + 0.5) / max(1, int(d // 6)) for k in range(max(1, int(d // 6)))]]
+        if not moments:
+            raise SystemExit("no clips with duration in highlights.json")
+        print("! no highlight moments: v1 uses evenly spaced filler shots")
     bm = json.loads(args.music.with_suffix(".beats.json").read_text())
     drop = args.drop if args.drop is not None else (bm["drops_s"][0] if bm.get("drops_s") else None)
     c = cl.first_cut(moments, bm["beats_s"], bm["downbeats_s"], drop, float(cfg["reel"]["fps"]),
@@ -174,6 +186,35 @@ def cmd_preview(args, cfg):
     print(c.table())
 
 
+def cmd_fast(args, cfg):
+    import csv
+    from fpvpipe import fastpreview
+    c = cl.CutList.load(args.cutlist)
+    manifest = {}
+    if args.session:
+        m = cfg["paths"]["library"] / args.session / "manifest.csv"
+        if m.exists():
+            with open(m, newline="") as f:
+                manifest = {Path(r["file"]).stem.upper(): r["profile"] for r in csv.DictReader(f)}
+    def profile_of(p: Path):
+        key = p.stem.upper().split("_STABILI")[0]
+        if key in manifest:
+            return manifest[key]
+        from fpvpipe import camera
+        return camera.identify(p, look=False).profile
+    vertical = not args.horizontal
+    out = Path(args.cutlist).parent / f"{c.name}_v{c.version}_fast.mp4"
+    t0 = time.time()
+    r = fastpreview.build(c, cfg, out, look=args.look, vertical=vertical, profile_of=profile_of)
+    print(f"preview {out} in {time.time() - t0:.1f}s ({r.rendered} shot(s) rendered, {r.reused} reused, "
+          f"{out.stat().st_size / 1e6:.1f} MB)")
+    for n in r.notes:
+        print(f"  ! {n}")
+    contact_sheet(out, c, out.with_name(out.stem + "_shots.jpg"))
+    (out.with_suffix(".txt")).write_text(c.table() + "\n")
+    print(c.table())
+
+
 def contact_sheet(video: Path, c: cl.CutList, out: Path, cols: int = 4):
     """One thumbnail per shot (mid-shot), numbered, tiled. Numbers via drawtext when a system font exists."""
     font = next((f for f in ("C:/Windows/Fonts/arialbd.ttf", "/System/Library/Fonts/Helvetica.ttc",
@@ -207,11 +248,14 @@ def main() -> int:
     e = sub.add_parser("export"); e.add_argument("--timeline", required=True); e.add_argument("--out", type=Path, required=True)
     b = sub.add_parser("build"); b.add_argument("--cutlist", type=Path, required=True)
     p = sub.add_parser("preview"); p.add_argument("--cutlist", type=Path, required=True)
-    for s in (f, e, b, p):
+    q = sub.add_parser("fast"); q.add_argument("--cutlist", type=Path, required=True); q.add_argument("--session")
+    q.add_argument("--look", default="reel"); q.add_argument("--horizontal", action="store_true", help="16:9 (YouTube)")
+    for s in (f, e, b, p, q):
         s.add_argument("--config", type=Path)
     args = ap.parse_args()
     cfg = config.load(args.config)
-    {"firstcut": cmd_firstcut, "export": cmd_export, "build": cmd_build, "preview": cmd_preview}[args.cmd](args, cfg)
+    {"firstcut": cmd_firstcut, "export": cmd_export, "build": cmd_build, "preview": cmd_preview,
+     "fast": cmd_fast}[args.cmd](args, cfg)
     return 0
 
 

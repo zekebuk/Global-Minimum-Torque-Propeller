@@ -32,36 +32,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from fpvpipe import camera, colorsci as cs, config, media, scopes  # noqa: E402
-
-
-def sample_frames(path: Path, start: float, dur: float, n: int = 7, width: int = 384) -> list[np.ndarray]:
-    """Decode n frames as 16-bit RGB (full range, like Resolve's 'auto' data levels for video files)."""
-    info = media.video_summary(media.ffprobe(path))
-    h = int(round(info["height"] * width / max(info["width"], 1) / 2) * 2)
-    frames = []
-    for k in range(n):
-        t = start + dur * (k + 0.5) / n
-        raw = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{t:.3f}", "-i", str(path), "-frames:v", "1",
-                              "-vf", f"scale={width}:{h}", "-pix_fmt", "rgb48le", "-f", "rawvideo", "-"],
-                             capture_output=True).stdout
-        a = np.frombuffer(raw, "<u2").astype(np.float64) / 65535.0
-        if a.size == width * h * 3:
-            frames.append(a.reshape(h, width, 3))
-    return frames
-
-
-def pool(frames: list[np.ndarray], k: int = 60000, seed: int = 0) -> np.ndarray:
-    px = np.concatenate([f.reshape(-1, 3) for f in frames])
-    if len(px) > k:
-        px = px[np.random.default_rng(seed).choice(len(px), k, replace=False)]
-    return px
-
-
-def lut_for(profile: str, cfg: dict, override: Path | None) -> Path | None:
-    if override:
-        return override
-    p = cfg["color"]["luts"].get(profile) or cfg["color"]["conversion_lut"]
-    return p if p and p.exists() else None
+from fpvpipe.grading import lut_for, pool, sample_frames  # noqa: E402,F401
 
 
 def grade_one(src: Path, profile: str, start: float, dur: float, lut_path: Path, look: str, match: dict | None,

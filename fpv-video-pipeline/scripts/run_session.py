@@ -24,7 +24,27 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-STEPS = ["ingest", "report", "highlights", "stage", "pause", "check", "beats", "build"]
+STEPS = ["ingest", "report", "highlights", "stage", "pause", "check", "beats", "build", "firstcut", "fast", "notify"]
+# Overnight: no Resolve, no clicks. Stabilization comes later, on the approved shots only.
+OVERNIGHT = ["ingest", "report", "highlights", "beats", "firstcut", "fast", "notify"]
+
+
+def pick_music(cfg, common) -> Path:
+    """Newest track that has a beat map in the Music folder; otherwise generate a 128 BPM guide click."""
+    music = cfg["paths"]["music"]
+    beat_maps = sorted(music.glob("*.beats.json"), key=lambda p: p.stat().st_mtime, reverse=True) if music.is_dir() else []
+    for bj in beat_maps:
+        base = bj.name[: -len(".beats.json")]
+        for cand in music.glob(base + ".*"):
+            if cand.suffix.lower() in (".mp3", ".wav", ".m4a", ".aac", ".flac") and not cand.name.endswith(".beats.json"):
+                print(f"music: {cand.name} (newest beat-mapped track)")
+                return cand
+    guide = music / "default_128.guide.wav"
+    if not guide.exists():
+        subprocess.run([sys.executable, str(HERE / "guide_track.py"), "make", "--bpm", "128", "--first-beat", "0",
+                        "--drop", "7.5", "--to", "60", "--name", "default_128"] + [str(c) for c in common], check=True)
+    print("music: no beat-mapped track found, using a 128 BPM guide click (swap it in Edits)")
+    return guide
 
 
 def main() -> int:
@@ -37,6 +57,9 @@ def main() -> int:
     ap.add_argument("--all", action="store_true", help="stabilize every clip, not just highlight clips")
     ap.add_argument("--from", dest="start", choices=STEPS, default="ingest")
     ap.add_argument("--to", dest="stop", choices=STEPS, default="build")
+    ap.add_argument("--overnight", action="store_true",
+                    help="unattended: ingest -> highlights -> first cut -> fast preview -> notify (no Resolve, no pauses)")
+    ap.add_argument("--seconds", type=float, default=24.0, help="reel length for the first cut")
     ap.add_argument("--config", type=Path)
     args = ap.parse_args()
 
@@ -44,8 +67,12 @@ def main() -> int:
     from fpvpipe import config
     cfg = config.load(args.config)
     raw = cfg["paths"]["library"] / args.session / "raw"
+    review_dir = cfg["paths"].get("review") or cfg["paths"]["library"].parent / "Review"
+    cut = review_dir / args.session / "reel.json"
     stab = cfg["paths"]["stabilized"] / args.session
     common = ["--config", str(args.config)] if args.config else []
+    if args.overnight and not args.music:
+        args.music = pick_music(cfg, common)
     py = [sys.executable]
 
     plan = {
@@ -55,10 +82,19 @@ def main() -> int:
         "stage": py + [HERE / "stage_for_stabilization.py", args.session] + (["--all"] if args.all else []) + common,
         "pause": None,
         "check": py + [HERE / "check_stabilized.py", args.session] + common,
-        "beats": py + [HERE / "beat_map.py", args.music] if args.music else None,
+        # skip when a beat map exists (guide tracks carry an exact grid; real tracks only need mapping once)
+        "beats": py + [HERE / "beat_map.py", args.music]
+                 if args.music and not Path(args.music).with_suffix(".beats.json").exists() else None,
         "build": py + [HERE / "build_resolve_project.py", args.session] + (["--music", args.music] if args.music else []) + common,
+        "firstcut": py + [HERE / "review.py", "firstcut", "--session", args.session, "--music", args.music or "",
+                          "--out", cut, "--seconds", str(args.seconds)] + common,
+        "fast": py + [HERE / "review.py", "fast", "--cutlist", cut, "--session", args.session] + common,
+        "notify": py + [HERE / "notify.py", "--session", args.session, "--cutlist", cut] + common,
     }
-    steps = STEPS[STEPS.index(args.start):STEPS.index(args.stop) + 1]
+    if args.overnight:
+        steps = [x for x in OVERNIGHT if STEPS.index(x) >= STEPS.index(args.start)]
+    else:
+        steps = STEPS[STEPS.index(args.start):STEPS.index(args.stop) + 1]
     if args.stabilizer == "none":
         steps = [s for s in steps if s not in ("stage", "pause", "check")]
     elif args.stabilizer == "gyroflow":
@@ -76,7 +112,7 @@ def main() -> int:
             continue
         cmd = plan[step]
         if cmd is None:
-            print("skipped (no --music)")
+            print("skipped (no --music, or its beat map already exists)")
             continue
         t0 = time.time()
         rc = subprocess.run([str(c) for c in cmd]).returncode

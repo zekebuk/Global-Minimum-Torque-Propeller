@@ -10,13 +10,35 @@ preview).
    folder. Or run `claude remote-control` in that folder. Leave the desktop on, with Resolve open and the SSD mounted.
 3. From the phone, start a session and ask Claude to use that folder. You approve the connection on the phone.
 
+## Overnight: plug in the card, review in the morning
+One-time: `powershell -ExecutionPolicy Bypass -File scripts\windows\install_card_watcher.ps1`. A background watcher
+starts at login. When a card with a `DCIM` folder is mounted and its file list has settled, it runs
+`run_session.py --overnight` (one run at a time, each card only once, the card is only read):
+
+```
+card in ─▶ ingest + verify ─▶ camera report ─▶ highlights ─▶ beat grid ─▶ first cut ─▶ graded preview (ffmpeg) ─▶ notify
+```
+- **No Resolve needed.** The preview applies the same grade auto_grade would write into Resolve, baked into a per-shot LUT.
+- **Music:** the newest beat-mapped track in your Music folder, or a 128 BPM guide click (swap the song in Edits).
+- **No highlights** (calm flight, DJI): v1 uses evenly spaced shots marked "filler" on the shot sheet.
+- **Notify:** the preview, shot sheet and shot list are copied to `[notify].phone_folder` (a Drive/OneDrive-synced folder),
+  with an optional ntfy push (`[notify].ntfy_topic`; text only). `Review/LATEST.json` points at it, so in the morning
+  you just tell Claude "review last night's preview".
+- Run it by hand: `python scripts\run_session.py E:\DCIM --session <name> --overnight`.
+
+## Review rounds: seconds, not minutes
+`review.py fast` builds the preview straight from the cut list with ffmpeg. Segments are cached per shot, so after
+a note only the changed shots re-render (measured on test clips: 14.7 s first build, 0.2 s unchanged, 3.9 s after
+trimming one shot). The Resolve render (`review.py preview`) is still there for checking the real timeline.
+
 ## The loop
 ```
 new footage ──▶ run_session.py (ingest, highlights, grade-ready project)  ── you: GoPro Player batch export (one click)
              ──▶ review.py firstcut   (automatic v1: best moves on the beat grid, best one ON the drop)
-             ──▶ review.py build      (timeline REEL_v1)  ──▶ auto_grade.py  ──▶ review.py preview
+             ──▶ review.py fast       (graded preview, no Resolve)       [overnight does all of the above]
              ──▶ 📱 preview MP4 + shot sheet in the app
-you reply    ──▶ Claude edits the cut list ──▶ build v2 ──▶ regrade ──▶ preview ──▶ 📱 …
+you reply    ──▶ Claude edits the cut list ──▶ review.py fast (changed shots only) ──▶ 📱 …
+approved     ──▶ stabilize the used shots ──▶ review.py build (Resolve timeline) ──▶ auto_grade ──▶ finishing
 done         ──▶ render.py reel --no-music ──▶ reel_handoff.py ──▶ Edits (song start time on the card)
 ```
 

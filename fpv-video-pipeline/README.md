@@ -25,6 +25,9 @@ then `scripts/setup_check.py` tells you what's left.
 **Existing footage:** `scripts/scan_archive.py --root SSD=E:\ --root HDD=F:\` catalogues everything read-only,
 ranks the best moments across the whole archive, and audits which files aren't backed up: [docs/ARCHIVE.md](docs/ARCHIVE.md).
 
+**Hands-off:** `scripts\windows\install_card_watcher.ps1` once. After that, plugging in a card runs the overnight
+chain (ingest → highlights → first cut → graded preview, no Resolve) and drops the preview on your phone.
+
 **From your phone:** automatic first cut, preview renders and a numbered shot sheet sent to the Claude app, with
 notes turned into exact edits: [docs/PHONE_WORKFLOW.md](docs/PHONE_WORKFLOW.md).
 

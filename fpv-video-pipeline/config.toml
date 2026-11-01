@@ -12,6 +12,8 @@ exports = "~/FPV/Exports"
 music = "~/FPV/Music"
 # Generated sound-effects library (make_sfx_library.py).
 sfx = "~/FPV/SFX"
+# Cut lists, previews and shot sheets for phone review (one folder per session).
+review = "~/FPV/Review"
 
 [color]
 # Fallback conversion LUT when a clip's profile has no entry in [color.luts]. Leave empty to skip.
@@ -113,3 +115,12 @@ description_intro = """Cinematic FPV flight."""
 gear = ["Quad: <your quad>", "Cameras: GoPro HERO13 Black / GoPro Mission 1 Pro / DJI Avata 2", "Edited in DaVinci Resolve Studio"]
 hashtags = ["fpv", "cinematicfpv", "fpvdrone", "gopro"]
 tags = ["fpv", "cinematic fpv", "fpv drone", "drone video", "gopro"]
+
+[notify]
+# Where a finished overnight preview is copied so it reaches your phone (e.g. a Google Drive / OneDrive synced folder:
+# "G:/My Drive/FPV Previews"). Empty = leave it in the Review folder.
+phone_folder = ""
+# Optional push notification through ntfy (free app, https://ntfy.sh). Pick a long random topic name: anyone who knows
+# it can read the messages. Empty = no push. Only the session name, shot count and length are sent, never video.
+ntfy_topic = ""
+ntfy_server = "https://ntfy.sh"
