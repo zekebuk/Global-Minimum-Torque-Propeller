@@ -37,7 +37,10 @@ python scripts\make_music.py youtube --bpm 100 --seconds 240 --mood "uplifting c
 - Pass the file to the session: `run_session.py ... --music D:\FPV\Music\reel_128bpm_....mp3`
 
 ## Instagram via the Edits app (in-app music)
-Edits has no API, so the file has to reach your phone. That can be automatic, plus about 4 taps:
+Edits has no API, so the last step is always manual: import the file, add the song, set its start time.
+**Edits desktop (default, `[reel].edits_target = "desktop"`):** the render is already on the PC. Import it straight from
+Exports, or set `[reel].handoff` to an "Edits inbox" folder. Projects reportedly sync with the phone app.
+**Edits on the phone (`edits_target = "phone"`):** you need a transfer step:
 1. **One-time:** install Google Drive for desktop and set `[reel].handoff = "G:/My Drive/FPV Reels"` in `config.toml`.
 2. Cut the reel in Resolve to a **local copy of the same song** on audio track A2 (buy it or use a preview copy). Put the
    song's drop on the DROP marker.
@@ -47,7 +50,7 @@ Edits has no API, so the file has to reach your phone. That can be automatic, pl
    second and how many frames off each is, in case Edits' scrubber can't land exactly. More than 2 frames off is visible. It
    copies the video and the card into the Drive folder.
    - Without Resolve: `--song track.mp3 --reel-drop 7.5` lines up the song's detected drop with your hardest move.
-5. **Phone:** Drive app ▸ video ▸ Save to device ▸ Edits ▸ import ▸ add the same song ▸ set its start to the cue time ▸
+5. **Phone:** Drive app ▸ video ▸ Save to device ▸ Edits ▸ import ▸ (desktop: Edits ▸ New project ▸ import ▸) add the same song ▸ set its start to the cue time ▸
    set the reel's own audio (SFX) to about 30–50% ▸ share to Instagram.
 
 Use Drive, not a messaging app, for the transfer. Messengers recompress the video.

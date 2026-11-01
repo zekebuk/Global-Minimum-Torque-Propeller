@@ -56,7 +56,10 @@ bitrate_kbps = 25000
 max_seconds = 90
 # Audio track that holds the song (render.py --no-music mutes it; reel_handoff.py reads the song's start from it).
 music_track = 2
-# Folder synced to your phone (e.g. Google Drive for desktop: "G:/My Drive/FPV Reels"). reel_handoff.py copies here.
+# Where Edits runs: "desktop" (Edits desktop app on this PC) or "phone".
+edits_target = "desktop"
+# Folder reel_handoff.py copies the reel + cue card into: a local "Edits inbox" for desktop,
+# or a Google Drive/OneDrive synced folder for phone (e.g. "G:/My Drive/FPV Reels"). Empty = leave in Exports.
 handoff = ""
 
 [youtube]

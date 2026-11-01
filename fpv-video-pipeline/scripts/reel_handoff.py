@@ -12,7 +12,7 @@ Edits starts the chosen song at your chosen point when the reel starts (0:00), s
 timeline; from beats it is song_drop - reel_drop. The cue card also gives the nearest whole/half second (if
 the app's scrubber can't land exactly) and how many frames off that is, so you know if it matters (>2 frames shows).
 Writes <video>.edits.txt and copies both files into [reel].handoff (a Google Drive / OneDrive synced folder),
-so on the phone: Drive app > video > Save to device > Edits > import > add the same song > set the start.
+or a local "Edits inbox" folder when you use Edits on the desktop (--target desktop, the default).
 """
 from __future__ import annotations
 
@@ -82,6 +82,8 @@ def main() -> int:
     ap.add_argument("--song-drop", type=float, help="override: song time (s) of the drop")
     ap.add_argument("--title", default="", help="song title / artist as it appears in Edits")
     ap.add_argument("--handoff", type=Path, help="override [reel].handoff folder")
+    ap.add_argument("--target", choices=["desktop", "phone"], help="Edits on this computer or on the phone "
+                    "(default: [reel].edits_target, else desktop)")
     ap.add_argument("--config", type=Path)
     args = ap.parse_args()
     cfg = config.load(args.config)
@@ -116,7 +118,10 @@ def main() -> int:
     lines += ["  " + r for r in rounding_report(cue, fps)]
     if reel_drop is not None:
         lines.append(f"Drop hits at reel {fmt(reel_drop)} = song {fmt(cue + reel_drop)}: check it lands on the hardest move.")
-    lines += ["", "Steps: Drive > save video to device > Edits > New > import video > Audio > add song >",
+    target = args.target or cfg["reel"].get("edits_target", "desktop")
+    first = ("Edits (desktop) > New project > import this file" if target == "desktop"
+             else "Drive app > save video to device > Edits > New > import video")
+    lines += ["", f"Steps: {first} > Audio > add song >",
               "       set start to the time above > keep the reel's own audio (SFX) at ~30-50% > Export / Share to Instagram",
               "", "CAPTION DRAFT", "<hook line> | <location>",
               " ".join("#" + h.lstrip("#") for h in cfg.get("youtube_meta", {}).get("hashtags", []))]
@@ -129,9 +134,11 @@ def main() -> int:
         dest.mkdir(parents=True, exist_ok=True)
         for f in (args.video, card):
             shutil.copy2(f, dest / f.name)
-        print(f"\ncopied to {dest} (syncs to your phone)")
-    else:
+        print(f"\ncopied to {dest}")
+    elif target == "phone":
         print("\nset [reel].handoff in config.toml to a Google Drive/OneDrive synced folder to skip the manual copy")
+    else:
+        print(f"\nimport {args.video} into Edits desktop (or set [reel].handoff to an 'Edits inbox' folder)")
     return 0
 
 
