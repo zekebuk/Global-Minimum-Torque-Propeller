@@ -10,11 +10,12 @@
 
 What it does per clip (details and the maths: docs/COLOR_ALGORITHM.md):
   1. samples 7 frames from the part of the clip actually used on the timeline
-  2. simulates the node tree: node 1 BAL (CDL, log) -> node 2 camera LUT -> node 3 CONT (CDL, display)
+  2. simulates the node tree ([color.nodes]): scene order BAL (log) -> CONT (log) -> ... -> LUT (output transform);
+     display order BAL (log) -> LUT -> CONT (display)
   3. white balance: finds the achromatic cluster in log space (widest brightness spread), cancels its offset
   4. exposure: common log offset that puts the median on target; then black/mid/white via slope/offset/power;
      then saturation to the look's level (capped)
-  5. writes node 1 + node 3 CDLs (and the right LUT on node 2) via Resolve's SetCDL / SetLUT,
+  5. writes the BAL + CONT CDLs and the camera's LUT into the configured nodes via Resolve's SetCDL / SetLUT,
      plus <exports>/grades/<name>/<clip>.png (before/after: picture, waveform, RGB parade, vectorscope)
 It's the technical base (a colourist's "balance" pass). Creative look, windows and secondaries stay yours.
 """
@@ -64,16 +65,16 @@ def lut_for(profile: str, cfg: dict, override: Path | None) -> Path | None:
 
 
 def grade_one(src: Path, profile: str, start: float, dur: float, lut_path: Path, look: str, match: dict | None,
-              out_dir: Path, name: str) -> tuple[cs.Grade, Path]:
+              out_dir: Path, name: str, order: str = "scene") -> tuple[cs.Grade, Path]:
     lut = cs.load_cube(lut_path)
     frames = sample_frames(src, start, dur)
     if not frames:
         raise RuntimeError("could not decode frames")
-    g = cs.solve(pool(frames), lut, look, match)
+    g = cs.solve(pool(frames), lut, look, match, order=order)
     mid = frames[len(frames) // 2]
     flat = mid.reshape(-1, 3)
-    before = cs.render(flat, lut, cs.CDL(), cs.CDL()).reshape(mid.shape)
-    after = cs.render(flat, lut, g.bal, g.cont).reshape(mid.shape)
+    before = cs.render(flat, lut, cs.CDL(), cs.CDL(), order).reshape(mid.shape)
+    after = cs.render(flat, lut, g.bal, g.cont, order).reshape(mid.shape)
     nb = (g.before["neutral_cb"], g.before["neutral_cr"])
     na = (g.after["neutral_cb"], g.after["neutral_cr"])
     img = np.concatenate([scopes.panel(before, "before", nb), np.full((6, scopes.panel(before).shape[1], 3), 40, np.uint8),
@@ -106,6 +107,7 @@ def main() -> int:
     ap.add_argument("--config", type=Path)
     args = ap.parse_args()
     cfg = config.load(args.config)
+    nodes = {"order": "scene", "bal": 1, "cont": 2, "lut": 6, **cfg["color"].get("nodes", {})}
     manifest = {}
     if args.session:
         mpath = cfg["paths"]["library"] / args.session / "manifest.csv"
@@ -163,23 +165,29 @@ def main() -> int:
             print(f"! {name}: no LUT for profile {profile!r} (add it under [color.luts] or pass --lut)")
             continue
         try:
-            g, png = grade_one(path, profile, start, dur, lut, args.look, hero, out_dir, name.replace("@", "_"))
+            g, png = grade_one(path, profile, start, dur, lut, args.look, hero, out_dir, name.replace("@", "_"),
+                               nodes["order"])
         except Exception as e:
             print(f"! {name}: {e}")
             continue
         if args.match and hero is None:
             hero = g.after
         print(summary(name, g) + f"\n    scopes: {png}")
-        results[name] = {"file": str(path), "profile": profile, "lut": str(lut), "node1_bal": g.bal.to_dict(),
-                         "node3_cont": g.cont.to_dict(), "before": g.before, "after": g.after, "notes": g.notes}
+        results[name] = {"file": str(path), "profile": profile, "lut": str(lut), "order": nodes["order"],
+                         "bal": {"node": nodes["bal"], **g.bal.to_dict()}, "cont": {"node": nodes["cont"], **g.cont.to_dict()},
+                         "before": g.before, "after": g.after, "notes": g.notes}
         if item is not None and not args.dry_run:
             graph = item.GetNodeGraph() if hasattr(item, "GetNodeGraph") else None
-            nodes = graph.GetNumNodes() if graph and hasattr(graph, "GetNumNodes") else None
-            if nodes is not None and nodes < 3:
-                print(f"    ! only {nodes} node(s): apply the node template (--template) so node 3 exists; skipped")
+            n_nodes = graph.GetNumNodes() if graph and hasattr(graph, "GetNumNodes") else None
+            nodes_cfg = nodes
+            need = max(nodes_cfg["bal"], nodes_cfg["cont"], nodes_cfg["lut"])
+            if n_nodes is not None and n_nodes < need:
+                print(f"    ! only {n_nodes} node(s), template needs {need}: apply it (--template); skipped")
                 continue
-            ok = [item.SetLUT(2, str(lut)), item.SetCDL(g.bal.resolve_map(1)), item.SetCDL(g.cont.resolve_map(3))]
-            print("    written to Resolve: node 2 LUT, node 1 BAL CDL, node 3 CONT CDL" if all(ok)
+            ok = [item.SetLUT(nodes_cfg["lut"], str(lut)), item.SetCDL(g.bal.resolve_map(nodes_cfg["bal"])),
+                  item.SetCDL(g.cont.resolve_map(nodes_cfg["cont"]))]
+            print(f"    written to Resolve ({nodes_cfg['order']} order): LUT node {nodes_cfg['lut']}, "
+                  f"BAL node {nodes_cfg['bal']}, CONT node {nodes_cfg['cont']}" if all(ok)
                   else f"    ! Resolve rejected part of the grade (LUT/BAL/CONT = {ok})")
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "grades.json").write_text(json.dumps(results, indent=2))

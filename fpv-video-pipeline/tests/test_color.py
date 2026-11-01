@@ -26,7 +26,7 @@ def scene(n=40000, seed=0):
         (0.18, [1, 1, 1], 0.25), (0.05, [1, 1, 1], 0.10), (0.55, [1, 1, 1], 0.10),   # neutrals
         (0.30, [0.55, 0.75, 1.0], 0.25),                                             # sky
         (0.10, [0.45, 0.9, 0.35], 0.20),                                             # grass
-        (0.01, [0.9, 0.9, 1.0], 0.08), (1.2, [1, 1, 1], 0.02),                        # shadow, highlight
+        (0.01, [0.9, 0.9, 1.0], 0.096), (1.2, [1, 1, 1], 0.004),                      # shadow, rare specular
     ]
     px = []
     for lum, col, w in parts:
@@ -49,11 +49,15 @@ def test_lut_roundtrip_matches_analytic(tmp_path):
     assert err.max() < 0.02 and err.mean() < 0.002   # trilinear on a 33^3 grid
 
 
-def test_recovers_exposure_and_white_balance(tmp_path):
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("order", cs.ORDERS)
+def test_recovers_exposure_and_white_balance(tmp_path, order):
     lut = make_lut(tmp_path)
     lin = scene()
     bad = lin * 0.5 * np.array([1.35, 1.0, 0.7])        # 1 stop under + strong warm (tungsten-ish) cast
-    g = cs.solve(log_encode(bad), lut, "youtube")
+    g = cs.solve(log_encode(bad), lut, "youtube", order=order)
     assert g.before["neutral_cast"] > 0.03                # the cast is visible before
     assert g.after["neutral_cast"] < 0.006                # neutrals land on the vectorscope centre
     assert abs(g.after["mid_p50"] - cs.LOOKS["youtube"]["mid"]) < 0.02
@@ -65,11 +69,12 @@ def test_recovers_exposure_and_white_balance(tmp_path):
     assert np.allclose(rel, truth - truth[1], atol=0.012)
 
 
-def test_shot_matching_converges_two_cameras(tmp_path):
+@pytest.mark.parametrize("order", cs.ORDERS)
+def test_shot_matching_converges_two_cameras(tmp_path, order):
     lut = make_lut(tmp_path)
     lin = scene(seed=2)
-    a = cs.solve(log_encode(lin * 1.4 * np.array([0.9, 1, 1.15])), lut, "reel")    # bright, cool
-    b = cs.solve(log_encode(lin * 0.6 * np.array([1.2, 1, 0.85])), lut, "reel", match=a.after)  # dark, warm
+    a = cs.solve(log_encode(lin * 1.4 * np.array([0.9, 1, 1.15])), lut, "reel", order=order)    # bright, cool
+    b = cs.solve(log_encode(lin * 0.6 * np.array([1.2, 1, 0.85])), lut, "reel", match=a.after, order=order)
     for k in ("mid_p50", "white_p99_5", "black_p0_5"):
         assert abs(a.after[k] - b.after[k]) < 0.025, k
     assert abs(a.after["sat_mean"] - b.after["sat_mean"]) < 0.01
@@ -101,3 +106,17 @@ def test_flat_scene_keeps_mid_and_warns(tmp_path):
     g = cs.solve(log_encode(lin), lut, "reel")
     assert abs(g.after["mid_p50"] - cs.LOOKS["reel"]["mid"]) < 0.02
     assert any("scene range too small" in n for n in g.notes)
+
+
+def test_highlight_saturation_capped_for_skies(tmp_path):
+    """A bright, very saturated sky must not be pushed further (it bands/blocks after YouTube/Instagram encoding)."""
+    lut = make_lut(tmp_path)
+    rng = np.random.default_rng(7)
+    def col(c):
+        c = np.array(c, float)
+        return c / (c @ [cs.KR, cs.KG, cs.KB])
+    lin = np.concatenate([0.9 * col([0.35, 0.65, 1.0]) * rng.lognormal(0, 0.05, (20000, 1)),   # bright saturated sky
+                          0.18 * rng.lognormal(0, 0.4, (20000, 1)) * np.ones(3)])               # neutral ground
+    g = cs.solve(log_encode(lin), lut, "reel")
+    assert g.after["hi_sat_p95"] <= cs.LOOKS["reel"]["hi_sat_max"] + 0.01
+    assert g.cont.sat < cs.LOOKS["reel"]["sat_mult"]          # held back from the reel's usual boost

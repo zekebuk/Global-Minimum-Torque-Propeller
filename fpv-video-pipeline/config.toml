@@ -27,6 +27,15 @@ base_grade_drx = ""
 "GP-Log2" = "luts/GoPro_GP-Log2_to_Rec709.cube"          # Mission 1 / Mission 1 Pro (LUTs ship with the camera)
 "D-Log M" = "luts/DJI_D-Log_M_to_Rec709.cube"            # DJI Avata 2 (DJI publishes this LUT)
 
+# Node layout the auto grader writes into (must match your .drx node template; see docs/COLOR_ALGORITHM.md).
+# "scene" (default, professional practice): grade in camera log, LUT as the output transform near the end.
+# "display": LUT on node 2, contrast/saturation after it.
+[color.nodes]
+order = "scene"
+bal = 1
+cont = 2
+lut = 6
+
 [ingest]
 # GoPro writes LRV (low-res preview) and THM (thumbnail) next to each MP4. Keep LRV as edit proxies?
 keep_lrv = false
@@ -53,6 +62,10 @@ fps = 29.97
 # Instagram re-encodes everything; give it a clean, high-bitrate master.
 codec = "H264"
 bitrate_kbps = 25000
+# Color tags written into the file. Rec.709 transfer = the 1-1-1 tag the platforms expect; Resolve's default
+# Gamma 2.4 tag (1-2-1) is the classic cause of washed-out uploads. render.py verifies the tag after rendering.
+color_space_tag = "Rec.709"
+gamma_tag = "Rec.709"
 max_seconds = 90
 # Audio track that holds the song (render.py --no-music mutes it; reel_handoff.py reads the song's start from it).
 music_track = 2
@@ -69,6 +82,8 @@ height = 2160
 fps = 59.94
 codec = "H265"
 bitrate_kbps = 80000
+color_space_tag = "Rec.709"
+gamma_tag = "Rec.709"
 
 # Per-camera overrides for exposure math (scripts/camera_report.py). Built-in values live in fpvpipe/camera.py.
 # The Mission 1 Pro's aperture is not confirmed: put the f-number from GoPro's spec sheet here to get ND estimates.

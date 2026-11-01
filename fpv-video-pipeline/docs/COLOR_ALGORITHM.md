@@ -6,20 +6,26 @@ writes it into Resolve.
 
 ## 1. The node template (build once, export as .drx)
 
+**Default: scene-referred order** (`[color.nodes] order = "scene"`). This is professional practice: balance and contrast happen
+in camera log, and the log→709 LUT acts as the output transform near the end, so its highlight roll-off shapes the
+image instead of fighting it. See [GRADING_RESEARCH.md](GRADING_RESEARCH.md).
+
 | Node | Name | Contents | Set by |
 |---|---|---|---|
-| 1 | **BAL** | CDL offset only (log space) | `auto_grade.py`: exposure + white balance |
-| 2 | **LUT** | Camera log → Rec.709 LUT | `auto_grade.py` (per camera profile) |
-| 3 | **CONT** | CDL slope/offset/power + saturation (display space) | `auto_grade.py`: black / mid / white, saturation |
-| 4 | **COLOR** | Hue vs Sat, Color Slice | you |
-| 5 | **SKY** | Window/qualifier | you (skip on rolls/flips) |
-| 6 | **NR** | Temporal NR 2 frames, Better | template default |
-| 7 | **SHARP** | Light sharpening | template default |
-| Timeline | LOOK → FILM → LEGAL | Creative look, halation/vignette, soft clip | you, once per project |
+| 1 | **BAL** | CDL offset (log): exposure + white balance | `auto_grade.py` |
+| 2 | **CONT** | CDL slope/offset/power around the log median + saturation | `auto_grade.py` |
+| 3 | **COLOR** | Hue vs Sat (pull sky saturation down, not up), Color Slice | you |
+| 4 | **SKY** | Window/qualifier, plus luminance rather than saturation for skies | you (skip on rolls/flips) |
+| 5 | **NR** | Temporal NR 2 frames, Better | template default |
+| 6 | **LUT** | Camera log → Rec.709 (output transform) | `auto_grade.py` (per camera profile) |
+| 7 | **SHARP** | Light sharpening, after the transform | template default |
+| Timeline | LOOK → FILM → LEGAL | Creative look, halation/vignette, soft clip | you |
 
-To build it: on any clip, add 7 serial nodes (Alt+S), label them as above (right-click ▸ Node Label), set the NR and SHARP
-defaults, then grab a still ▸ Gallery ▸ right-click ▸ Export `.drx`. Set `[color].base_grade_drx` to it. `--template` then
-applies the template to every clip before writing the numbers.
+The node numbers live in `[color.nodes]`. **Display order** (`order = "display"`: 1 BAL, 2 LUT, 3 CONT) is still supported if you
+prefer working after the LUT.
+
+To build it: on any clip, add 7 serial nodes (Alt+S), label them, set the NR and SHARP defaults, put any LUT on node 6
+(the script replaces it per camera), then Grab Still ▸ Gallery ▸ Export `.drx`. Set `[color].base_grade_drx` to it.
 
 ## 2. Targets (what "correct" means, on the scopes)
 
@@ -30,6 +36,7 @@ applies the template to every clip before writing the numbers.
 | Waveform | white point (99.5th percentile) | 0.93 | 0.95 |
 | Parade / vectorscope | mean chroma of the detected neutral surfaces | 0 (centre) | 0 |
 | Vectorscope | mean saturation | ×1.05 | ×1.18, capped |
+| Vectorscope (luma > 0.7) | 95th-percentile chroma of bright areas (skies) | ≤ 0.09 | ≤ 0.11 |
 
 Both looks are defined in `fpvpipe/colorsci.py` (`LOOKS`). Change the numbers to move your house style.
 `--match <clip>` replaces the absolute targets with a hero clip's measured result, which is shot matching.
@@ -50,7 +57,8 @@ Both looks are defined in `fpvpipe/colorsci.py` (`LOOKS`). Change the numbers to
 5. **Contrast**: one slope/offset/power on node 3, identical for R, G and B so the balance is untouched. The fit targets mid, then white, then black,
    with **safe limits enforced inside the optimization**. A flat or hazy scene gets the best curve within the limits, with
    the mid still exact, and a note. It isn't crushed to fake full range.
-6. **Saturation**: scaled to the look's level and capped by the 95th-percentile chroma, so strong colors don't bloom.
+6. **Saturation**: toward the look's level with two caps: overall (no blooming colors) and **in the highlights**. Bright saturated
+   skies are what H.264/H.265 break into blocks and banding after upload, so they're held back and the script says so.
 7. **Write**: node 1 and node 3 via Resolve's `SetCDL`, the LUT on node 2 via `SetLUT`. It also saves a before/after PNG per clip
    (picture | luma waveform | RGB parade | vectorscope, with the neutral point in magenta).
 

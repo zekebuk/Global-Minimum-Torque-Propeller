@@ -148,6 +148,8 @@ def measure(rgb: np.ndarray, neutrals: np.ndarray | None = None) -> dict:
         "neutral_cb": float(cb[m].mean()), "neutral_cr": float(cr[m].mean()),
         "neutral_cast": float(np.hypot(cb[m].mean(), cr[m].mean())),
         "sat_mean": float(c.mean()), "sat_p95": float(np.percentile(c, 95)),
+        # Saturation in bright areas (skies): heavy chroma there is what H.264/H.265 turns into blocks and banding.
+        "hi_sat_p95": float(np.percentile(c[y > 0.7], 95)) if (y > 0.7).sum() > 50 else 0.0,
     }
 
 
@@ -202,10 +204,14 @@ def find_neutrals(log_rgb: np.ndarray, bin_w: float = 0.01, radius: float = 0.02
 
 LOOKS = {
     # Reels: deeper blacks, brighter, more saturated - survives phone screens and heavy compression.
-    "reel": {"black": 0.025, "mid": 0.44, "white": 0.95, "sat_mult": 1.18, "sat_max": 0.16},
+    "reel": {"black": 0.025, "mid": 0.44, "white": 0.95, "sat_mult": 1.18, "sat_max": 0.16, "hi_sat_max": 0.11},
     # YouTube: natural, open shadows, gentler saturation for long viewing on big screens.
-    "youtube": {"black": 0.04, "mid": 0.42, "white": 0.93, "sat_mult": 1.05, "sat_max": 0.13},
+    "youtube": {"black": 0.04, "mid": 0.42, "white": 0.93, "sat_mult": 1.05, "sat_max": 0.13, "hi_sat_max": 0.09},
 }
+# Node orders. "scene" (default, professional practice): balance, contrast and saturation happen in camera log, the
+# log->709 LUT is the output transform near the end, so its highlight roll-off shapes the contrast. "display": the
+# original layout (LUT on node 2, contrast after it in display space).
+ORDERS = ("scene", "display")
 
 
 # ------------------------------------------------------------------ solver
@@ -239,28 +245,39 @@ def nelder_mead(f, x0, step, iters=200, tol=1e-7):
 
 @dataclass
 class Grade:
-    bal: CDL           # node 1 (log)
-    cont: CDL          # node 3 (display)
+    bal: CDL           # BAL node (log)
+    cont: CDL          # CONT node (log in "scene" order, display in "display" order)
     before: dict
     after: dict
     notes: list[str]
+    order: str = "scene"
 
 
-def render(log_rgb: np.ndarray, lut: CubeLUT, bal: CDL, cont: CDL) -> np.ndarray:
-    return np.clip(cont.apply(np.clip(apply_lut(lut, np.clip(bal.apply(log_rgb), 0, 1)), 0, 1)), 0, 1)
+def render(log_rgb: np.ndarray, lut: CubeLUT, bal: CDL, cont: CDL, order: str = "scene") -> np.ndarray:
+    v = np.clip(bal.apply(log_rgb), 0, 1)
+    if order == "scene":
+        return np.clip(apply_lut(lut, np.clip(cont.apply(v), 0, 1)), 0, 1)
+    return np.clip(cont.apply(np.clip(apply_lut(lut, v), 0, 1)), 0, 1)
 
 
 def solve(log_rgb: np.ndarray, lut: CubeLUT, look: str | dict = "youtube", match: dict | None = None,
-          max_offset: float = 0.15) -> Grade:
+          max_offset: float = 0.15, order: str = "scene") -> Grade:
     """log_rgb: (N,3) pixels sampled from the clip, as Resolve sees them (0-1, full range, camera log)."""
+    if order not in ORDERS:
+        raise ValueError(f"order must be one of {ORDERS}")
     t = dict(LOOKS[look]) if isinstance(look, str) else dict(look)
     notes = []
     nz = find_neutrals(log_rgb)
     nmask = nz["mask"]
-    before = measure(render(log_rgb, lut, CDL(), CDL()), nmask)
+    before = measure(render(log_rgb, lut, CDL(), CDL(), order), nmask)
     if match:  # shot matching: aim at another clip's measured result instead of the look's absolutes
         t.update(black=match["black_p0_5"], mid=match["mid_p50"], white=match["white_p99_5"])
         t["sat_target"] = match["sat_mean"]
+
+    # Small fixed subsample for the iterative stages (quantile targets are stable at a few thousand pixels).
+    rng = np.random.default_rng(0)
+    idx = rng.choice(len(log_rgb), min(len(log_rgb), 6000), replace=False)
+    sub, smask = log_rgb[idx], nmask[idx]
 
     # Stage 1a: white balance = cancel the neutral cluster's log-chromaticity offset (R and B relative to G).
     wb = -nz["d"]
@@ -270,60 +287,68 @@ def solve(log_rgb: np.ndarray, lut: CubeLUT, look: str | dict = "youtube", match
                      "for sunsets/forests use --match with a hero clip or set WB by eye")
     wb = np.clip(wb, -max_offset, max_offset)
 
-    # Stage 1b: exposure = common log offset that puts the median luma on target (1-D, monotonic -> robust).
-    def f1(x):
-        bal = CDL(offset=np.array([x[0] + wb[0], x[0], x[0] + wb[1]]))
-        return (measure(render(log_rgb, lut, bal, CDL()), nmask)["mid_p50"] - t["mid"]) ** 2
-    x1, _ = nelder_mead(f1, [0.0], [0.03], iters=80)
+    # Stage 1b: exposure = common log offset that puts the median luma on target (an exact exposure change in log).
+    def bal_of(e):
+        return CDL(offset=np.array([e + wb[0], e, e + wb[1]]))
+    x1, _ = nelder_mead(lambda x: (np.median(luma(render(sub, lut, bal_of(x[0]), CDL(), order))) - t["mid"]) ** 2,
+                        [0.0], [0.03], iters=80)
     e = float(np.clip(x1[0], -max_offset, max_offset))
-    bal = CDL(offset=np.array([e + wb[0], e, e + wb[1]]))
-    x1 = np.array([e])
-    mid_disp = render(log_rgb, lut, bal, CDL())
+    bal = bal_of(e)
 
     # Stage 2: black / mid / white with one slope, offset, power (same for R,G,B so balance is untouched).
-    # Bounds are enforced INSIDE the objective (the optimiser sees the clamped curve), so when a low-contrast scene
-    # can't reach full range within safe limits we get the best feasible curve with the mid still on target,
-    # instead of an unconstrained optimum that is then clamped into something worse. Priority: mid > white > black.
-    y = luma(mid_disp)
-    lo, hi = np.array([0.7, -0.1, 0.7]), np.array([1.6, 0.1, 1.4])
-    yq = np.quantile(y, np.linspace(0, 1, 2001))   # quantiles are monotone under the curve: no need for all pixels
-    def curve(x):
-        s_, o_, p_ = np.clip(x, lo, hi)
-        return np.clip(yq * s_ + o_, 0, None) ** p_
+    # Bounds are enforced INSIDE the objective, so a low-contrast scene gets the best feasible curve with the mid
+    # still on target instead of a clamped unconstrained optimum. Priority: mid > white > black.
+    # In "scene" order the curve acts on log values and is measured through the LUT, so the LUT's own highlight
+    # roll-off does the shoulder (what colorists mean by grading "under the transform").
+    if order == "scene":
+        lo, hi = np.array([0.7, -0.15, 0.8]), np.array([1.5, 0.15, 1.25])
+        pivot = float(np.median(luma(np.clip(bal.apply(sub), 0, 1))))
+        def cont_of(x):
+            s_, o_, p_ = np.clip(x, lo, hi)
+            return CDL(slope=np.full(3, s_), offset=np.full(3, o_ + pivot * (1 - s_)), power=np.full(3, p_))
+    else:
+        lo, hi = np.array([0.7, -0.1, 0.7]), np.array([1.6, 0.1, 1.4])
+        def cont_of(x):
+            s_, o_, p_ = np.clip(x, lo, hi)
+            return CDL(slope=np.full(3, s_), offset=np.full(3, o_), power=np.full(3, p_))
     def f2(x):
-        q = curve(x)
-        b_, m_, w_ = q[1], q[1000], q[1990]
+        q = np.percentile(luma(render(sub, lut, bal, cont_of(x), order)), [0.5, 50, 99.5, 100])
         pen = float(np.sum(np.maximum(0, lo - x) + np.maximum(0, x - hi))) * 10
-        over = max(0.0, q[-1] - 1.0)               # don't trade the target for clipped highlights
-        return (m_ - t["mid"]) ** 2 * 20 + (w_ - t["white"]) ** 2 * 6 + (b_ - t["black"]) ** 2 * 3 + over * 2 + pen
+        over = max(0.0, q[3] - 0.999)
+        return (q[1] - t["mid"]) ** 2 * 120 + (q[2] - t["white"]) ** 2 * 6 + (q[0] - t["black"]) ** 2 * 3 + over * 2 + pen
     best = None
-    for x0 in ([1.0, 0.0, 1.0], [1.3, -0.05, 1.0], [0.85, 0.03, 1.0]):   # a few starts: the objective has kinks
-        x, v = nelder_mead(f2, x0, [0.05, 0.01, 0.05], iters=250)
+    for x0 in ([1.0, 0.0, 1.0], [1.25, -0.03, 1.0], [0.85, 0.03, 1.0]):   # a few starts: the objective has kinks
+        x, v = nelder_mead(f2, x0, [0.05, 0.01, 0.05], iters=200)
         if best is None or v < best[1]:
             best = (x, v)
-    s, o, p = (float(v) for v in np.clip(best[0], lo, hi))
-    cont = CDL(slope=np.full(3, s), offset=np.full(3, o), power=np.full(3, p))
-    reached = curve(best[0])
-    if abs(reached[1] - t["black"]) > 0.03 or abs(reached[1990] - t["white"]) > 0.04:
+    cont = cont_of(best[0])
+    reached = measure(render(sub, lut, bal, cont, order), smask)
+    if abs(reached["black_p0_5"] - t["black"]) > 0.03 or abs(reached["white_p99_5"] - t["white"]) > 0.04:
         notes.append(f"scene range too small for the {look if isinstance(look, str) else 'target'} contrast within safe "
-                     f"limits (blacks {reached[1]:.2f}, whites {reached[1990]:.2f}): haze/flat light; add contrast by eye "
-                     "or use a dehaze/contrast node")
+                     f"limits (blacks {reached['black_p0_5']:.2f}, whites {reached['white_p99_5']:.2f}): haze/flat light; "
+                     "add contrast by eye or use a dehaze/contrast node")
 
-    # Stage 3: saturation. Scale chroma toward target; cap so the 95th percentile stays legal-looking.
-    pre = measure(render(log_rgb, lut, bal, cont), nmask)
+    # Stage 3: saturation toward the look's level, with two caps: overall (no blooming colours) and in the
+    # highlights (skies): bright saturated areas are what the platform encoder breaks into blocks/banding.
+    pre = reached
     target_sat = t.get("sat_target", pre["sat_mean"] * t["sat_mult"])
-    sat = target_sat / max(pre["sat_mean"], 1e-4)
-    if pre["sat_p95"] * sat > t.get("sat_max", 0.16) * 1.6:
-        sat = t.get("sat_max", 0.16) * 1.6 / max(pre["sat_p95"], 1e-4)
-        notes.append("saturation capped to keep the most saturated colours from blooming")
-    cont.sat = float(np.clip(sat, 0.7, 1.5))
+    def f3(x):
+        c = CDL(slope=cont.slope, offset=cont.offset, power=cont.power, sat=float(x[0]))
+        m = measure(render(sub, lut, bal, c, order), smask)
+        pen = max(0.0, m["sat_p95"] - t.get("sat_max", 0.16) * 1.6) * 20 + max(0.0, m["hi_sat_p95"] - t["hi_sat_max"]) * 20
+        return (m["sat_mean"] - target_sat) ** 2 * 100 + pen
+    x3, _ = nelder_mead(f3, [target_sat / max(pre["sat_mean"], 1e-4)], [0.05], iters=60)
+    cont.sat = float(np.clip(x3[0], 0.6, 1.5))
 
-    after = measure(render(log_rgb, lut, bal, cont), nmask)
+    after = measure(render(log_rgb, lut, bal, cont, order), nmask)
     after["neutral_confidence"] = nz["confidence"]
+    if after["sat_mean"] < target_sat * 0.9:
+        notes.append("saturation held back to protect bright areas/skies from compression banding (raise it in "
+                     "Hue vs Sat on mid-tones only if you need more)")
     if after["clipped_frac"] > 0.02:
         notes.append(f"{after['clipped_frac']:.1%} still clipped: the source highlights are blown (exposure at capture)")
-    if abs(x1[0]) >= max_offset * 0.99:
+    if abs(e) >= max_offset * 0.99:
         notes.append("exposure correction hit its limit: footage is very far off, check it by eye")
     if after["neutral_cast"] > 0.01:
         notes.append("residual cast on neutrals: scene may have no true neutrals (sunset, forest) - judge by eye")
-    return Grade(bal, cont, before, after, notes)
+    return Grade(bal, cont, before, after, notes, order)
