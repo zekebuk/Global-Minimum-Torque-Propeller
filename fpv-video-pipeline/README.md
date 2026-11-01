@@ -12,6 +12,7 @@ works **today** through Resolve's scripting API, without waiting on the MCP conn
 | 3. Stabilize | GoPro Player + HyperSmooth Pro **or** Gyroflow | `stage_for_stabilization.py` queues only clips worth stabilizing, `check_stabilized.py` verifies the exports: [docs/HYPERSMOOTH_PRO.md](docs/HYPERSMOOTH_PRO.md), [PIPELINE §3b](docs/PIPELINE.md) |
 | 4. Music | `scripts/beat_map.py` | Tempo, beats, downbeats, and drops → Resolve markers to cut on |
 | 5. Build | `scripts/build_resolve_project.py` | Project, bins, colored markers, `YT_selects` 4K + `REEL_selects` 9:16 timelines, base grade |
+| 6a. Auto grade | `scripts/auto_grade.py` | Scope-driven balance pass per clip (exposure, white balance from detected neutrals, black/mid/white, saturation) written into Resolve's node template + before/after scope PNGs: [docs/COLOR_ALGORITHM.md](docs/COLOR_ALGORITHM.md) |
 | 6. Grade + edit | Resolve | Node tree and look per platform, reel beat sheet: [PIPELINE §4–5](docs/PIPELINE.md), [STYLE_GUIDE](docs/STYLE_GUIDE.md) |
 | 7. Deliver | `scripts/render.py` | Platform-tuned renders |
 | 7b. Sound | `scripts/make_sfx_library.py`, `scripts/make_music.py`, `scripts/build_soundscape.py` (music-free: ambience + motor + whooshes driven by the gyro) | ElevenLabs SFX library (whooshes, sub-hits, tempo-sized risers) and beat-mapped music that fits the edit: [docs/AUDIO_AND_PUBLISHING.md](docs/AUDIO_AND_PUBLISHING.md) |
