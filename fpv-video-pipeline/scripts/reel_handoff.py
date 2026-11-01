@@ -55,6 +55,17 @@ def rounding_report(cue: float, fps: float) -> list[str]:
     return out
 
 
+def guide_offset(audio_path: Path) -> float:
+    """A guide track (guide_track.py) starts partway into the song; its .json says where. Real songs: 0."""
+    meta = audio_path.with_suffix(".json")
+    if meta.exists():
+        try:
+            return float(json.loads(meta.read_text()).get("song_time_at_file_start", 0.0))
+        except (ValueError, AttributeError):
+            pass
+    return 0.0
+
+
 def from_resolve(name: str, track: int) -> tuple[float, str, float]:
     from fpvpipe import resolve as rlib
     project = rlib.connect().GetProjectManager().GetCurrentProject()
@@ -93,8 +104,9 @@ def main() -> int:
 
     if args.from_resolve:
         cue, song_name, marker_drop = from_resolve(args.from_resolve, int(cfg["reel"].get("music_track", 2)))
+        cue += guide_offset(cfg["paths"]["music"] / song_name)
         reel_drop = reel_drop if reel_drop is not None else marker_drop
-        title = args.title or Path(song_name).stem
+        title = args.title or Path(song_name).stem.replace(".guide", "")
     elif args.song and reel_drop is not None:
         if args.song_drop is not None:
             drops = [args.song_drop]
@@ -106,7 +118,9 @@ def main() -> int:
         cue = cue_from_drops(drops, reel_drop)
         if cue is None:
             raise SystemExit(f"no drop in the song late enough for a {reel_drop}s hook; pass --song-drop")
-        title = args.title or args.song.stem
+        if args.song_drop is None:
+            cue += guide_offset(args.song)  # beats.json times are file-relative; Edits needs song time
+        title = args.title or args.song.stem.replace(".guide", "")
     else:
         raise SystemExit("use --from-resolve TIMELINE, or --song + --reel-drop")
 

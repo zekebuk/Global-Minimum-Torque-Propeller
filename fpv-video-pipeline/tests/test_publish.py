@@ -89,3 +89,24 @@ def test_edits_cue_math():
     r = rounding_report(47.3, 30)
     assert "0:47.5" in r[0] and "visible" in r[0] and "0:47.0" in r[1]
     assert "fine" in rounding_report(45.02, 30)[1]
+
+
+def test_tap_tempo_and_guide_offset(tmp_path):
+    import random
+    from guide_track import fit_taps
+    from reel_handoff import guide_offset
+    random.seed(1)
+    period = 60 / 128
+    taps = [0.3 + k * period + random.gauss(0, 0.03) for k in range(16)]   # human jitter ~30 ms
+    r = fit_taps(taps, drop=0.3 + 32 * period + 0.04)
+    assert abs(r["bpm"] - 128) < 1.5 and r["drop_beats"] == 32
+    try:
+        fit_taps([0.0, 0.01, 0.02, 0.03])
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected implausible-tempo error")
+    g = tmp_path / "trend.guide.wav"
+    g.write_bytes(b"")
+    (tmp_path / "trend.guide.json").write_text('{"song_time_at_file_start": 44.0}')
+    assert guide_offset(g) == 44.0 and guide_offset(tmp_path / "real_song.mp3") == 0.0

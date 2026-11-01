@@ -36,6 +36,20 @@ python scripts\make_music.py youtube --bpm 100 --seconds 240 --mood "uplifting c
 - It writes `.mp3`, `.beats.json` (ready for the Resolve build) and `.license.json` (your generation record).
 - Pass the file to the session: `run_session.py ... --music D:\FPV\Music\reel_128bpm_....mp3`
 
+## Cutting to a song you'll add in Edits (no copy of the song needed)
+The edit needs the song's **timing**, not its audio. `guide_track.py` builds a click track with that timing
+(accented bar starts, a boom on the drop) plus a `.beats.json`, so Resolve gets the same beat, bar and DROP markers as
+with a real track:
+```powershell
+python scripts\guide_track.py tap      # play the song in Edits/on your phone, tap Enter on beats, "d" on the drop
+python scripts\guide_track.py make --bpm 128 --first-beat 0.42 --drop 52.9 --from 44 --to 76 --name trend_x
+python scripts\run_session.py ... --music D:\FPV\Music\trend_x.guide.wav
+```
+The guide sits on A2 and `render.py --no-music` mutes it, so it never ships. `reel_handoff.py` adds the guide's offset
+(here 44 s), so the cue card's "start the song at" time is in **song time**, ready to type into Edits.
+Legitimate sources if you do want a real local copy: YouTube Studio's Audio Library (free downloads), buying the track
+(Bandcamp, Beatport, Amazon, iTunes), Artlist or Epidemic, or ElevenLabs via `make_music.py`.
+
 ## Instagram via the Edits app (in-app music)
 Edits has no API, so the last step is always manual: import the file, add the song, set its start time.
 **Edits desktop (default, `[reel].edits_target = "desktop"`):** the render is already on the PC. Import it straight from
