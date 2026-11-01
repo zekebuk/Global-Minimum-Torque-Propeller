@@ -26,6 +26,28 @@ How to use them in a reel (see [STYLE_GUIDE.md](STYLE_GUIDE.md)):
 | Under everything | `prop_wash_loop`, `wind_rush_loop` | About −18 dB, for realism |
 | Dives | `dive_wind` | Follows the free-fall section |
 
+## Ambient-only videos (no music)
+Without music, the sound has to carry speed and scale, so the mix follows the flight using the GoPro's own IMU:
+
+| Layer | Driven by | Why |
+|---|---|---|
+| Location bed (forest, mountain_wind, beach, river, city, snow, desert, night, quarry) | the scene you assign each clip, crossfaded over 1 s | sense of place |
+| Motor / prop loop | smoothed angular rate: louder the harder you fly (−32 to −16 dBFS) | "the quad is working" |
+| Whoosh | angular-rate peaks above 400°/s (rolls, flips, snaps), at least 1.5 s apart, loudest point on the peak | speed you can hear |
+| Dive wind | free fall (\|accel\| < 0.4 g for 0.4 s or more) | the stomach-drop |
+
+```powershell
+python scripts\make_sfx_library.py --set ambient --variants 2       # once: 30 s seamless beds + drone layers
+python scripts\build_soundscape.py --from-resolve YT_final --session 2026-11-02_quarry `
+    --scene mountain_wind --scenes GX010042=forest DJI_20261102_0003_D=river --place
+```
+- It reads every shot on V1, maps stabilized exports back to the original GoPro files for telemetry, and writes
+  `Exports\soundscape_YT_final.wav` (48 kHz stereo, −20 dBFS RMS, peaks capped at −1 dBFS). `--place` puts it on A3.
+- `--clip <file>` makes a quick soundscape for a single clip.
+- **Limits:** speed-ramped shots use source-speed timing, so nudge those whooshes by hand. DJI clips (no raw gyro) get a
+  steady motor level with no automatic whooshes.
+- Keep the camera's own audio low (it's mostly wind noise), and check the final mix in Fairlight against about −14 LUFS for YouTube.
+
 ## Music made to fit the edit
 ```powershell
 python scripts\make_music.py reel --bpm 128 --seconds 24 --mood "dark aggressive phonk"

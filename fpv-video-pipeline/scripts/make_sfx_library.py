@@ -40,6 +40,23 @@ LIBRARY = [
     ("dive_wind", "ambience", "wind rushing louder during a steep fast dive, building intensity", 3.0, False),
 ]
 
+# Ambient set (--set ambient): seamless 30 s location beds + drone layers for music-free videos (build_soundscape.py).
+AMBIENT = [
+    ("forest", "bed", "calm forest ambience, light breeze in leaves, distant birds, no music, seamless loop", 30.0, True),
+    ("mountain_wind", "bed", "high mountain ridge ambience, steady cold wind, open space, no music, seamless loop", 30.0, True),
+    ("beach", "bed", "ocean waves breaking on a beach, gentle wind, no music, seamless loop", 30.0, True),
+    ("river", "bed", "fast river and waterfall rushing water ambience, no music, seamless loop", 30.0, True),
+    ("city", "bed", "distant city ambience from above, soft traffic hum, no voices close up, seamless loop", 30.0, True),
+    ("snow", "bed", "quiet snowy mountain ambience, soft muffled wind, no music, seamless loop", 30.0, True),
+    ("desert", "bed", "dry desert ambience, warm light wind, insects far away, no music, seamless loop", 30.0, True),
+    ("night", "bed", "night ambience, crickets, calm air, no music, seamless loop", 30.0, True),
+    ("quarry", "bed", "open quarry ambience, wind over rock walls, distant machinery hum, seamless loop", 30.0, True),
+    ("motor_loop", "drone", "FPV drone brushless motors at steady mid throttle, close, seamless loop, no doppler", 10.0, True),
+    ("whoosh_short", "whoosh", "fast close air whoosh pass-by, clean, no music, cinematic", 0.8, False),
+    ("whoosh_long", "whoosh", "long deep cinematic whoosh sweeping left to right, airy, no music", 1.8, False),
+    ("dive_wind", "ambience", "wind rushing louder during a steep fast dive, building intensity", 3.0, False),
+]
+
 
 def duration(spec, bpm: float) -> float:
     if isinstance(spec, tuple):
@@ -52,6 +69,8 @@ def main() -> int:
     ap.add_argument("--bpm", type=float, default=128.0, help="tempo the risers should fit (bars of 4/4)")
     ap.add_argument("--variants", type=int, default=2, help="takes per sound (pick the best in the edit)")
     ap.add_argument("--only", nargs="*", help="limit to these names or categories")
+    ap.add_argument("--set", choices=["reel", "ambient", "all"], default="reel",
+                    help="reel = music-video sound design (default), ambient = location beds + drone layers")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--config", type=Path)
     args = ap.parse_args()
@@ -62,7 +81,8 @@ def main() -> int:
     index = json.loads(index_path.read_text()) if index_path.exists() else {}
 
     todo = []
-    for name, cat, prompt, spec, loop in LIBRARY:
+    chosen = {"reel": LIBRARY, "ambient": AMBIENT, "all": LIBRARY + [a for a in AMBIENT if a[0] not in {x[0] for x in LIBRARY}]}[args.set]
+    for name, cat, prompt, spec, loop in chosen:
         if args.only and name not in args.only and cat not in args.only:
             continue
         sec = duration(spec, args.bpm)

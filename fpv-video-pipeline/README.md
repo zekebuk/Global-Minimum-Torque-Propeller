@@ -14,7 +14,7 @@ works **today** through Resolve's scripting API, without waiting on the MCP conn
 | 5. Build | `scripts/build_resolve_project.py` | Project, bins, colored markers, `YT_selects` 4K + `REEL_selects` 9:16 timelines, base grade |
 | 6. Grade + edit | Resolve | Node tree and look per platform, reel beat sheet: [PIPELINE §4–5](docs/PIPELINE.md), [STYLE_GUIDE](docs/STYLE_GUIDE.md) |
 | 7. Deliver | `scripts/render.py` | Platform-tuned renders |
-| 7b. Sound | `scripts/make_sfx_library.py`, `scripts/make_music.py` | ElevenLabs SFX library (whooshes, sub-hits, tempo-sized risers) and beat-mapped music that fits the edit: [docs/AUDIO_AND_PUBLISHING.md](docs/AUDIO_AND_PUBLISHING.md) |
+| 7b. Sound | `scripts/make_sfx_library.py`, `scripts/make_music.py`, `scripts/build_soundscape.py` (music-free: ambience + motor + whooshes driven by the gyro) | ElevenLabs SFX library (whooshes, sub-hits, tempo-sized risers) and beat-mapped music that fits the edit: [docs/AUDIO_AND_PUBLISHING.md](docs/AUDIO_AND_PUBLISHING.md) |
 | 8. Publish | `scripts/youtube_publish.py` + checklist | Chapters from Resolve markers, description, tags, thumbnail, optional API upload: [AUDIO_AND_PUBLISHING](docs/AUDIO_AND_PUBLISHING.md), [PIPELINE §7](docs/PIPELINE.md) |
 
 **Setting up?** Follow [docs/SETUP_DAY.md](docs/SETUP_DAY.md). On Windows it's one script, `scripts\windows\setup_windows.ps1 -Root D:\FPV`,
