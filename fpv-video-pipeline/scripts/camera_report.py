@@ -60,6 +60,16 @@ def analyse(path: Path, args, cam_table: dict) -> dict:
         "in_camera_stab": info.in_camera_stabilization,
     }
     notes = list(info.notes)
+    nd_known = args.nd if args.nd is not None else args.nd_log.get(path.name.upper())
+    if nd_known is not None:
+        row["nd_logged"] = exposure.nd_name(nd_known)
+    ev_scene = None
+    if info.lat is not None and info.utc is not None:
+        elev = exposure.sun_elevation_deg(info.lat, info.lon, info.utc)
+        row["sun_elev_deg"] = round(elev, 1)
+        ev_scene = exposure.clear_sky_ev(elev)
+        if ev_scene is None:
+            notes.append("sun below ~2 deg: clear-sky model not valid")
     if info.shutter_s and info.iso:
         t, iso = median(info.shutter_s), median(info.iso)
         angle = 360.0 * t * info.fps if info.fps else 0
@@ -69,21 +79,18 @@ def analyse(path: Path, args, cam_table: dict) -> dict:
             ev_cam = exposure.ev100(f_number, t, iso)
             row["ev_camera"] = round(ev_cam, 1)
             nd_used = None
-            if info.lat is not None and info.utc is not None:
-                elev = exposure.sun_elevation_deg(info.lat, info.lon, info.utc)
-                row["sun_elev_deg"] = round(elev, 1)
-                ev_scene = exposure.clear_sky_ev(elev)
-                if ev_scene is not None:
-                    nd_used = max(0.0, ev_scene - ev_cam)
-                    row["nd_used_est"] = f"{exposure.nd_name(nd_used)} ({nd_used:.1f} stops, clear-sky bound)"
-                else:
-                    notes.append("sun below ~2 deg: clear-sky model not valid")
+            if ev_scene is not None:
+                nd_used = max(0.0, ev_scene - ev_cam)
+                row["nd_used_est"] = f"{exposure.nd_name(nd_used)} ({nd_used:.1f} stops, clear-sky bound)"
+                if nd_known is not None:
+                    # Calibration: + means the model over-estimates (clouds/haze), - under (snow, bright sky in frame).
+                    row["nd_est_error_stops"] = round(nd_used - nd_known, 2)
             fps = info.fps or 30
-            if args.nd is not None:
-                rec = exposure.recommend(t, iso, fps, args.nd, base_iso, args.angle)
+            if nd_known is not None:
+                rec = exposure.recommend(t, iso, fps, nd_known, base_iso, args.angle)
                 row["nd_recommended"] = (f"{rec['recommended_nd']} for {rec['target_shutter']} "
                                          f"({rec['extra_stops']:+.1f} stops vs. "
-                                         f"{'no filter' if args.nd == 0 else 'the ' + exposure.nd_name(args.nd)})")
+                                         f"{'no filter' if nd_known == 0 else 'the ' + exposure.nd_name(nd_known)})")
             else:
                 bare = exposure.recommend(t, iso, fps, 0.0, base_iso, args.angle)
                 row["nd_recommended"] = f"{bare['recommended_nd']} for {bare['target_shutter']} if no filter was on"
@@ -96,6 +103,11 @@ def analyse(path: Path, args, cam_table: dict) -> dict:
             if iso <= base_iso * 1.05 and angle < args.angle * 0.9:
                 notes.append(f"shutter {angle:.0f} deg is faster than {args.angle:.0f} deg at base ISO: add ND")
         else:
+            if nd_known is not None and ev_scene is not None:
+                # Unknown aperture (e.g. Mission 1 Pro): EV_scene - ND = log2(N^2/t) - log2(S/100)  ->  solve for N.
+                n_est = (t * 2 ** (ev_scene - nd_known) * iso / 100) ** 0.5
+                row["implied_f_number"] = round(n_est, 2)
+                notes.append(f"implied aperture ~f/{n_est:.1f} (clear sky assumed; average several clear-sky clips)")
             notes.append(f"aperture of {info.model} unknown: set [cameras.\"{info.model}\"] f_number in config.toml")
     else:
         notes.append("no per-frame shutter/ISO in this file")
@@ -116,8 +128,15 @@ def main() -> int:
     ap.add_argument("--lat", type=float)
     ap.add_argument("--lon", type=float)
     ap.add_argument("--utc-offset", type=float, help="camera clock offset from UTC in hours (e.g. -7 for PDT)")
+    ap.add_argument("--log", type=Path, help="flight_log.csv: per-clip ND you actually had on (calibration)")
     ap.add_argument("--config", type=Path)
     args = ap.parse_args()
+    args.nd_log = {}
+    if args.log:
+        with open(args.log, newline="") as f:
+            for r in csv.DictReader(f):
+                if r.get("file") and r.get("nd", "").strip():
+                    args.nd_log[r["file"].strip().upper()] = parse_nd(r["nd"])
     cam_table = config.load(args.config).get("cameras", {})
 
     clips = []
@@ -148,6 +167,14 @@ def main() -> int:
             w.writeheader()
             w.writerows(rows)
         print(f"\nWrote {out}")
+    errs = [r["nd_est_error_stops"] for r in rows if "nd_est_error_stops" in r]
+    if errs:
+        bias = sum(errs) / len(errs)
+        print(f"ND estimate vs. your log: mean error {bias:+.2f} stops over {len(errs)} clips "
+              f"(spread {max(errs) - min(errs):.1f}); send me this to calibrate the model")
+    apert = sorted(r["implied_f_number"] for r in rows if "implied_f_number" in r)
+    if apert:
+        print(f"implied aperture from {len(apert)} clips: median f/{apert[len(apert) // 2]:.2f}")
     return 0 if rows else 1
 
 

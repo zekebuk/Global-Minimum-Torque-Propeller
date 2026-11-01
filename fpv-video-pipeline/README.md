@@ -20,6 +20,9 @@ works **today** through Resolve's scripting API, without waiting on the MCP conn
 **Setting up?** Follow [docs/SETUP_DAY.md](docs/SETUP_DAY.md). On Windows it's one script, `scripts\windows\setup_windows.ps1 -Root D:\FPV`,
 then `scripts/setup_check.py` tells you what's left.
 
+**Before real projects:** fly the calibration set in [docs/TEST_FLIGHTS.md](docs/TEST_FLIGHTS.md). It measures the
+ND estimate, the Mission 1 Pro aperture, the highlight thresholds and the stabilizer choice on your own footage.
+
 **Every session after that:** `python scripts/run_session.py <card> --session <name> --music <track>` chains all the
 steps below and pauses only for the GoPro Player export.
 

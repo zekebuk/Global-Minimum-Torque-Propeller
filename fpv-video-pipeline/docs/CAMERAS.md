@@ -6,6 +6,7 @@
 python scripts/camera_report.py ~/FPV/Library/2026-10-31_quarry/raw          # whole session
 python scripts/camera_report.py GX010042.MP4 --nd ND16                        # you know which filter was on
 python scripts/camera_report.py DJI_..._D.MP4 --lat 47.6 --lon -122.3 --utc-offset -7
+python scripts/camera_report.py <raw> --log flight_log.csv   # per-clip filters you logged: estimate error + implied aperture
 ```
 
 Everything comes from the file itself. File names are only used when nothing else is available.
