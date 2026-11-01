@@ -106,3 +106,20 @@ def test_cut_stats_and_beat_alignment():
     assert al["cuts_on_beat_frac"] == 1.0 and al["chance_level_frac"] == 0.13
     off = cuts.beat_alignment([x + 0.2 for x in c], beats_s, fps=30)
     assert off["cuts_on_beat_frac"] == 0.0
+
+
+def test_gps5_without_fix_is_ignored(tmp_path, monkeypatch):
+    """GPS5 written without a lock (GPSF=0) must not produce a position."""
+    from fpvpipe import media
+    def stream(fix, lat):
+        gps = struct.pack(">5l", int(lat * 1e7), int(-117.3 * 1e7), 10000, 0, 0)
+        scal = struct.pack(">5l", 10000000, 10000000, 1000, 1000, 100)
+        return nest("STRM", klv("GPSF", "L", 4, 1, struct.pack(">L", fix))
+                    + klv("SCAL", "l", 4, 5, scal) + klv("GPS5", "l", 20, 1, gps))
+    for fix, expect in ((0, None), (3, 33.1)):
+        data = nest("DEVC", stream(fix, 33.1))
+        monkeypatch.setattr(media, "extract_gpmf", lambda p, d=data: d)
+        monkeypatch.setattr(camera, "gopro_settings", lambda p: {"MINF": "HERO8 Black"})
+        info = camera.ClipInfo(tmp_path / "x.mp4", duration_s=1.0)
+        camera._gopro(info)
+        assert (info.lat is None) if expect is None else abs(info.lat - expect) < 1e-6

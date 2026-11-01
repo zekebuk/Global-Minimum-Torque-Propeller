@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import struct
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -63,6 +64,14 @@ def gpmf_stream_index(probe: dict) -> int | None:
 
 
 def extract_gpmf(path: Path) -> bytes:
+    # Fast path: seek to the telemetry samples via the MP4 index (no full-file read; matters on archive HDDs).
+    from . import mp4
+    try:
+        data = mp4.read_track(path, ("gpmd",))
+        if data:
+            return data
+    except (OSError, struct.error, TypeError, ValueError):
+        pass
     idx = gpmf_stream_index(ffprobe(path))
     if idx is None:
         raise ValueError(f"{path.name}: no GPMF telemetry stream (not a GoPro file, or stripped by re-encode)")

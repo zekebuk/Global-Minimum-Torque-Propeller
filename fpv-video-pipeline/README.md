@@ -20,6 +20,9 @@ works **today** through Resolve's scripting API, without waiting on the MCP conn
 **Setting up?** Follow [docs/SETUP_DAY.md](docs/SETUP_DAY.md). On Windows it's one script, `scripts\windows\setup_windows.ps1 -Root D:\FPV`,
 then `scripts/setup_check.py` tells you what's left.
 
+**Existing footage:** `scripts/scan_archive.py --root SSD=E:\ --root HDD=F:\` catalogues everything read-only,
+ranks the best moments across the whole archive, and audits which files aren't backed up: [docs/ARCHIVE.md](docs/ARCHIVE.md).
+
 **Before real projects:** fly the calibration set in [docs/TEST_FLIGHTS.md](docs/TEST_FLIGHTS.md). It measures the
 ND estimate, the Mission 1 Pro aperture, the highlight thresholds and the stabilizer choice on your own footage.
 

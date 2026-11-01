@@ -169,7 +169,7 @@ def _gopro(info: ClipInfo):
     if st.get("EISE"):
         info.in_camera_stabilization = "off" if st["EISE"] == "N" else str(st.get("EISA") or "on")
     try:
-        tr = gpmf.parse(media.extract_gpmf(info.path), keys=("SHUT", "ISOE", "WBAL", "GPS5", "GPS9", "GPSU", "DVNM"))
+        tr = gpmf.parse(media.extract_gpmf(info.path), keys=("SHUT", "ISOE", "WBAL", "GPS5", "GPS9", "GPSU", "GPSF", "DVNM"))
     except Exception as e:
         info.notes.append(f"telemetry unreadable: {e}")
         return
@@ -185,14 +185,24 @@ def _gopro(info: ClipInfo):
             info.utc = datetime(2000, 1, 1, tzinfo=timezone.utc) + timedelta(days=float(row[5]), seconds=float(row[6]))
             info.time_source = "GPS9"
     elif g5.size:
-        ok = np.abs(g5[:, 0]) > 0.01
+        # GPS5 carries no fix flag of its own: GPSF (one value per payload) says whether that block had a 2D/3D lock.
+        # Without a lock the camera still writes coordinates, and they are garbage (seen: altitude 9.5 km at sea).
+        fix_blocks = tr["GPSF"].samples
+        if len(fix_blocks) == len(tr["GPS5"].samples):
+            ok = np.concatenate([np.full(len(b), float(f.ravel()[0]) >= 2)
+                                 for b, f in zip(tr["GPS5"].samples, fix_blocks)])
+        else:
+            ok = np.full(len(g5), bool(fix_blocks) and all(float(f.ravel()[0]) >= 2 for f in fix_blocks))
+        ok &= (np.abs(g5[:, 0]) > 0.01) & (np.abs(g5[:, 2]) < 9000)
         if ok.any():
             row = g5[ok][len(g5[ok]) // 2]
             info.lat, info.lon = float(row[0]), float(row[1])
             if tr["GPSU"].strings:
                 info.utc = _parse_gpsu(tr["GPSU"].strings[len(tr["GPSU"].strings) // 2])
                 info.time_source = "GPSU"
-    if info.lat is None:
+    if info.lat is None and (g5.size or g9.size):
+        info.notes.append("GPS was on but had no lock: position ignored. Pass --lat/--lon for the ND-used estimate")
+    elif info.lat is None:
         info.notes.append("no GPS fix in telemetry (GPS off or no lock): pass --lat/--lon for the ND-used estimate")
 
 
@@ -211,11 +221,13 @@ DJI_EIS = {0: "off", 1: "RockSteady", 2: "HorizonSteady", 3: "HyperSmooth-like",
 
 def _dji(info: ClipInfo, probe: dict, idx: int):
     info.brand = "DJI"
-    # JSON, not CSV: ffprobe prints fields in its own order, not the order requested.
-    out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", str(idx), "-show_entries", "packet=pos,size",
-                          "-of", "json", str(info.path)], capture_output=True, text=True).stdout
-    packets = [(int(p["pos"]), int(p["size"])) for p in json.loads(out or "{}").get("packets", [])
-               if str(p.get("pos", "")).isdigit() and str(p.get("size", "")).isdigit()]
+    from . import mp4
+    try:
+        packets = mp4.track_samples(info.path, ("djmd",))
+    except (OSError, struct.error, TypeError, ValueError):
+        packets = []
+    if not packets:
+        packets = _dji_packets_ffprobe(info.path, idx)
     if not packets:
         info.notes.append("djmd track present but no packets readable")
         return
@@ -228,6 +240,14 @@ def _dji(info: ClipInfo, probe: dict, idx: int):
         for p in packets[::step]:
             dji_frame(read(p), info)
     _dji_srt(info)
+
+
+def _dji_packets_ffprobe(path: Path, idx: int) -> list[tuple[int, int]]:
+    # JSON, not CSV: ffprobe prints fields in its own order, not the order requested.
+    out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", str(idx), "-show_entries", "packet=pos,size",
+                          "-of", "json", str(path)], capture_output=True, text=True).stdout
+    return [(int(p["pos"]), int(p["size"])) for p in json.loads(out or "{}").get("packets", [])
+            if str(p.get("pos", "")).isdigit() and str(p.get("size", "")).isdigit()]
 
 
 def dji_header(first: bytes, info: ClipInfo):
@@ -301,7 +321,8 @@ def eval_fraction(s: str) -> float:
 
 # ---------------------------------------------------------------- entry point
 
-def identify(path: Path) -> ClipInfo:
+def identify(path: Path, look: bool = True) -> ClipInfo:
+    """look=False skips the 5-frame image statistics (decode-heavy); used by the archive scanner."""
     path = Path(path)
     probe = media.ffprobe(path)
     s = media.video_summary(probe)
@@ -327,7 +348,7 @@ def identify(path: Path) -> ClipInfo:
         except ValueError:
             pass
 
-    info.image = image_stats(path, info.duration_s)
+    info.image = image_stats(path, info.duration_s) if look else {}
     if info.brand == "DJI" or info.profile == "unknown":
         log = info.image.get("looks_log")
         if info.brand == "DJI":
