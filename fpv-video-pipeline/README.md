@@ -25,6 +25,9 @@ then `scripts/setup_check.py` tells you what's left.
 **Existing footage:** `scripts/scan_archive.py --root SSD=E:\ --root HDD=F:\` catalogues everything read-only,
 ranks the best moments across the whole archive, and audits which files aren't backed up: [docs/ARCHIVE.md](docs/ARCHIVE.md).
 
+**From your phone:** automatic first cut, preview renders and a numbered shot sheet sent to the Claude app, with
+notes turned into exact edits: [docs/PHONE_WORKFLOW.md](docs/PHONE_WORKFLOW.md).
+
 **Before real projects:** fly the calibration set in [docs/TEST_FLIGHTS.md](docs/TEST_FLIGHTS.md). It measures the
 ND estimate, the Mission 1 Pro aperture, the highlight thresholds and the stabilizer choice on your own footage.
 
