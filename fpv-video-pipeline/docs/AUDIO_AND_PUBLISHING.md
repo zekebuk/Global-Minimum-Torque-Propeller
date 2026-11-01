@@ -36,8 +36,21 @@ python scripts\make_music.py youtube --bpm 100 --seconds 240 --mood "uplifting c
 - It writes `.mp3`, `.beats.json` (ready for the Resolve build) and `.license.json` (your generation record).
 - Pass the file to the session: `run_session.py ... --music D:\FPV\Music\reel_128bpm_....mp3`
 
-**Instagram trending audio:** if you'd rather use in-app music for reach, export the reel **without** music and add the
-sound in the app. Your cuts only line up if you edited to that same song.
+## Instagram via the Edits app (in-app music)
+Edits has no API, so the file has to reach your phone. That can be automatic, plus about 4 taps:
+1. **One-time:** install Google Drive for desktop and set `[reel].handoff = "G:/My Drive/FPV Reels"` in `config.toml`.
+2. Cut the reel in Resolve to a **local copy of the same song** on audio track A2 (buy it or use a preview copy). Put the
+   song's drop on the DROP marker.
+3. `python scripts\render.py reel --timeline REEL_final --no-music` mutes A2 for this render only. SFX and motor audio stay.
+4. `python scripts\reel_handoff.py <export>\REEL_final_nomusic.mp4 --from-resolve REEL_final` reads the song clip's
+   in-point from the timeline and writes a cue card: **"START THE SONG AT 0:47.3"**. It also shows the nearest half and whole
+   second and how many frames off each is, in case Edits' scrubber can't land exactly. More than 2 frames off is visible. It
+   copies the video and the card into the Drive folder.
+   - Without Resolve: `--song track.mp3 --reel-drop 7.5` lines up the song's detected drop with your hardest move.
+5. **Phone:** Drive app ▸ video ▸ Save to device ▸ Edits ▸ import ▸ add the same song ▸ set its start to the cue time ▸
+   set the reel's own audio (SFX) to about 30–50% ▸ share to Instagram.
+
+Use Drive, not a messaging app, for the transfer. Messengers recompress the video.
 
 ## YouTube publishing
 **Always available, no API needed:**

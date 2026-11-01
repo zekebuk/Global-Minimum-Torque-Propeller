@@ -224,7 +224,7 @@ YouTube or Instagram app.
 - [ ] Transfer the file to your phone at full quality (AirDrop, a cable, or a cloud drive at original quality, not a messenger app)
 - [ ] Cover frame: the most dramatic still, with no text over the subject
 - [ ] Caption: hook line, location, gear (quad, GoPro, settings), 3–5 specific hashtags (#fpv #cinematicfpv #gopro + location)
-- [ ] Music: either baked into the file (licensed) or exported **without music** and the identical in-app track added at the same start point. Instagram's audio library lets the reel surface on that sound's page
+- [ ] Music: either baked into the file (licensed), or posted through **Edits** with in-app music: `render.py --no-music` + `reel_handoff.py` give you the file on your phone and the exact song start time ([AUDIO_AND_PUBLISHING.md](AUDIO_AND_PUBLISHING.md)). Instagram's audio library lets the reel surface on that sound's page
 
 **YouTube**
 - [ ] 4K upload. HD versions appear first and 4K follows after processing, so don't judge quality in the first hour

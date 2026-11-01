@@ -4,6 +4,7 @@
     python scripts/render.py reel    --timeline REEL_final
     python scripts/render.py youtube --timeline YT_final
     python scripts/render.py reel --timeline REEL_selects --save-preset "FPV Reel" --no-render   # one-time
+    python scripts/render.py reel --timeline REEL_final --no-music   # for Edits / in-app music: SFX kept, song muted
 
 Settings come from [reel] / [youtube] in config.toml. Output: <exports>/<project>/<timeline>.mp4
 Reel: 1080x1920 H.264 ~25 Mbps 29.97p, AAC 320k - Instagram re-encodes, so give it a clean master.
@@ -27,6 +28,8 @@ def main() -> int:
     ap.add_argument("--config", type=Path)
     ap.add_argument("--save-preset", metavar="NAME", help="also save these settings as a Deliver-page render preset")
     ap.add_argument("--no-render", action="store_true", help="only set up (and save) the settings")
+    ap.add_argument("--no-music", action="store_true",
+                    help="mute the music track ([reel].music_track, default A2) for this render; adds _nomusic to the name")
     args = ap.parse_args()
     cfg = config.load(args.config)
     spec = cfg[args.target]
@@ -48,7 +51,7 @@ def main() -> int:
     settings = {
         "SelectAllFrames": True,
         "TargetDir": str(out_dir),
-        "CustomName": args.timeline,
+        "CustomName": args.timeline + ("_nomusic" if args.no_music else ""),
         "FormatWidth": spec["width"],
         "FormatHeight": spec["height"],
         "FrameRate": str(spec["fps"]),
@@ -65,6 +68,19 @@ def main() -> int:
         print(f"render preset {args.save_preset!r} {'saved' if ok else 'NOT saved (name taken? delete it on the Deliver page)'}")
     if args.no_render:
         return 0
+    music_track = int(cfg["reel"].get("music_track", 2))
+    if args.no_music:
+        if not tl.SetTrackEnable("audio", music_track, False):
+            raise SystemExit(f"could not mute audio track A{music_track}; mute it by hand and render without --no-music")
+        print(f"muted A{music_track} (music) for this render")
+    try:
+        return _render(project, tl, args, spec, out_dir)
+    finally:
+        if args.no_music:
+            tl.SetTrackEnable("audio", music_track, True)
+
+
+def _render(project, tl, args, spec, out_dir) -> int:
     job = project.AddRenderJob()
     if not job:
         raise SystemExit("AddRenderJob failed (is the timeline empty or the output path unwritable?)")
@@ -75,7 +91,8 @@ def main() -> int:
         print(f"\r{st.get('JobStatus')} {st.get('CompletionPercentage', 0)}%", end="", flush=True)
         time.sleep(2)
     st = project.GetRenderJobStatus(job)
-    print(f"\n{st.get('JobStatus')} in {time.time() - start:.0f}s -> {out_dir / (args.timeline + '.mp4')}")
+    name = args.timeline + ("_nomusic" if args.no_music else "")
+    print(f"\n{st.get('JobStatus')} in {time.time() - start:.0f}s -> {out_dir / (name + '.mp4')}")
     if st.get("JobStatus") != "Complete":
         print(st.get("Error", ""), file=sys.stderr)
         return 1

@@ -54,6 +54,10 @@ fps = 29.97
 codec = "H264"
 bitrate_kbps = 25000
 max_seconds = 90
+# Audio track that holds the song (render.py --no-music mutes it; reel_handoff.py reads the song's start from it).
+music_track = 2
+# Folder synced to your phone (e.g. Google Drive for desktop: "G:/My Drive/FPV Reels"). reel_handoff.py copies here.
+handoff = ""
 
 [youtube]
 # Upload 4K even from a 2.7K/5.3K source: YouTube assigns higher-bitrate codecs (VP9/AV1) to 4K uploads.

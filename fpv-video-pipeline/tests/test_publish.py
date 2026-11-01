@@ -74,3 +74,18 @@ def test_chapter_file_and_description():
     assert "0:00:00 Intro" in d and "1:02:03 Night" in d and "#fpv #drone" in d and "- GoPro" in d
     t = youtube.tags({"tags": ["fpv", "FPV", "drone"]}, ["x" * 600])
     assert t == ["fpv", "drone"]
+
+
+def test_edits_cue_math():
+    from reel_handoff import cue_from_drops, cue_from_timeline, fmt, rounding_report
+    # Song clip trimmed to start 47.3 s in, placed at reel 0:00 -> start song at 0:47.3
+    assert abs(cue_from_timeline(47.3, 0.0) - 47.3) < 1e-9
+    # Same trim but placed 1 s into the reel -> the song must already be at 46.3 s at reel 0:00
+    assert abs(cue_from_timeline(47.3, 1.0) - 46.3) < 1e-9
+    # Hook of 7.5 s, song drops at 5 s (too early) and 52.5 s -> start at 45.0
+    assert cue_from_drops([5.0, 52.5], 7.5) == 45.0
+    assert cue_from_drops([3.0], 7.5) is None
+    assert fmt(47.3) == "0:47.3" and fmt(125.04) == "2:05.0" and fmt(-1.5) == "-0:01.5"
+    r = rounding_report(47.3, 30)
+    assert "0:47.5" in r[0] and "visible" in r[0] and "0:47.0" in r[1]
+    assert "fine" in rounding_report(45.02, 30)[1]
