@@ -86,3 +86,35 @@ Add `--dry-run` to compute and save scopes without touching Resolve. Results go 
 - It's only as accurate as the LUT. An incorrect conversion LUT is the first thing to suspect if every clip needs the same large fix.
 - Verified so far on synthetic scenes and an encoded test clip. The first real GoPro, Mission 1 and Avata 2 clips will tell us how
   well the neutral finder works on real scenes. Send me the before/after PNGs.
+
+## 6. Transient (time-varying) grading: `analyze_dynamics.py`
+
+**Is it worth it?** Only as a *slow, light-following residual* on top of the static grade. A per-frame auto grade is
+just auto-exposure re-done in post: it can't tell content from light, so it pumps and flickers.
+
+| Change during the flight | Correct? |
+|---|---|
+| Auto-exposure lag (dive into shade, the camera takes ~0.5–1 s to adapt) | Yes. It's a camera artifact |
+| Sun → shade (bluer light), golden-hour drift | Yes, per lighting section |
+| Real bright → dark transition | Partially (60%). The darkness is part of the story; eyes adapt only partly |
+| Camera pitches up into the sky | **No.** That's content, not light |
+
+**How it tells light from content:**
+- Exposure is tracked on the *ground* only. Sky is excluded as pixels more than about 1 stop above the ground that aren't warmer than the
+  neutrals. Brightness is the primary cue because **in shade the illuminant is skylight, so shaded neutrals are as blue as the
+  sky**, and color-only sky detection fails there. The ground estimate starts from the 20th percentile, because the plain median
+  *is* sky once sky fills half the frame. Both failure modes showed up in testing and are covered by tests.
+- The illuminant is tracked via the neutral cluster (same method as section 3).
+- Both signals are smoothed with a 1 s running median, then split into sections with hysteresis: a change has to exceed 0.35 stop
+  or 0.02 in WB and **hold for 1 s or more** to count.
+
+**Result per clip:** "static ok" (most clips, if you shoot locked exposure and WB), or sections with the BAL offsets to *add*.
+Resolve's API can't write grade keyframes, so `--markers` puts a Lavender **GRADE KEY** marker at each section start with
+the numbers in its note. On the Color page, keyframe the BAL node there and ease over about 0.5 s.
+
+```powershell
+python scripts\analyze_dynamics.py --from-resolve YT_final --markers
+```
+Verified on an encoded synthetic flight (AE-lag dip, a shade section, continuously changing sky share): it finds exactly
+those two light events (dip −1.14 stops, partial lift; shade, WB warmed back, exposure unchanged) and **no** event from the sky
+share. There's also a per-clip plot `<clip>_dynamics.png` (exposure strip and WB strip, with section lines).
