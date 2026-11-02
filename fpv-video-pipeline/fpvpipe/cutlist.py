@@ -7,7 +7,8 @@ existing timeline. So the cut list is the source of truth and every revision reb
 cutlist.json:
 { "name": "REEL", "fps": 29.97, "music": "D:/FPV/Music/x.mp3" | null, "music_in_s": 0.0,
   "beats_s": [...optional beat grid in timeline seconds...],
-  "shots": [ {"src": "D:/FPV/Stabilized/.../GX010042_stabilized.mov", "in_s": 12.4, "out_s": 14.3, "note": ""}, ... ] }
+  "shots": [ {"src": "D:/FPV/Stabilized/.../GX010042_stabilized.mov", "in_s": 12.4, "out_s": 14.3, "note": "",
+               "grade": {"mid": 0.36, "clarity": 0.35}}, ... ] }
 """
 from __future__ import annotations
 
@@ -24,9 +25,15 @@ class Shot:
     in_s: float
     out_s: float
     note: str = ""
+    grade: dict = field(default_factory=dict)   # per-shot grade overrides (fivenode targets, "clarity", "sky_grad")
+    speed: float = 1.0                           # playback speed: 1.25 = 25% faster (source span / speed on the timeline)
 
     @property
-    def dur(self) -> float:
+    def dur(self) -> float:                      # duration on the timeline
+        return (self.out_s - self.in_s) / self.speed
+
+    @property
+    def span(self) -> float:                     # duration of source used
         return self.out_s - self.in_s
 
 
@@ -39,6 +46,7 @@ class CutList:
     music_in_s: float = 0.0
     beats_s: list[float] = field(default_factory=list)
     version: int = 1
+    titles: list[dict] = field(default_factory=list)   # text overlays, see fpvpipe/titles.py
 
     # ---------------------------------------------------------------- io
     @classmethod

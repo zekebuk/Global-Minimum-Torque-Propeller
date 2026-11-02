@@ -13,6 +13,7 @@ works **today** through Resolve's scripting API, without waiting on the MCP conn
 | 4. Music | `scripts/beat_map.py` | Tempo, beats, downbeats, and drops → Resolve markers to cut on |
 | 5. Build | `scripts/build_resolve_project.py` | Project, bins, colored markers, `YT_selects` 4K + `REEL_selects` 9:16 timelines, base grade |
 | 6a. Auto grade | `scripts/auto_grade.py` | Scope-driven balance pass per clip (exposure, white balance from detected neutrals, black/mid/white, saturation) written into Resolve's node template + before/after scope PNGs: [docs/COLOR_ALGORITHM.md](docs/COLOR_ALGORITHM.md), research: [docs/GRADING_RESEARCH.md](docs/GRADING_RESEARCH.md) |
+| 6a'. Five-node grade | `scripts/review.py fast --look cst5` | The current grade: CST in (GP-Log → DaVinci Wide Gamut) → CST out (→ Rec.709) → Lift/Gamma/Gain solved on the scopes → curves + HSL → look, baked to one LUT per node for Resolve. What the Moab rounds taught and how each lesson became a rule: [docs/COLOR_LESSONS.md](docs/COLOR_LESSONS.md) |
 | 6b. Light changes | `scripts/analyze_dynamics.py` | Finds clips that need a time-varying grade (AE lag, sun/shade) while ignoring sky/ground content changes; marks keyframe points with exact offsets ([§6](docs/COLOR_ALGORITHM.md)) |
 | 6. Grade + edit | Resolve | Node tree and look per platform, reel beat sheet: [PIPELINE §4–5](docs/PIPELINE.md), [STYLE_GUIDE](docs/STYLE_GUIDE.md) |
 | 7. Deliver | `scripts/render.py` | Platform-tuned renders |

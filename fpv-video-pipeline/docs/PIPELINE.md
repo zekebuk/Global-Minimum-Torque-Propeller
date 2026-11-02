@@ -129,6 +129,13 @@ Resolve's own stabilizer (Color page ▸ Tracker ▸ Stabilizer) is a fallback f
 
 ## 4. Color grade
 
+> **Current layout (2026-11):** five nodes, in this order: **1 CST in** (GP-Log → DaVinci Wide Gamut / Intermediate),
+> **2 CST out** (→ Rec.709 gamma 2.4), **3 Primary** (exposure, white balance, contrast on the Lift / Gamma / Gain /
+> Offset wheels), **4 Tone + sat** (custom curves and HSL), **5 Look** (creative). `fpvpipe/grade5.py` solves nodes
+> 3–5 from the scopes and `fpvpipe/cst.py` holds the exact transforms; `review.py fast --look cst5` previews it
+> and writes one `.cube` per node (plus the wheel values) under the preview cache for Resolve. The reasoning behind
+> every rule is in [COLOR_LESSONS.md](COLOR_LESSONS.md). The sections below describe the earlier LUT-based setup.
+
 ### 4a. Project color setup (done by `build_resolve_project.py`)
 
 - Color science **DaVinci YRGB** (not managed), timeline color space Rec.709 Gamma 2.4.
