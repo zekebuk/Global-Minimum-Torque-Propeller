@@ -11,8 +11,8 @@ by the next.
 
 ## 1. Pipeline install (15 min)
 ```powershell
-git clone -b fpv-video-pipeline https://github.com/zekebuk/Global-Minimum-Torque-Propeller
-cd Global-Minimum-Torque-Propeller\fpv-video-pipeline
+git clone -b fpv-video-pipeline https://github.com/zekebuk/Code
+cd Code\fpv-video-pipeline
 powershell -ExecutionPolicy Bypass -File scripts\windows\setup_windows.ps1 -Root D:\FPV
 ```
 This installs Python 3.11 and FFmpeg, creates `D:\FPV\{Library,Stabilized,Exports,Music,References,SFX,ResolveCache}`,

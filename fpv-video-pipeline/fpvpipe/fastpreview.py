@@ -37,7 +37,9 @@ def _segment(src: str, in_s: float, dur: float, cube: Path | None, vf_geom: str,
     if cube is not None:
         cpath = str(cube).replace("\\", "/").replace(":", "\\:")
         vf.append(f"lut3d=file='{cpath}':interp=trilinear")
-    vf += [vf_geom, f"fps={fps}", "format=yuv420p"]
+    # tag the frames themselves: newer ffmpeg takes colour metadata from the frames over -color_* output options
+    vf += [vf_geom, f"fps={fps}", "format=yuv420p",
+           "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv"]
     cmd = ["ffmpeg", "-v", "error", "-y", "-ss", f"{in_s:.3f}", "-t", f"{dur:.3f}", "-i", src,
            "-vf", ",".join(vf), "-an", "-c:v", "libx264", "-preset", "veryfast", "-b:v", "4M", "-maxrate", "6M",
            "-bufsize", "8M", "-g", str(int(round(fps))), "-color_primaries", "bt709", "-color_trc", "bt709",

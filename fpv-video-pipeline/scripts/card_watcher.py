@@ -48,7 +48,7 @@ def candidate_roots() -> list[Path]:
 
 
 def volume_label(root: Path) -> str:
-    if sys.platform == "win32":
+    if sys.platform == "win32" and root.parent == root:          # drive root (E:\): use the volume label
         try:
             import ctypes
             buf = ctypes.create_unicode_buffer(261)
@@ -57,7 +57,7 @@ def volume_label(root: Path) -> str:
                     return buf.value
         except Exception:
             pass
-        return f"card{str(root)[0]}"
+        return f"card{root.drive[:1]}"
     return root.name
 
 
