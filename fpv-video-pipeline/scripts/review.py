@@ -84,12 +84,15 @@ def cmd_firstcut(args, cfg):
                        "label": h["label"]} for f, r in hl.items() for h in r.get("highlights", [])),
                      key=lambda m: m["score"], reverse=True)
     if not moments:
-        # Calm flights / no gyro (DJI): evenly spaced moments across the clips, longest clips first, so a v1 still
-        # exists in the morning. Labelled "filler" on the shot sheet so you know to swap them.
+        # Calm flights / no gyro (DJI, stabilized exports): evenly spaced moments, taken round-robin across the clips
+        # (longest first) so the v1 shows every clip. Labelled "filler" on the shot sheet so you know to swap them.
+        from itertools import zip_longest
+        per_clip = []
         for f, r in sorted(hl.items(), key=lambda kv: -kv[1].get("duration_s", 0)):
             d = float(r.get("duration_s", 0))
-            moments += [{"src": best_src(f), "peak_s": t, "score": 0, "label": "filler"} for t in
-                        [d * (k + 0.5) / max(1, int(d // 6)) for k in range(max(1, int(d // 6)))]]
+            per_clip.append([{"src": best_src(f), "peak_s": t, "score": 0, "label": "filler"} for t in
+                             [d * (k + 0.5) / max(1, int(d // 6)) for k in range(max(1, int(d // 6)))]])
+        moments = [m for group in zip_longest(*per_clip) for m in group if m]
         if not moments:
             raise SystemExit("no clips with duration in highlights.json")
         print("! no highlight moments: v1 uses evenly spaced filler shots")
@@ -197,6 +200,8 @@ def cmd_fast(args, cfg):
             with open(m, newline="") as f:
                 manifest = {Path(r["file"]).stem.upper(): r["profile"] for r in csv.DictReader(f)}
     def profile_of(p: Path):
+        if args.profile:     # stabilized exports carry no camera metadata: say what the session was shot in
+            return args.profile
         key = p.stem.upper().split("_STABILI")[0]
         if key in manifest:
             return manifest[key]
@@ -205,7 +210,8 @@ def cmd_fast(args, cfg):
     vertical = not args.horizontal
     out = Path(args.cutlist).parent / f"{c.name}_v{c.version}_fast.mp4"
     t0 = time.time()
-    r = fastpreview.build(c, cfg, out, look=args.look, vertical=vertical, profile_of=profile_of)
+    r = fastpreview.build(c, cfg, out, look=args.look, vertical=vertical, profile_of=profile_of,
+                          letterbox=args.letterbox)
     print(f"preview {out} in {time.time() - t0:.1f}s ({r.rendered} shot(s) rendered, {r.reused} reused, "
           f"{out.stat().st_size / 1e6:.1f} MB)")
     for n in r.notes:
@@ -224,7 +230,7 @@ def contact_sheet(video: Path, c: cl.CutList, out: Path, cols: int = 4):
     for n, (s, t) in enumerate(zip(c.shots, c.starts()), 1):
         vf = "scale=240:-2"
         if font:
-            ff = font.replace(":", "\\\\:")
+            ff = font.replace(":", "\\:")                # inside quotes ffmpeg wants a single backslash
             vf += (f",drawtext=fontfile='{ff}':text='{n}  {t:.1f}s':x=6:y=6:fontsize=22:fontcolor=white:"
                    "box=1:boxcolor=black@0.6")
         subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", f"{t + s.dur / 2:.3f}", "-i", str(video), "-frames:v", "1",
@@ -249,7 +255,9 @@ def main() -> int:
     b = sub.add_parser("build"); b.add_argument("--cutlist", type=Path, required=True)
     p = sub.add_parser("preview"); p.add_argument("--cutlist", type=Path, required=True)
     q = sub.add_parser("fast"); q.add_argument("--cutlist", type=Path, required=True); q.add_argument("--session")
-    q.add_argument("--look", default="reel"); q.add_argument("--horizontal", action="store_true", help="16:9 (YouTube)")
+    q.add_argument("--look", default="reel", help="reel | youtube (camera LUT + solver) | cinema | fivenode | cst5 (CST in/out + LGG + curves/HSL + look)"); q.add_argument("--horizontal", action="store_true", help="16:9 (YouTube)")
+    q.add_argument("--profile", help="force the camera profile for every shot, e.g. GP-Log")
+    q.add_argument("--letterbox", action="store_true", help="16:9 picture on a 9:16 canvas with black bars")
     for s in (f, e, b, p, q):
         s.add_argument("--config", type=Path)
     args = ap.parse_args()

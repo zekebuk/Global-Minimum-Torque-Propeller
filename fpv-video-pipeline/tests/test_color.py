@@ -100,6 +100,25 @@ def test_no_neutrals_is_cautious(tmp_path):
     assert g.after["sat_mean"] > 0.5 * g.before["sat_mean"]   # greens/oranges survive
 
 
+def test_red_rock_is_not_white_balanced_away(tmp_path):
+    """Moab: red sandstone lit and in shadow spans many stops, so it looks like the neutral cluster. Its chroma is far
+    beyond any daylight cast, so it must not be neutralised (that turned real footage cyan/blue)."""
+    lut = make_lut(tmp_path)
+    rng = np.random.default_rng(8)
+    def col(c):
+        c = np.array(c, float)
+        return c / (c @ [cs.KR, cs.KG, cs.KB])
+    rock = col([1.0, 0.55, 0.36])                         # ~1.1 stops red over green, like real sandstone
+    lin = np.concatenate([0.25 * rock * rng.lognormal(0, 0.5, (30000, 1)),                     # sunlit .. shadow
+                          0.35 * col([0.55, 0.75, 1.0]) * rng.lognormal(0, 0.1, (8000, 1))])   # sky
+    v = log_encode(lin)
+    rock_d = np.hypot(*cs.find_neutrals(v)["d"])           # the rock is what the neutral finder picks
+    g = cs.solve(v, lut, "reel")
+    wb = np.hypot(g.bal.offset[0] - g.bal.offset[1], g.bal.offset[2] - g.bal.offset[1])
+    assert wb < 0.5 * rock_d                               # unguarded, the solver cancels all of it
+    assert any("white balance limited" in n for n in g.notes)
+
+
 def test_flat_scene_keeps_mid_and_warns(tmp_path):
     lut = make_lut(tmp_path)
     lin = scene() * 0 + 0.18 * np.random.default_rng(6).lognormal(0, 0.25, (40000, 1)) * np.ones(3)  # ~1.5 stops

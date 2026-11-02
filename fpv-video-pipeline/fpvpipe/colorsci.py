@@ -212,6 +212,8 @@ LOOKS = {
 # log->709 LUT is the output transform near the end, so its highlight roll-off shapes the contrast. "display": the
 # original layout (LUT on node 2, contrast after it in display space).
 ORDERS = ("scene", "display")
+# White-balance plausibility (log chroma distance of the neutral cluster): full correction up to WB_FULL, none past WB_NONE.
+WB_FULL, WB_NONE = 0.05, 0.09
 
 
 # ------------------------------------------------------------------ solver
@@ -285,6 +287,13 @@ def solve(log_rgb: np.ndarray, lut: CubeLUT, look: str | dict = "youtube", match
         wb = wb * 0.5
         notes.append(f"white balance only half-applied: no clear neutral surfaces (confidence {nz['confidence']:.2f}); "
                      "for sunsets/forests use --match with a hero clip or set WB by eye")
+    # A cluster far off neutral is a coloured surface, not an illuminant cast: red sandstone lit and in shadow
+    # spans many stops just like neutrals do. Real daylight casts stay within ~0.05; fade the correction out by 0.09.
+    cast = float(np.hypot(*nz["d"]))
+    if cast > WB_FULL:
+        wb = wb * float(np.clip((WB_NONE - cast) / (WB_NONE - WB_FULL), 0, 1))
+        notes.append(f"white balance limited: the 'neutral' cluster is too saturated ({cast:.3f}) to be a light cast "
+                     "(red rock, sand, foliage?); check WB by eye")
     wb = np.clip(wb, -max_offset, max_offset)
 
     # Stage 1b: exposure = common log offset that puts the median luma on target (an exact exposure change in log).

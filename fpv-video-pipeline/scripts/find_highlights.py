@@ -23,6 +23,11 @@ from fpvpipe import config, gpmf, highlights, media  # noqa: E402
 
 def analyse_clip(path: Path, cfg: dict) -> dict:
     info = media.video_summary(media.ffprobe(path))
+    if not info.get("has_gpmf"):
+        # stabilized exports / non-GoPro clips: no telemetry, but record the length so first cuts can still use them
+        print(f"  ! {path.name}: no GPMF telemetry (stabilized export or not a GoPro file): no highlights, length only",
+              file=sys.stderr)
+        return {"duration_s": info["duration_s"], "fps": info["fps"], "highlights": [], "smooth": [], "no_telemetry": True}
     tracks = gpmf.parse(media.extract_gpmf(path))
     gyro, acc = tracks["GYRO"].array(), tracks["ACCL"].array()
     t_g = gpmf.timeline(tracks["GYRO"], info["duration_s"])
