@@ -1,4 +1,5 @@
 numpy>=1.24
+pillow>=10      # title cards (fpvpipe/titles.py)
 pytest>=7  # tests only
 # optional, for youtube_publish.py --upload:
 # google-api-python-client
