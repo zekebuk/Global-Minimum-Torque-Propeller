@@ -3,21 +3,21 @@
 
 [paths]
 # Where ingest.py copies card contents. One folder per shoot day / session is created underneath.
-library = "D:/RAW"
+library = "E:/RAW"
 # Gyroflow writes stabilized intermediates here (ProRes / DNxHR).
-stabilized = "D:/STABILIZED"
+stabilized = "E:/STABILIZED"
 # Final renders.
-exports = "D:/EXPORTS"
+exports = "E:/EXPORTS"
 # Music you have licensed for use (Artlist, Epidemic, YouTube Audio Library, ...).
-music = "D:/ASSETS/Music"
+music = "E:/ASSETS/Music"
 # Generated sound-effects library (make_sfx_library.py).
-sfx = "D:/ASSETS/SFX"
+sfx = "E:/ASSETS/SFX"
 # Cut lists, previews and shot sheets for phone review (one folder per session).
-review = "D:/EXPORTS/Review"
+review = "E:/EXPORTS/Review"
 
 [color]
 # Fallback conversion LUT when a clip's profile has no entry in [color.luts]. Leave empty to skip.
-conversion_lut = "D:/ASSETS/GPLOG_Creative_EV0 - a9g8a0000004G5nAAE.cube"
+conversion_lut = "E:/ASSETS/GPLOG_Creative_EV0 - a9g8a0000004G5nAAE.cube"
 # Optional: a full grade saved from Resolve as a .drx still (see docs/PIPELINE.md, section 4).
 # When set, it replaces the single-LUT approach and is applied to every clip on the timelines.
 base_grade_drx = ""
@@ -25,9 +25,9 @@ base_grade_drx = ""
 # Log -> Rec.709 conversion per camera profile (profile names as camera_report.py prints them).
 # Each camera's log curve is different: the wrong LUT gives wrong contrast and color, so mixed sessions need all three.
 [color.luts]
-"GP-Log" = "D:/ASSETS/GPLOG_Creative_EV0 - a9g8a0000004G5nAAE.cube"            # HERO11 (Labs) / HERO12 / HERO13
-"GP-Log2" = "D:/ASSETS/GPLOG2_to_Rec709_65_EV+1.8_Rolloff.cube"          # Mission 1 / Mission 1 Pro (LUTs ship with the camera)
-"D-Log M" = "D:/ASSETS/DJI Avata 2 D-Log M to Rec.709 V1._.cube"            # DJI Avata 2 (DJI publishes this LUT)
+"GP-Log" = "E:/ASSETS/GPLOG_Creative_EV0 - a9g8a0000004G5nAAE.cube"            # HERO11 (Labs) / HERO12 / HERO13
+"GP-Log2" = "E:/ASSETS/GPLOG2_to_Rec709_65_EV+1.8_Rolloff.cube"          # Mission 1 / Mission 1 Pro (LUTs ship with the camera)
+"D-Log M" = "E:/ASSETS/DJI Avata 2 D-Log M to Rec.709 V1._.cube"            # DJI Avata 2 (DJI publishes this LUT)
 
 # Node layout the auto grader writes into (must match your .drx node template; see docs/COLOR_ALGORITHM.md).
 # "scene" (default, professional practice): grade in camera log, LUT as the output transform near the end.
