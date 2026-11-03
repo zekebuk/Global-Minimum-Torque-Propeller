@@ -99,7 +99,32 @@ Run it on the **original** files, because Gyroflow intermediates no longer conta
 Gyroflow uses the GoPro's own gyro data plus a lens profile it detects automatically. That's why it beats image-based
 stabilizers on FPV footage, where fast rotation and motion blur break feature tracking.
 
-**Recommended route: Gyroflow app → 10-bit intermediates, for the selected clips only.**
+**Default route (`[gyroflow] mode = "ofx"`): the Gyroflow OpenFX plugin inside Resolve, added by script.** No
+intermediates and no clicks. `build_resolve_project.py` and `build_reel_project.py` put the plugin on every timeline
+clip whose source still has gyro data. For a timeline that already exists, run:
+
+```bash
+python scripts/gyroflow_resolve.py --timeline REEL_final --preset reel         # --copy works on a duplicate, --remove undoes it
+```
+
+- Install once: download `Gyroflow-OpenFX-windows.zip` from github.com/gyroflow/gyroflow-plugins/releases, copy
+  `Gyroflow.ofx.bundle` to `C:\Program Files\Common Files\OFX\Plugins` (macOS `/Library/OFX/Plugins`), and restart
+  Resolve. `doctor.py` checks it.
+- How it's wired: Resolve's API can't put an OFX on a Color page node, so each clip gets a Fusion comp
+  `MediaIn → Gyroflow → MediaOut`. Fusion runs before the Color page, so the five-node grade sees the stabilized log
+  image. The plugin is pointed at the source file and finds the gyro data and lens profile itself. Output size is set
+  to the source size (the plugin's 3840x2160 default would squash 8:7), and Video speed to the clip's retime.
+- Settings come from `[gyroflow.reel]` / `[gyroflow.youtube]` (the table below, in plugin units). Per-clip changes:
+  Fusion page ▸ Gyroflow tool, or **Open Gyroflow** from the tool to fine-tune and save a `.gyroflow` project.
+- Skipped on purpose: clips without gyro data (stabilized exports, re-encodes; stabilizing twice warps the image)
+  and clips that already have a Fusion comp of their own.
+- Check one clip on the Fusion page: the tool's **Status** reads `OK` and **Loaded lens profile** names your camera.
+- Don't call `comp.Render()` from a script: Fusion opens a modal "Render completed!" dialog, and Resolve stops
+  answering the scripting API until someone clicks OK.
+- Cost: 5.3K/4K playback with the plugin is heavy. Use render cache (Fusion output) or the intermediates route below
+  for long YouTube edits.
+
+**Alternative: Gyroflow app → 10-bit intermediates, for the selected clips only** (`mode = "intermediates"`).
 Intermediates are large. ProRes 422 at 4K60 is roughly 6–7 GB per minute. Stabilize only the clips that have markers.
 
 | Gyroflow setting | Freestyle / Reels | Cinematic / YouTube |
@@ -120,11 +145,6 @@ Keep the full clip length (don't trim in Gyroflow), so highlight timestamps stil
 **Alternative: GoPro Player + HyperSmooth Pro** for GoPro clips (batch export with presets, CineForm output):
 see [HYPERSMOOTH_PRO.md](HYPERSMOOTH_PRO.md). Gyroflow remains the route for DJI Avata 2 footage.
 
-**Alternative: Gyroflow OpenFX plugin inside Resolve.** No intermediates. Install the OFX bundle
-(macOS `/Library/OFX/Plugins`, Windows `C:\Program Files\Common Files\OFX\Plugins`), enable it under
-Preferences ▸ Video Plugins, and add it as the **first** node on the Color page, pointing it at the original MP4
-(GoPro HERO8+ files can be selected directly). This saves disk but makes 5.3K playback heavy. Use it when storage is tight.
-
 Resolve's own stabilizer (Color page ▸ Tracker ▸ Stabilizer) is a fallback for clips without gyro data.
 
 ## 4. Color grade
@@ -135,6 +155,14 @@ Resolve's own stabilizer (Color page ▸ Tracker ▸ Stabilizer) is a fallback f
 > 3–5 from the scopes and `fpvpipe/cst.py` holds the exact transforms; `review.py fast --look cst5` previews it
 > and writes one `.cube` per node (plus the wheel values) under the preview cache for Resolve. The reasoning behind
 > every rule is in [COLOR_LESSONS.md](COLOR_LESSONS.md). The sections below describe the earlier LUT-based setup.
+>
+> **In Resolve, every node is editable** (`build_reel_project.py`, default since 2026-11-03): node 1 is a CDL on the
+> Lift / Gamma / Gain / Offset wheels; nodes 2, 3 and 5 are per-shot DCTLs (`fpvpipe/dctl.py`) whose sliders *are*
+> the solved values (Color page ▸ OpenFX panel ▸ DCTL: shadow lift, S-curve, saturation, blue/green/sky keys,
+> vibrance, the unify match); node 4 is the exact conversion `.cube`. The DCTL chain renders within ~1/255 of the
+> baked cubes. Tweak the sliders freely; to keep a hand-tuned shot through later `--regrade` runs, give it
+> `"manual": true` in the cut list. `--lut-primaries` / `--lut-nodes` fall back to the cubes. Gyroflow's controls for
+> a stabilized clip are on its Fusion page (Gyroflow1 node), not in the Edit Inspector.
 
 ### 4a. Project color setup (done by `build_resolve_project.py`)
 

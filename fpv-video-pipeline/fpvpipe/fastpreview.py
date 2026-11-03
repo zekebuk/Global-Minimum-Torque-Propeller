@@ -5,7 +5,7 @@ pass: fast seek -> trim -> 16-bit RGB -> lut3d -> crop/scale to the preview fram
 Segments are cached by (source, in/out, grade, size, fps), so after a note like "shot 3 shorter" only shot 3 renders.
 Segments are joined with the concat demuxer (no re-encode) and the music is laid in at the cut list's music offset.
 The colour result matches what auto_grade writes into Resolve (same solver, same LUT, same node order); reframing
-for vertical is a centre crop here (keyframed reframes stay a Resolve finishing step).
+for vertical is each shot's own 9:16 window on the full sensor frame (Shot.frame: position, eased pan, zoom).
 
 look="fivenode" uses the scope-solved 5-node model in fivenode (per-shot overrides from the cut list's "grade",
 plus two spatial tools a LUT cannot hold: "clarity" = local contrast on luma, "sky_grad" = graduated darkening of
@@ -43,6 +43,23 @@ def _frame_geometry(vertical: bool, letterbox: bool = False, aspect: str = "16:9
     if vertical:   # 9:16, centre crop (FPV sources are 4:3 / 8:7 / 16:9)
         return 540, 960, "scale=540:960:force_original_aspect_ratio=increase,crop=540:960"
     return 960, 540, "scale=960:540:force_original_aspect_ratio=increase,crop=960:540"
+
+
+def reframe(s: cl.Shot, animate: bool = True) -> str:
+    """The shot's 9:16 window on the full sensor frame as an ffmpeg crop. frame = {"x": centre as a fraction of the
+    source width, "x_end": centre at the end of the shot (eased pan), "zoom": 1.0 = full sensor height}.
+    animate=False gives the static window at the middle of the pan: the framing the grade is solved on, and the one
+    build_reel_project.py sets as Pan/Zoom in Resolve."""
+    f = s.frame or {}
+    z = max(1.0, float(f.get("zoom", 1.0)))
+    x0 = float(f.get("x", 0.5))
+    x1 = float(f.get("x_end", x0))
+    if animate and abs(x1 - x0) > 1e-4:
+        p = f"clip(t/{max(s.dur, 1e-3):.4f}\\,0\\,1)"
+        xc = f"({x0:.4f}+{x1 - x0:.4f}*{p}*{p}*(3-2*{p}))"     # smoothstep ease in/out
+    else:
+        xc = f"{(x0 + x1) / 2:.4f}"
+    return f"crop=ih*9/16/{z:.4f}:ih/{z:.4f}:clip({xc}*iw-ow/2\\,0\\,iw-ow):(ih-oh)/2"
 
 
 def _segment(src: str, in_s: float, dur: float, cube: Path | None, vf_geom: str, fps: float, out: Path,
@@ -100,13 +117,20 @@ def _fivenode_cube(src: Path, s: cl.Shot, profile: str, cfg: dict, cube_dir: Pat
     return cube, gkey, g.notes
 
 
+def cst5_key(src: Path, s: cl.Shot, crop: str | None = None) -> str:
+    """Cache key of a shot's cst5 grade. build_reel_project.py looks the cubes up by this too, so keep it the one
+    place the key is made (a copy there once dropped "unify" and loaded stale grades)."""
+    t = {k: v for k, v in s.grade.items() if k not in ("clarity", "sky_grad")}
+    raw = (f"{src.resolve()}|{src.stat().st_mtime_ns}|{s.in_s:.3f}|{s.dur:.3f}|{sorted(t.items())}|"
+           f"{sorted(grade5.TARGETS.items())}|{sorted(grade5.UNIFY.items())}|{crop}|cst5.18")   # .18: lift_stops/lift_at in the meta (node DCTLs)
+    return "cst5_" + hashlib.sha1(raw.encode()).hexdigest()[:16]
+
+
 def _cst5_cube(src: Path, s: cl.Shot, cube_dir: Path, crop: str | None = None) -> tuple[Path, str, list[str]]:
     """grade5 (the owner's 5-node layout) solved on the shot's used range; one cube for the chain plus one per node
     and the wheel values next to it, cached by source range + targets + code version."""
     t = {k: v for k, v in s.grade.items() if k not in ("clarity", "sky_grad")}
-    raw = (f"{src.resolve()}|{src.stat().st_mtime_ns}|{s.in_s:.3f}|{s.dur:.3f}|{sorted(t.items())}|"
-           f"{sorted(grade5.TARGETS.items())}|{sorted(grade5.UNIFY.items())}|{crop}|cst5.16")
-    gkey = "cst5_" + hashlib.sha1(raw.encode()).hexdigest()[:16]
+    gkey = cst5_key(src, s, crop)
     cube, meta = cube_dir / f"{gkey}.cube", cube_dir / f"{gkey}.json"
     if cube.exists() and meta.exists():
         return cube, gkey, json.loads(meta.read_text())["notes"]
@@ -148,7 +172,7 @@ def _spatial(grade: dict, w: int, h: int) -> list[str]:
 
 def build(c: cl.CutList, cfg: dict, out: Path, look: str = "reel", vertical: bool = True,
           profile_of=None, cache_dir: Path | None = None, letterbox: bool = False,
-          aspect: str = "16:9") -> PreviewResult:
+          aspect: str = "16:9", hires: bool = False) -> PreviewResult:
     cache = cache_dir or out.parent / ".preview_cache"
     seg_dir, cube_dir, grade_dir = cache / "segments", cache / "cubes", cache / "grades"
     for d in (seg_dir, cube_dir, grade_dir):
@@ -161,7 +185,10 @@ def build(c: cl.CutList, cfg: dict, out: Path, look: str = "reel", vertical: boo
     if letterbox or not vertical:
         pic_crop = "crop=iw:iw*9/16" if aspect == "16:9" else None     # 8:7 = the whole sensor frame
     else:
-        pic_crop = "crop=ih*9/16:ih"
+        pic_crop = None                     # vertical: each shot's own 9:16 window on the sensor (reframe)
+    reframed = vertical and not letterbox
+    if reframed and hires:
+        w, h = 1080, 1920
     post = []
     if look in ("cinema", "fivenode", "cst5"):   # soft vignette + fine animated grain on the picture (before the bars)
         post += ["vignette=angle=PI/12", "noise=c0s=5:c0f=t+u"]
@@ -178,8 +205,13 @@ def build(c: cl.CutList, cfg: dict, out: Path, look: str = "reel", vertical: boo
         lut = grading.lut_for(prof_cache[src.as_posix()], cfg, None)
         cube, gkey = None, "ungraded"
         shot_post = []
-        if look == "cst5" and prof_cache[src.as_posix()] == "GP-Log":
-            cube, gkey, gnotes = _cst5_cube(src, s, cube_dir, pic_crop)
+        shot_crop = reframe(s, animate=False) if reframed else pic_crop
+        shot_geom = f"{reframe(s)},scale={w}:{h}:flags=lanczos" if reframed else geom
+        prof = prof_cache[src.as_posix()]
+        if look == "cst5" and prof == "GP-Log2" and not s.grade.get("cst_lut"):
+            notes.append(f"shot {n}: GP-Log2 needs grade.cst_lut (the GP-Log2 -> Rec.709 .cube) for cst5, shown ungraded")
+        elif look == "cst5" and (prof == "GP-Log" or prof == "GP-Log2"):
+            cube, gkey, gnotes = _cst5_cube(src, s, cube_dir, shot_crop)
             notes += [f"shot {n}: {x}" for x in gnotes]
             shot_post = _spatial(s.grade, w, pic_h)
         elif look == "fivenode" and prof_cache[src.as_posix()] in ("GP-Log", "GP-Log2"):
@@ -199,12 +231,12 @@ def build(c: cl.CutList, cfg: dict, out: Path, look: str = "reel", vertical: boo
                 grading.bake_cube(lut, bal, cont, order, cube)
         else:
             notes.append(f"shot {n}: no LUT for profile {prof_cache[src.as_posix()]!r}, shown ungraded")
-        key = hashlib.sha1(f"{src.resolve()}|{s.in_s:.4f}|{s.dur:.4f}|{s.speed:.3f}|{gkey}|{w}x{h}|{fps}|{post}|{shot_post}".encode()).hexdigest()[:16]
+        key = hashlib.sha1(f"{src.resolve()}|{s.in_s:.4f}|{s.dur:.4f}|{s.speed:.3f}|{gkey}|{w}x{h}|{fps}|{post}|{shot_post}|{shot_geom}".encode()).hexdigest()[:16]
         seg = seg_dir / f"{key}.mp4"
         if seg.exists() and seg.stat().st_size > 0:
             reused += 1
         else:
-            _segment(str(src), s.in_s, s.dur, cube, geom, fps, seg, shot_post + post, bitrate, s.speed)
+            _segment(str(src), s.in_s, s.dur, cube, shot_geom, fps, seg, shot_post + post, bitrate, s.speed)
             rendered += 1
         segs.append(seg)
 

@@ -206,12 +206,16 @@ def cmd_fast(args, cfg):
         if key in manifest:
             return manifest[key]
         from fpvpipe import camera
+        if args.raw:         # a stabilized export named like its original: read the profile from the original
+            orig = next((q for q in Path(args.raw).iterdir() if q.stem.upper() == key and q != p), None)
+            if orig is not None:
+                return camera.identify(orig, look=False).profile
         return camera.identify(p, look=False).profile
     vertical = not args.horizontal
     out = Path(args.cutlist).parent / f"{c.name}_v{c.version}_fast.mp4"
     t0 = time.time()
     r = fastpreview.build(c, cfg, out, look=args.look, vertical=vertical, profile_of=profile_of,
-                          letterbox=args.letterbox, aspect=args.aspect)
+                          letterbox=args.letterbox, aspect=args.aspect, hires=args.hires)
     print(f"preview {out} in {time.time() - t0:.1f}s ({r.rendered} shot(s) rendered, {r.reused} reused, "
           f"{out.stat().st_size / 1e6:.1f} MB)")
     for n in r.notes:
@@ -258,6 +262,8 @@ def main() -> int:
     q.add_argument("--look", default="reel", help="reel | youtube (camera LUT + solver) | cinema | fivenode | cst5 (CST in/out + LGG + curves/HSL + look)"); q.add_argument("--horizontal", action="store_true", help="16:9 (YouTube)")
     q.add_argument("--profile", help="force the camera profile for every shot, e.g. GP-Log")
     q.add_argument("--letterbox", action="store_true", help="picture on a 9:16 canvas with black bars")
+    q.add_argument("--raw", type=Path, help="folder of the original clips: profiles of stabilized exports are read from them")
+    q.add_argument("--hires", action="store_true", help="vertical at 1080x1920 instead of 540x960")
     q.add_argument("--aspect", default="16:9", choices=["16:9", "8:7"], help="letterboxed picture aspect (8:7 = full GoPro sensor frame)")
     for s in (f, e, b, p, q):
         s.add_argument("--config", type=Path)

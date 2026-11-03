@@ -15,6 +15,28 @@ sfx = "E:/ASSETS/SFX"
 # Cut lists, previews and shot sheets for phone review (one folder per session).
 review = "E:/EXPORTS/Review"
 
+[gyroflow]
+# How clips get stabilized (docs/PIPELINE.md 3b):
+#   "ofx"           the Gyroflow OpenFX plugin goes on every timeline clip that still has gyro data (a Fusion comp,
+#                   so it runs before the grade). Stabilized exports in <stabilized>/ are still used where they exist.
+#   "intermediates" only stabilized exports from the Gyroflow app / GoPro Player; nothing is added in Resolve.
+#   "off"
+mode = "ofx"
+
+# Plugin settings per timeline type. Smoothness and lens correction 0-100, zoom limit in percent (125 = 1.25x),
+# horizon lock 0-100 (keep 0 on anything with rolls or flips).
+[gyroflow.reel]
+smoothness = 25
+zoom_limit = 125
+lens_correction = 100
+horizon_lock = 0
+
+[gyroflow.youtube]
+smoothness = 80
+zoom_limit = 115
+lens_correction = 100
+horizon_lock = 0
+
 [color]
 # Fallback conversion LUT when a clip's profile has no entry in [color.luts]. Leave empty to skip.
 conversion_lut = "E:/ASSETS/GPLOG_Creative_EV0 - a9g8a0000004G5nAAE.cube"

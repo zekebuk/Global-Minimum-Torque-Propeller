@@ -11,6 +11,8 @@ What it does, in order:
      Timeline REEL_selects - 9:16 1080x1920, a string-out of the highlight windows, best first,
                              with beat/downbeat/drop markers from <track>.beats.json.
   5. Base grade on every clip: the .drx in config (preferred) or the GP-Log conversion LUT on node 1.
+  6. Gyroflow ([gyroflow] mode = "ofx"): the OpenFX plugin on every clip without a stabilized export,
+     [gyroflow.youtube] settings on YT_selects, [gyroflow.reel] on REEL_selects.
 Re-running is safe: existing timelines are left alone and a new suffixed one is made.
 """
 from __future__ import annotations
@@ -23,7 +25,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from fpvpipe import config, resolve as rlib  # noqa: E402
+from fpvpipe import config, gyroflow, resolve as rlib  # noqa: E402
 
 # Resolve marker colors: Blue Cyan Green Yellow Red Pink Purple Fuchsia Rose Lavender Sky Mint Lemon Sand Cocoa Cream
 MARKER_COLOR = {"flip/roll": "Red", "dive/hang": "Fuchsia", "aggressive": "Yellow"}
@@ -206,6 +208,17 @@ def main() -> int:
                 log.append(f"no LUT for profile {profile!r}: add it under [color.luts] in config.toml")
             elif not row:
                 log.append("no manifest.csv / LUT: clips left ungraded (run ingest.py, put LUTs in luts/)")
+
+    # 6. Gyroflow plugin on clips that still have gyro data (stabilized exports have none and are skipped).
+    if gyroflow.mode(cfg) == "ofx":
+        if gyroflow.plugin_installed():
+            for tl, pre in ((yt_tl, "youtube"), (reel_tl, "reel")):
+                res = gyroflow.stabilize_timeline(tl, gyroflow.preset(cfg, pre))
+                print(f"Gyroflow on {tl.GetName()}: {len(res.get('added', []))} clips stabilized, "
+                      f"{len(res.get('no gyro', []))} without gyro data left alone")
+                log += [f"Gyroflow {k} on {', '.join(v)}" for k, v in res.items() if k in ("failed", "has comp")]
+        else:
+            log.append("[gyroflow] mode is ofx but the plugin is not installed (docs/PIPELINE.md 3b)")
 
     project.SetCurrentTimeline(reel_tl)
     pm.SaveProject()

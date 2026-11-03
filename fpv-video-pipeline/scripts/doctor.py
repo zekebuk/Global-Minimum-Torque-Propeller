@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from fpvpipe import resolve as rlib  # noqa: E402
+from fpvpipe import gyroflow, resolve as rlib  # noqa: E402
 
 
 def check(ok: bool, msg: str, fix: str = "", level: str = "FAIL") -> bool:
@@ -44,6 +44,9 @@ def main() -> int:
         return 1
     if not check(Path(lib).exists(), f"fusionscript library at {lib}", "set RESOLVE_SCRIPT_LIB"):
         return 1
+    check(gyroflow.plugin_installed(), "Gyroflow OpenFX plugin installed (needed for [gyroflow] mode = \"ofx\")",
+          "download Gyroflow-OpenFX from github.com/gyroflow/gyroflow-plugins/releases, copy Gyroflow.ofx.bundle to "
+          f"{gyroflow.BUNDLE.get(sys.platform, gyroflow.BUNDLE['linux']).parent}, restart Resolve", level="warn")
 
     try:
         resolve = rlib.connect()

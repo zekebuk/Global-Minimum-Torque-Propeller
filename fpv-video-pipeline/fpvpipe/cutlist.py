@@ -27,6 +27,10 @@ class Shot:
     note: str = ""
     grade: dict = field(default_factory=dict)   # per-shot grade overrides (fivenode targets, "clarity", "sky_grad")
     speed: float = 1.0                           # playback speed: 1.25 = 25% faster (source span / speed on the timeline)
+    gyroflow: dict = field(default_factory=dict)  # per-shot Gyroflow plugin overrides, e.g. {"smoothness": 35}
+    manual: bool = False                          # graded by hand in Resolve: --regrade leaves this shot's nodes alone
+    frame: dict = field(default_factory=dict)     # 9:16 reframe from the full sensor: {"x": 0.5, "x_end": 0.6, "zoom": 1.0}
+                                                  # x = window centre as a fraction of source width (fastpreview.reframe)
 
     @property
     def dur(self) -> float:                      # duration on the timeline

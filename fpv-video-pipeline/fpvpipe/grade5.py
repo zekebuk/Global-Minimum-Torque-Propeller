@@ -22,6 +22,7 @@ wrong in the earlier auto-grades is a rule here, not advice (docs/COLOR_LESSONS.
 """
 from __future__ import annotations
 
+import json
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
@@ -420,6 +421,10 @@ def write_node_cubes(g: Grade5, folder: Path, stem: str) -> dict[int, Path]:
         p = folder / f"{stem}_n{k}.cube"
         cs.write_cube(p, fn, n=65 if k in (1, 2) else 33, title=f"{stem} node {k}")
         out[k] = p
+    if isinstance(g.prim, LogPrimary):          # native primaries: node 1 as a CDL, its shadow lift moved into node 2
+        (folder / f"{stem}_n1_cdl.json").write_text(json.dumps(g.prim.cdl()))
+        cs.write_cube(folder / f"{stem}_n2_after_cdl.cube", lambda v: g.tone.apply(g.prim.shadow(v)), n=65,
+                      title=f"{stem} node 2 (after a CDL node 1)")
     return out
 
 
@@ -446,13 +451,27 @@ class LogPrimary(Primary):
     lift_at: float = 0.0        # log code (mean of RGB) of the threshold
 
     def apply(self, x):
-        v = super().apply(x)
+        return self.shadow(super().apply(x))
+
+    def shadow(self, v):
+        """The shadow-only lift alone (identity when lift_stops is 0). No CDL can express it, so in Resolve it rides
+        at the front of node 2's cube while node 1 carries cdl()."""
         if self.lift_stops:
             lin = (400.0 ** np.clip(v, 0, 1) - 1) / 399
             n = lin.mean(axis=1, keepdims=True)
             t = (400.0 ** self.lift_at - 1) / 399
             v = np.log(np.maximum(lin * (1 + (2.0 ** self.lift_stops - 1) * (t / (n + t)) ** 2), 0) * 399 + 1) / np.log(400)
         return v
+
+    def resolve(self) -> dict:
+        return {**super().resolve(), "lift_stops": round(float(self.lift_stops), 4), "lift_at": round(float(self.lift_at), 4)}
+
+    def cdl(self) -> dict:
+        """Primary.apply as an ASC CDL, exactly: lift (1-x) + gain x + offset = (gain - lift) x + (lift + offset),
+        then ^power. Resolve takes it natively (TimelineItem.SetCDL), in float, instead of a sampled LUT."""
+        return {"slope": (self.gain - self.lift).round(6).tolist(),
+                "offset": (self.lift + self.offset).round(6).tolist(),
+                "power": [round(float(self.power), 6)] * 3, "saturation": 1.0}
 
 
 def _bisect(too_low, lo, hi, n=22):
