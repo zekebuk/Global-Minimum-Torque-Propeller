@@ -109,7 +109,7 @@ def test_apply_wires_plugin_and_sets_size_speed_settings(monkeypatch):
     assert gf.inputs["Source"] == mi.Output and mo.inputs["Input"] == gf.Output
     assert gf.inputs["ProjectPath"] == r"E:\RAW\s\raw\GX010042.MP4"
     assert (gf.inputs["OutputWidth"], gf.inputs["OutputHeight"]) == (3840.0, 3360.0)
-    assert gf.inputs["VideoSpeed"] == 125.0
+    assert gf.inputs["VideoSpeed"] == 100.0     # Fusion sees source time; the 125% retime is applied after the comp
     assert gf.inputs["Smoothness"] == settings["smoothness"]
     # re-running updates in place instead of stacking a second comp
     assert gyroflow.apply(it, {**settings, "smoothness": 80}) == "updated"

@@ -30,6 +30,11 @@ def test_good_file_is_ready():
     assert "7/7 shots graded, 2 by hand, Gyroflow on 3" in text and "Next:" in text
 
 
+def test_main_profile_passes_baseline_does_not():
+    assert deliver.checks({**GOOD, "profile": "Main"}, SPEC)[0].ok          # what Resolve 21.1 actually writes
+    assert not deliver.checks({**GOOD, "profile": "Constrained Baseline"}, SPEC)[0].ok
+
+
 def test_problems_are_named():
     bad = {**GOOD, "tags": ("bt709", "bt709", None), "seconds": 95.0, "bitrate_kbps": 4000}
     items = deliver.checks(bad, SPEC, (-21.0, 0.5), graded=6, shots=7)

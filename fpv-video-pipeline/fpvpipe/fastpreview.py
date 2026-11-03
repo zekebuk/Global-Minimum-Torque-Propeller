@@ -22,7 +22,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import camera, cinelook, colorsci as cs, cutlist as cl, fivenode, grade5, grading, media
+from . import camera, cinelook, colorsci as cs, cutlist as cl, fivenode, grade5, grading, media, ramp, transitions
 
 
 @dataclass
@@ -65,17 +65,28 @@ def reframe(s: cl.Shot, animate: bool = True) -> str:
 
 
 def _segment(src: str, in_s: float, dur: float, cube: Path | None, vf_geom: str, fps: float, out: Path,
-             post: list[str] = (), bitrate: str = "4M", speed: float = 1.0):
+             post: list[str] = (), bitrate: str = "4M", speed: float = 1.0, ramp_pts: list = (),
+             span: float | None = None, src_fps: float = 0.0):
+    """One shot as a graded segment. speed = constant retime; ramp_pts = a speed ramp over source time
+    (fpvpipe/ramp.py), in which case `span` is the source range used and src_fps decides whether the slow parts
+    need motion interpolation (a 59.94 source slowed to 0.5x on a 29.97 timeline still has a real frame per frame)."""
+    span = span if span is not None else dur * speed
     vf = ["format=rgb48le"]
-    if speed != 1.0:
+    rate = f"fps={fps}"
+    if ramp_pts:
+        vf.append(f"setpts='{ramp.setpts_expr(ramp_pts, in_s, in_s + span)}'")
+        if ramp.min_speed(ramp_pts, in_s, in_s + span) * (src_fps or fps) < fps * 0.98:
+            # slower than the source's frame supply: optical-flow interpolation instead of repeated frames
+            rate = f"minterpolate=fps={fps}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1"
+    elif speed != 1.0:
         vf.append(f"setpts=PTS/{speed:.4f}")
     if cube is not None:
         cpath = str(cube).replace("\\", "/").replace(":", "\\:")
         vf.append(f"lut3d=file='{cpath}':interp=trilinear")
     # tag the frames themselves: newer ffmpeg takes colour metadata from the frames over -color_* output options
-    vf += [vf_geom, *post, f"fps={fps}", "format=yuv420p",
+    vf += [vf_geom, *post, "format=yuv420p", rate,
            "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv"]
-    cmd = ["ffmpeg", "-v", "error", "-y", "-ss", f"{in_s:.3f}", "-t", f"{dur * speed:.3f}", "-i", src,
+    cmd = ["ffmpeg", "-v", "error", "-y", "-ss", f"{in_s:.3f}", "-t", f"{span:.3f}", "-i", src,
            "-vf", ",".join(vf), "-an", "-c:v", "libx264", "-preset", "veryfast", "-b:v", bitrate,
            "-maxrate", bitrate, "-bufsize", bitrate, "-g", str(int(round(fps))), "-color_primaries", "bt709", "-color_trc", "bt709",
            "-colorspace", "bt709", "-frames:v", str(int(round(dur * fps))), str(out)]
@@ -198,8 +209,9 @@ def build(c: cl.CutList, cfg: dict, out: Path, look: str = "reel", vertical: boo
     if letterbox:
         post.append(f"pad={w}:{h}:0:(oh-ih)/2:black")
     bitrate = "12M" if w * h > 1e6 else "4M"
-    notes, segs, rendered, reused = [], [], 0, 0
+    notes, segs, seg_len, rendered, reused = [], [], [], 0, 0
     prof_cache: dict[str, str] = {}
+    fps_cache: dict[str, float] = {}             # source frame rates, only probed for ramped shots
 
     for n, s in enumerate(c.shots, 1):
         src = Path(s.src)
@@ -236,51 +248,91 @@ def build(c: cl.CutList, cfg: dict, out: Path, look: str = "reel", vertical: boo
                 grading.bake_cube(lut, bal, cont, order, cube)
         else:
             notes.append(f"shot {n}: no LUT for profile {prof_cache[src.as_posix()]!r}, shown ungraded")
-        key = hashlib.sha1(f"{src.resolve()}|{s.in_s:.4f}|{s.dur:.4f}|{s.speed:.3f}|{gkey}|{w}x{h}|{fps}|{post}|{shot_post}|{shot_geom}".encode()).hexdigest()[:16]
+        # transition handles: half of each soft transition on either side of the cut, rendered into the segment
+        # from source beyond in/out at the speed the shot holds there (xfade overlaps them, so the beat grid holds)
+        eh = c.shots[n - 1].trans_dur / 2 if n > 1 else 0.0
+        et = c.shots[n].trans_dur / 2 if n < len(c.shots) else 0.0
+        v0 = float(ramp.speed_at(s.ramp, s.in_s)) if s.ramp else s.speed
+        v1 = float(ramp.speed_at(s.ramp, s.out_s)) if s.ramp else s.speed
+        in_x = max(0.0, s.in_s - eh * v0)
+        eh = (s.in_s - in_x) / v0
+        dur_x, span_x = s.dur + eh + et, s.span + (s.in_s - in_x) + et * v1
+        key = hashlib.sha1(f"{src.resolve()}|{s.in_s:.4f}|{s.dur:.4f}|{s.speed:.3f}|{s.ramp}|{eh:.3f}|{et:.3f}|{gkey}|{w}x{h}|{fps}|{post}|{shot_post}|{shot_geom}".encode()).hexdigest()[:16]
         seg = seg_dir / f"{key}.mp4"
         if seg.exists() and seg.stat().st_size > 0:
             reused += 1
         else:
-            _segment(str(src), s.in_s, s.dur, cube, shot_geom, fps, seg, shot_post + post, bitrate, s.speed)
+            if s.ramp and src.as_posix() not in fps_cache:
+                fps_cache[src.as_posix()] = media.video_summary(media.ffprobe(src))["fps"]
+            _segment(str(src), in_x, dur_x, cube, shot_geom, fps, seg, shot_post + post, bitrate, s.speed,
+                     s.ramp, span_x, fps_cache.get(src.as_posix(), 0.0))
             rendered += 1
         segs.append(seg)
+        seg_len.append(round(dur_x * fps) / fps)
 
-    lst = cache / "concat.txt"
-    lst.write_text("".join(f"file '{p.resolve().as_posix()}'\n" for p in segs))
     out.parent.mkdir(parents=True, exist_ok=True)
     total = c.duration()
     has_music = bool(c.music and Path(c.music).exists())
     fade = float(getattr(c, "fade_out_s", 0.0) or 0.0)         # picture + music fade at the end (seconds)
     if c.music and not has_music:
         notes.append(f"music not found: {c.music}")
-    cmd = ["ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", str(lst)]
-    vmap, fc = "0:v", []
-    if c.titles:   # text is burned in with one extra encode pass; without titles the segments are just copied
+    soft = any(s.trans_dur > 0 for s in c.shots[1:])
+    chain: list[str] = []
+    if soft:
+        # every segment is an input: soft cuts overlap through xfade (their handles are in the segments), hard
+        # cuts are concatenated, so every cut stays on its beat; one encode pass
+        cmd = ["ffmpeg", "-v", "error", "-y"]
+        for p_ in segs:
+            cmd += ["-i", str(p_)]
+        # one common timebase: concat emits 1/1000000 while the segments carry 1/11988, and xfade refuses mixed ones
+        chain += [f"[{k}:v]settb=AVTB[s{k}]" for k in range(len(segs))]
+        n_in, last, acc = len(segs), "s0", seg_len[0]
+        band = ((h - pic_h) / 2, (h + pic_h) / 2) if letterbox else None        # picture rows (px), for effects
+        for k in range(1, len(segs)):
+            d = c.shots[k].trans_dur
+            if d > 0:
+                chain.append(f"[{last}][s{k}]xfade={transitions.xfade_spec(c.shots[k].trans_in, band)}:"
+                             f"duration={d:.3f}:offset={acc - d:.3f}[x{k}]")
+                acc += seg_len[k] - d
+            else:
+                chain.append(f"[{last}][s{k}]concat=n=2:v=1:a=0[x{k}]")
+                acc += seg_len[k]
+            last = f"x{k}"
+    else:          # hard cuts only: the concat demuxer, no re-encode unless titles or the fade need one
+        lst = cache / "concat.txt"
+        lst.write_text("".join(f"file '{p.resolve().as_posix()}'\n" for p in segs))
+        cmd = ["ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", str(lst)]
+        n_in, last = 1, "0:v"
+    if c.titles:
         from . import titles as tt
         pngs = [tt.render_png(t, w, pic_h, cache / f"title_{i}.png") for i, t in enumerate(c.titles)]
-        t_in, t_fc, t_last = tt.overlay_args(c.titles, pngs, (h - pic_h) // 2 if letterbox else 0,
-                                             (max(0.0, total - fade), fade) if fade else None)
+        t_in, t_fc, last = tt.overlay_args(c.titles, pngs, (h - pic_h) // 2 if letterbox else 0,
+                                           (max(0.0, total - fade), fade) if fade else None, base=last, first_input=n_in)
         cmd += t_in
-        fc, vmap = ["-filter_complex", t_fc], f"[{t_last}]"
-    music_idx = 1 + len(c.titles)
+        chain.append(t_fc)
+    elif fade:
+        chain.append(f"[{last}]fade=t=out:st={max(0.0, total - fade):.3f}:d={fade:.3f}[fo]")
+        last = "fo"
+    music_idx = n_in + len(c.titles)
     if has_music:
         cmd += ["-ss", f"{c.music_in_s:.3f}", "-t", f"{total:.3f}", "-i", c.music]
-    cmd += fc + ["-map", vmap]
+    if chain:
+        cmd += ["-filter_complex", ";".join(chain), "-map", f"[{last}]"]
+    else:
+        cmd += ["-map", last]
     if has_music:
         afade = max(fade, 0.4)
         cmd += ["-map", f"{music_idx}:a", "-c:a", "aac", "-b:a", "192k",
                 "-af", f"afade=t=out:st={max(0.0, total - afade):.3f}:d={afade:.3f}"]
-    if fade and not c.titles:                                   # the fade needs an encode pass; titles already do one
-        fc, vmap = ["-filter_complex", f"[0:v]fade=t=out:st={max(0.0, total - fade):.3f}:d={fade:.3f}[fo]"], "[fo]"
-        cmd[cmd.index("-map") + 1] = vmap
-        cmd[cmd.index("-map"):cmd.index("-map")] = fc
-    if c.titles:
+    if chain:
         cmd += ["-c:v", "libx264", "-preset", "veryfast", "-b:v", bitrate, "-maxrate", bitrate, "-bufsize", bitrate,
                 "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709"]
     else:
         cmd += ["-c:v", "copy"]
     cmd += ["-t", f"{total:.3f}", "-movflags", "+faststart", str(out)]
-    subprocess.run(cmd, check=True)
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode:
+        raise RuntimeError(f"ffmpeg failed assembling the preview:\n{r.stderr.strip()[-2000:]}")
     (out.with_suffix(".json")).write_text(json.dumps({"shots": len(c.shots), "duration_s": round(total, 3),
                                                       "rendered": rendered, "reused": reused, "notes": notes}, indent=2))
     return PreviewResult(out, rendered, reused, notes)

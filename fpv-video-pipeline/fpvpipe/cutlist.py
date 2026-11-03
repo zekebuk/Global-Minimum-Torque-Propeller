@@ -31,10 +31,25 @@ class Shot:
     manual: bool = False                          # graded by hand in Resolve: --regrade leaves this shot's nodes alone
     frame: dict = field(default_factory=dict)     # 9:16 reframe from the full sensor: {"x": 0.5, "x_end": 0.6, "zoom": 1.0}
                                                   # x = window centre as a fraction of source width (fastpreview.reframe)
+    ramp: list = field(default_factory=list)      # speed ramp [[source_s, speed], ...] eased between points (fpvpipe/ramp.py);
+                                                  # when set, `speed` is ignored and the shot lasts the integral of 1/speed
+    trans_in: dict = field(default_factory=dict)  # transition INTO this shot, centred on the cut: {"type": "flash" | "flow" |
+                                                  # "dissolve" | "cut", "dur": s, "dir": "left"} (fpvpipe/transitions.py)
+
+    @property
+    def trans_dur(self) -> float:                # seconds of transition into this shot (0 = hard cut)
+        return float(self.trans_in.get("dur", 0.0)) if self.trans_in.get("type", "cut") != "cut" else 0.0
 
     @property
     def dur(self) -> float:                      # duration on the timeline
+        if self.ramp:
+            from fpvpipe import ramp as _ramp
+            return _ramp.duration(self.ramp, self.in_s, self.out_s)
         return (self.out_s - self.in_s) / self.speed
+
+    @property
+    def avg_speed(self) -> float:                # the constant speed with the same source span and timeline length
+        return self.span / self.dur
 
     @property
     def span(self) -> float:                     # duration of source used
@@ -86,6 +101,8 @@ class CutList:
         rows = [f"{'#':>2}  {'at':>6}  {'len':>5}  source"]
         for n, (s, t) in enumerate(zip(self.shots, self.starts()), 1):
             rows.append(f"{n:>2}  {t:6.2f}  {s.dur:5.2f}  {Path(s.src).name} [{s.in_s:.2f}-{s.out_s:.2f}]"
+                        + (f"  ramp {' '.join(f'{v:g}x' for _, v in s.ramp)}" if s.ramp else
+                           f"  {s.speed:g}x" if s.speed != 1.0 else "")
                         + (f"  ({s.note})" if s.note else ""))
         rows.append(f"total {self.duration():.2f}s")
         return "\n".join(rows)
@@ -125,6 +142,22 @@ class CutList:
         """Keep the slot length unless out_s is given (so the beat structure stays intact)."""
         old = self.shots[self._i(n)]
         self.shots[self._i(n)] = Shot(src, in_s, out_s if out_s is not None else in_s + old.dur, note)
+
+    def set_ramp(self, n: int, points: list, keep_dur: bool = True, source_end_s: float | None = None) -> float:
+        """Speed ramp on shot n ([[source_s, speed], ...]); keep_dur moves the out-point so the shot keeps its timeline
+        length (its beats). Returns the new out_s. An empty list removes the ramp (back to `speed`)."""
+        from fpvpipe import ramp as _ramp
+        s = self.shots[self._i(n)]
+        if not points:
+            s.ramp = []
+            return s.out_s
+        pts = sorted([float(a), float(b)] for a, b in points)
+        if min(v for _, v in pts) <= 0:
+            raise ValueError("ramp speeds must be positive")
+        if keep_dur:
+            s.out_s = _ramp.fit_out(pts, s.in_s, s.dur, source_end_s)
+        s.ramp = pts
+        return s.out_s
 
     def set_length(self, n: int, seconds: float, keep: str = "head"):
         """keep='head' trims/extends the tail; keep='tail' the head; keep='center' both sides."""

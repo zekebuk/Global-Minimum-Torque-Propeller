@@ -5,7 +5,9 @@ a clip's Fusion comp runs before the Color page, so the 5-node grade sees the st
 Per clip: MediaIn -> Gyroflow -> MediaOut, with
   ProjectPath = the source file (the plugin reads the embedded gyro and picks the lens profile itself),
   output size = source size (the plugin defaults to 3840x2160, which would squash an 8:7 or 4:3 frame),
-  VideoSpeed  = the clip's retime (Fusion sees retimed frames; the plugin needs the speed to map gyro time).
+  VideoSpeed  = 100: a clip's Fusion comp runs in un-retimed source frames (the Edit-page retime is applied to the
+                comp's output afterwards - measured 2026-11-03 with TimeStretcher keys), so the plugin already sees
+                real source time. Telling it the clip's retime would mis-map the gyro on every sped-up clip.
 Clips without gyro (stabilized exports, re-encodes) are skipped: stabilizing twice warps the image.
 
 Never call comp.Render() from a script: Fusion opens a modal "Render completed!" dialog and Resolve stops answering
@@ -95,12 +97,11 @@ def apply(item, settings: dict, gyro_cache: dict[str, bool] | None = None) -> st
         status = "added"
     comp = gf.Comp()
     w, _, h = (mpi.GetClipProperty("Resolution") or "").partition("x")
-    speed = (item.GetSpeed() or {}).get("Percentage", 100.0)
     comp.Lock()
     gf.ProjectPath = src
     if w and h:
         gf.OutputWidth, gf.OutputHeight = float(w), float(h)
-    gf.VideoSpeed = float(speed)
+    gf.VideoSpeed = 100.0                 # Fusion time is source time; the Edit-page retime comes after the comp
     for key, inp in INPUTS.items():
         gf.SetInput(inp, float(settings[key]))
     comp.Unlock()

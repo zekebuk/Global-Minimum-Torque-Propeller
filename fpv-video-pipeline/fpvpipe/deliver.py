@@ -134,14 +134,16 @@ def checks(info: dict, spec: dict, lufs: tuple[float, float] | None = None, grad
     out = []
     w, h, fps = int(spec["width"]), int(spec["height"]), float(spec["fps"])
     pic_ok = (info["width"], info["height"]) == (w, h) and abs(info["fps"] - fps) < 0.05
-    codec_ok = info["codec"] in ("h264", "hevc") and (not spec.get("profile") or info["profile"] == spec["profile"])
+    # Resolve 21.1 ignores EncodingProfile for H.264 and writes Main; Instagram takes Main and High alike, so the
+    # profile is reported, not gated
+    codec_ok = info["codec"] in ("h264", "hevc") and info["profile"] in ("High", "Main", spec.get("profile", "High"))
     kb = info["bitrate_kbps"]
     # Resolve's encoder lands anywhere from ~half to the requested rate on clean footage; what must not happen is a
     # starved file (< 8 Mbps at 1080p) or one Instagram refuses outright
     rate_ok = 8000 <= kb <= 60000
     out.append(Check(pic_ok and codec_ok and rate_ok, "picture",
                      f"{info['width']}x{info['height']} {info['fps']:.2f}p {info['codec'].upper()} {info['profile']}, {kb / 1000:.1f} Mbps"
-                     + ("" if pic_ok else f"  (want {w}x{h} {fps}p)") + ("" if codec_ok else "  (want H.264 High)")
+                     + ("" if pic_ok else f"  (want {w}x{h} {fps}p)") + ("" if codec_ok else "  (want H.264 High or Main)")
                      + ("" if rate_ok else "  (want 15-20 Mbps)")))
     tags = info["tags"]
     out.append(Check(tags == ("bt709", "bt709", "bt709"), "color",

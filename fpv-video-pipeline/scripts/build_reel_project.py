@@ -29,12 +29,38 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import sys
+import unicodedata
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from fpvpipe import config, cutlist as cl, dctl, deliver, fastpreview, gyroflow, resolve as rlib  # noqa: E402
+from fpvpipe import (config, cutlist as cl, dctl, deliver, fastpreview, fusioncomp, gyroflow, ramp,  # noqa: E402
+                     resolve as rlib, retime, transitions)
+
+
+def clips_on(tl, track: int = 1) -> list:
+    """The clips of a video track, without the transition items that sit between them."""
+    return [it for it in (tl.GetItemListInTrack("video", track) or []) if it.GetType() != "transition"]
+
+
+def add_transitions(c: cl.CutList, items, fps: float, log: list[str]) -> int:
+    """Each shot's trans_in (fpvpipe/transitions.py) as Resolve's matching built-in transition, centred on the cut.
+    A flash becomes an Additive Dissolve (change it to Dip to Color > white by hand for a true burst); a directional
+    flow becomes a Cross Dissolve, since Push/Wipe directions cannot be set through the API."""
+    n = 0
+    for k, (s, it) in enumerate(zip(c.shots, items), 1):
+        if s.trans_dur <= 0:
+            continue
+        name = transitions.RESOLVE.get(s.trans_in.get("type"), "Cross Dissolve")
+        frames = max(2, int(round(s.trans_dur * fps)))
+        if it.AddTransition({"type": name, "category": "simple", "position": "start", "alignment": "center",
+                             "duration": frames}):
+            n += 1
+        else:
+            log.append(f"transition {name} ({frames} fr) refused at shot {k}: add it by hand")
+    return n
 
 LUT_ROOT = Path(r"C:\ProgramData\Blackmagic Design\DaVinci Resolve\Support\LUT")
 DEFAULT_TEMPLATE = Path("E:/ASSETS/fpv_5node_template.drx")      # 5+ empty serial nodes, made once in the UI
@@ -80,7 +106,10 @@ def stage_luts(c: cl.CutList, cache: Path, name: str, aspect: str, cfg: dict | N
         if not (src_dir.exists() and chain.exists()):
             out.append(None)
             continue
-        label = s.note.split(":")[0].replace(" ", "_").replace("/", "")[:24]
+        # ASCII only: Resolve 21.1 reads DCTL paths as bytes, so a folder like "11_Husøy" makes every DEFINE_LUT in it
+        # fail ("cannot find external LUT") with a modal error per node that freezes the scripting API
+        label = unicodedata.normalize("NFKD", s.note.split(":")[0]).encode("ascii", "ignore").decode()
+        label = re.sub(r"[^A-Za-z0-9_-]+", "_", label).strip("_")[:24] or "shot"
         rel = f"FPV/{name}/{i:02d}_{label}"
         d = LUT_ROOT / rel
         d.mkdir(parents=True, exist_ok=True)
@@ -305,15 +334,19 @@ def main() -> int:
             raise SystemExit(f"no timeline {args.regrade!r} in {args.name}")
         p.SetCurrentTimeline(tl)
         p.RefreshLUTList()
-        v1 = tl.GetItemListInTrack("video", 1) or []
+        v1 = clips_on(tl)
         if len(v1) != len(c.shots):
             raise SystemExit(f"{args.regrade} has {len(v1)} clips, the cut list {len(c.shots)}")
         expanded = load_grades(c, v1, rel, args.template, log, not args.lut_primaries, not args.lut_nodes)
         fade_out(c, tl)
         stab = stabilize(c, tl, cfg, args.no_gyroflow, log)
+        ramps = retime.apply_timeline(resolve, c, v1, log)
+        for name in fusioncomp.persist_track(tl):
+            log.append(f"Fusion comp on {name} could not be saved into the project")
         pm.SaveProject()
         print(f"regraded {tl.GetName()}: {expanded} shot(s) as 5-node trees, {sum(r is not None for r in rel) - expanded} whole-chain, {len(v1) - sum(r is not None for r in rel)} ungraded; "
-              f"Gyroflow updated on {len(stab.get('updated', [])) + len(stab.get('added', []))}")
+              f"Gyroflow updated on {len(stab.get('updated', [])) + len(stab.get('added', []))}; "
+              f"speed ramps: {', '.join(f'{k} {v}' for k, v in ramps.items() if k != 'none') or 'none'}")
         return finish(p, tl, c, cfg, args, rel, len(stab.get("updated", [])) + len(stab.get("added", [])), log)
     for k, v in {"timelineResolutionWidth": "1080", "timelineResolutionHeight": "1920", "timelineFrameRate": str(c.fps),
                  "colorScienceMode": "davinciYRGB",
@@ -341,17 +374,22 @@ def main() -> int:
         n += 1
     tl = mp.CreateEmptyTimeline(f"{args.name}_v{n}")
     p.SetCurrentTimeline(tl)
-    infos = []
+    infos, speeds = [], []
     for s in c.shots:
         m = clips[s.src]
         sf = float(m.GetClipProperty("FPS") or c.fps)
-        infos.append({"mediaPoolItem": m, "startFrame": int(round(s.in_s * sf)), "endFrame": int(round(s.out_s * sf)) - 1,
+        # a ramped shot sits at a constant speed p that covers its source span in whole comp frames (ramp.base_speed)
+        # and is exactly as long as the ramp makes it: source range p * dur; fpvpipe/retime.py then adds the curve
+        p_ = ramp.base_speed(s.avg_speed, sf, c.fps) if s.ramp else s.speed
+        end = s.in_s + p_ * s.dur if s.ramp else s.out_s
+        speeds.append(p_)
+        infos.append({"mediaPoolItem": m, "startFrame": int(round(s.in_s * sf)), "endFrame": int(round(end * sf)) - 1,
                       "mediaType": 1, "trackIndex": 1})
     items = mp.AppendToTimeline(infos) or []
     if len(items) != len(infos):
         raise SystemExit(f"Resolve placed {len(items)} of {len(infos)} clips")
-    for s, it in zip(c.shots, items):
-        if s.speed != 1.0 and not it.SetSpeed({"Percentage": s.speed * 100.0, "RippleTimeline": True}):
+    for s, p_, it in zip(c.shots, speeds, items):
+        if abs(p_ - 1.0) > 1e-4 and not it.SetSpeed({"Percentage": p_ * 100.0, "RippleTimeline": True}):
             log.append(f"speed refused on {s.note}")
     start = tl.GetStartFrame()
     if music:
@@ -370,18 +408,23 @@ def main() -> int:
                 v2[0].SetFades({"FadeIn": int(round(0.7 * c.fps)), "FadeOut": int(round(0.7 * c.fps))})
         else:
             log.append("title refused")
-    v1 = tl.GetItemListInTrack("video", 1) or []
+    v1 = clips_on(tl)
     expanded = load_grades(c, v1, rel, args.template, log, not args.lut_primaries, not args.lut_nodes)
     fade_out(c, tl)
     stab = stabilize(c, tl, cfg, args.no_gyroflow, log)
     if args.aspect == "9:16":
         reframe_items(c, v1, clips, log)
+    ramps = retime.apply_timeline(resolve, c, v1, log)
+    for name in fusioncomp.persist_track(tl):               # API-made comps are lost on reload unless re-imported
+        log.append(f"Fusion comp on {name} could not be saved into the project")
+    n_trans = add_transitions(c, v1, c.fps, log)            # last: transitions are items of their own on the track
     pm.SaveProject()
     graded = sum(r is not None for r in rel)
     print(f"built {p.GetName()} / {tl.GetName()}: {len(v1)} shots, {c.duration():.1f}s, "
           f"{expanded} shot(s) as 5-node trees, {graded - expanded} as a whole-chain LUT on node 1, "
           f"{len(v1) - graded} UNGRADED, "
-          f"{len(stab.get('added', []))} stabilized by Gyroflow")
+          f"{len(stab.get('added', []))} stabilized by Gyroflow, {len(ramps.get('added', []))} speed-ramped, "
+          f"{n_trans} transition(s)")
     return finish(p, tl, c, cfg, args, rel, len(stab.get("added", [])), log)
 
 

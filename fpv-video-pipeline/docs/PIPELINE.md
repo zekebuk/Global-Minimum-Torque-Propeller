@@ -113,7 +113,8 @@ python scripts/gyroflow_resolve.py --timeline REEL_final --preset reel         #
 - How it's wired: Resolve's API can't put an OFX on a Color page node, so each clip gets a Fusion comp
   `MediaIn → Gyroflow → MediaOut`. Fusion runs before the Color page, so the five-node grade sees the stabilized log
   image. The plugin is pointed at the source file and finds the gyro data and lens profile itself. Output size is set
-  to the source size (the plugin's 3840x2160 default would squash 8:7), and Video speed to the clip's retime.
+  to the source size (the plugin's 3840x2160 default would squash 8:7); Video speed stays 100 because a clip's Fusion
+  comp runs in un-retimed source frames (the Edit-page speed is applied to the comp's output afterwards).
 - Settings come from `[gyroflow.reel]` / `[gyroflow.youtube]` (the table below, in plugin units). Per-clip changes:
   Fusion page ▸ Gyroflow tool, or **Open Gyroflow** from the tool to fine-tune and save a `.gyroflow` project.
 - Skipped on purpose: clips without gyro data (stabilized exports, re-encodes; stabilizing twice warps the image)
@@ -163,6 +164,28 @@ Resolve's own stabilizer (Color page ▸ Tracker ▸ Stabilizer) is a fallback f
 > baked cubes. Tweak the sliders freely; to keep a hand-tuned shot through later `--regrade` runs, give it
 > `"manual": true` in the cut list. `--lut-primaries` / `--lut-nodes` fall back to the cubes. Gyroflow's controls for
 > a stabilized clip are on its Fusion page (Gyroflow1 node), not in the Edit Inspector.
+
+> **Speed ramps.** A shot's `"ramp": [[source_s, speed], ...]` is a speed curve over source time, eased between the
+> points (`fpvpipe/ramp.py`). `CutList.set_ramp(n, points)` moves the out-point so the shot keeps its length (its beats);
+> `ramp.fit_shape` keeps a shape such as `ramp.three_point(in, out, hero_s, fast, slow)` spanning the whole shot while it
+> does, and `ramp.hero_time(src, in, out)` finds the moment of most motion to slow on. The fast preview renders the
+> curve with `setpts` (motion-interpolated where a slowed 60p source runs out of frames). In Resolve the API has no retime
+> keyframes, so the clip sits at its average speed (Optical Flow / Speed Warp) and the curve is a `SpeedRamp`
+> TimeStretcher in its Fusion comp after Gyroflow, one SourceTime key per frame: drag the keys or delete the node to
+> change it by hand (`fpvpipe/retime.py`). Keep ramps near 1× with long eases and no holds; two slow landings in a
+> row read as the edit dragging.
+
+> **Transitions.** `review.py fast --transitions auto` reads each cut from the music and the picture
+> (`fpvpipe/transitions.py`). The default is a **hard cut** that lets the motion of the two shots carry the join; only
+> a soft moment in the music (onset < 0.55 of the strongest cut and no loudness jump) gets something, and barely: a
+> **blur**-through (0.2 s, `hblur`) when both shots are fast, a **super slight dissolve** (0.12 s) when the outgoing
+> picture is calm. (`flash` = burst to white and `flow` = directional soft wipe exist for hand use; auto never picks
+> them.) Each is stored on the incoming shot as `"trans_in": {"type": "blur", "dur": 0.2}`, centred on the cut so the
+> beat grid never moves: the preview extends both segments by half the transition (ramps keep running through the
+> handles) and overlaps them with ffmpeg `xfade`; Resolve gets the matching built-in transition (`AddTransition`:
+> blur → Blur Dissolve, dissolve → Cross Dissolve). `--transitions cut` removes them all; `"manual": true` keeps a
+> hand-placed one. The full rule set, the xfade-expression mechanics and what was tried and rejected (fades, flashes,
+> wipes, a sandstorm) are in [TRANSITIONS.md](TRANSITIONS.md).
 
 ### 4a. Project color setup (done by `build_resolve_project.py`)
 

@@ -212,6 +212,17 @@ def cmd_fast(args, cfg):
                 return camera.identify(orig, look=False).profile
         return camera.identify(p, look=False).profile
     vertical = not args.horizontal
+    if args.transitions == "auto":          # pick each cut's transition from the music and the motion, save it
+        from fpvpipe import transitions
+        picked = []
+        transitions.auto(c, picked)
+        c.save(args.cutlist)
+        for line in picked:
+            print("  transition:", line)
+    elif args.transitions == "cut":
+        for s in c.shots:
+            s.trans_in = {}
+        c.save(args.cutlist)
     out = Path(args.cutlist).parent / f"{c.name}_v{c.version}_fast.mp4"
     t0 = time.time()
     r = fastpreview.build(c, cfg, out, look=args.look, vertical=vertical, profile_of=profile_of,
@@ -264,6 +275,9 @@ def main() -> int:
     q.add_argument("--letterbox", action="store_true", help="picture on a 9:16 canvas with black bars")
     q.add_argument("--raw", type=Path, help="folder of the original clips: profiles of stabilized exports are read from them")
     q.add_argument("--hires", action="store_true", help="vertical at 1080x1920 instead of 540x960")
+    q.add_argument("--transitions", choices=["auto", "cut", "keep"], default="keep",
+                   help="auto: choose each cut's transition from the music (hard beat = hard cut) and the motion "
+                        "(flash / directional flow / dissolve), saved into the cut list; cut: remove them all")
     q.add_argument("--aspect", default="16:9", choices=["16:9", "8:7"], help="letterboxed picture aspect (8:7 = full GoPro sensor frame)")
     for s in (f, e, b, p, q):
         s.add_argument("--config", type=Path)

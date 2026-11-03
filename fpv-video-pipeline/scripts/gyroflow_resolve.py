@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from fpvpipe import config, gyroflow, resolve as rlib  # noqa: E402
+from fpvpipe import config, fusioncomp, gyroflow, resolve as rlib  # noqa: E402
 
 LABELS = {"added": "stabilized", "updated": "settings updated", "no gyro": "skipped, no gyro data (already stabilized?)",
           "has comp": "skipped, has its own Fusion comp", "no source": "skipped, no source file", "failed": "FAILED"}
@@ -66,6 +66,9 @@ def main() -> int:
         return 0
     settings = gyroflow.preset(cfg, args.preset)
     res = gyroflow.stabilize_timeline(tl, settings, args.track)
+    lost = fusioncomp.persist_track(tl, args.track)        # API-made comps vanish on reload unless re-imported
+    if lost:
+        res.setdefault("failed", []).extend(lost)
     pm.SaveProject()
     print(f"{p.GetName()} / {tl.GetName()}  preset {args.preset}: " + ", ".join(f"{k} {v:g}" for k, v in settings.items()))
     for status, names in res.items():

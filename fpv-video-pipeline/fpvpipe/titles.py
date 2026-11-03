@@ -63,14 +63,15 @@ def render_png(t: dict, w: int, h: int, out: Path, seed: int = 7) -> Path:
     return out
 
 
-def overlay_args(titles: list[dict], pngs: list[Path], pic_y: int, fade_out: tuple[float, float] | None = None
-                 ) -> tuple[list[str], str]:
-    """ffmpeg inputs + filter_complex chain overlaying each title PNG (faded) at the picture's top edge."""
-    inputs, chain, last = [], [], "0:v"
+def overlay_args(titles: list[dict], pngs: list[Path], pic_y: int, fade_out: tuple[float, float] | None = None,
+                 base: str = "0:v", first_input: int = 1) -> tuple[list[str], str, str]:
+    """ffmpeg inputs + filter_complex chain overlaying each title PNG (faded) at the picture's top edge.
+    base = the label the picture arrives on; first_input = the index the first PNG input will get."""
+    inputs, chain, last = [], [], base
     for i, (t, p) in enumerate(zip(titles, pngs), 1):
         inputs += ["-loop", "1", "-t", f"{t['start'] + t['dur'] + 0.1:.3f}", "-i", str(p)]
         fade = min(0.7, t["dur"] / 3)
-        chain.append(f"[{i}:v]format=rgba,fade=t=in:st={t['start']:.3f}:d={fade:.3f}:alpha=1,"
+        chain.append(f"[{first_input + i - 1}:v]format=rgba,fade=t=in:st={t['start']:.3f}:d={fade:.3f}:alpha=1,"
                      f"fade=t=out:st={t['start'] + t['dur'] - fade:.3f}:d={fade:.3f}:alpha=1[t{i}]")
         chain.append(f"[{last}][t{i}]overlay=0:{pic_y}:eof_action=pass[o{i}]")
         last = f"o{i}"
