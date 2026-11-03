@@ -23,7 +23,7 @@ def sample_frames(path: Path, start: float, dur: float, n: int = 7, width: int =
         m = re.search(r"crop=iw:iw\*(\d+)/(\d+)", crop)
         if m:
             aspect = int(m.group(2)) / int(m.group(1))
-        elif crop.startswith("crop=ih*9/16"):          # vertical 9:16 window (fastpreview.reframe)
+        elif "crop=ih*9/16" in crop:          # vertical 9:16 window (fastpreview.reframe)
             aspect = 9 / 16
         else:
             aspect = info["width"] / info["height"]

@@ -21,6 +21,8 @@ What it does:
   5. Gyroflow ([gyroflow] mode = "ofx"): the OpenFX plugin, [gyroflow.reel] settings, on every shot whose source
      still has gyro data (fpvpipe/gyroflow.py); a shot's "gyroflow" dict in the cut list overrides per shot, e.g.
      {"smoothness": 35}. Already-stabilized sources are skipped. --no-gyroflow turns it off.
+  6. --aspect 9:16: sources fill the 1080x1920 frame (cropped, not letterboxed) and each shot's "frame" from the cut
+     list becomes its Inspector Pan / Zoom; a pan ("x_end") is keyframed on a Fusion Transform after Gyroflow.
 Run `review.py fast --look cst5` first so the cubes exist for the current cut list.
 """
 from __future__ import annotations
@@ -32,7 +34,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from fpvpipe import config, cutlist as cl, dctl, fastpreview, gyroflow, resolve as rlib  # noqa: E402
+from fpvpipe import config, cutlist as cl, dctl, deliver, fastpreview, gyroflow, resolve as rlib  # noqa: E402
 
 LUT_ROOT = Path(r"C:\ProgramData\Blackmagic Design\DaVinci Resolve\Support\LUT")
 DEFAULT_TEMPLATE = Path("E:/ASSETS/fpv_5node_template.drx")      # 5+ empty serial nodes, made once in the UI
@@ -61,12 +63,19 @@ def cube_key(s: cl.Shot, crop: str | None) -> str:
     return fastpreview.cst5_key(Path(s.src), s, crop)
 
 
-def stage_luts(c: cl.CutList, cache: Path, name: str, crop: str | None, cfg: dict | None = None) -> list[str | None]:
+def shot_crop(s: cl.Shot, aspect: str) -> str | None:
+    """The framing the shot's grade was solved on (must match fastpreview.build for the same aspect)."""
+    if aspect == "9:16":
+        return fastpreview.reframe(s, animate=False)
+    return None if aspect == "8:7" else "crop=iw:iw*9/16"
+
+
+def stage_luts(c: cl.CutList, cache: Path, name: str, aspect: str, cfg: dict | None = None) -> list[str | None]:
     """Copy each shot's cubes (and write its node DCTLs) into Resolve's LUT folder; returns the relative folder per
     shot (None if missing)."""
     out = []
     for i, s in enumerate(c.shots, 1):
-        key = cube_key(s, crop)
+        key = cube_key(s, shot_crop(s, aspect))
         src_dir, chain, meta = cache / "cubes" / key, cache / "cubes" / f"{key}.cube", cache / "cubes" / f"{key}.json"
         if not (src_dir.exists() and chain.exists()):
             out.append(None)
@@ -185,6 +194,70 @@ def stabilize(c: cl.CutList, tl, cfg: dict, off: bool, log: list[str]) -> dict[s
     return stab
 
 
+def reframe_items(c: cl.CutList, items, clips: dict, log: list[str]):
+    """9:16 timeline, sources set to fill: each shot's frame (fastpreview.reframe) as Inspector Pan / Zoom.
+    Pan is in timeline pixels; a source W x H fills 1920 high, so it is W * 1920 / H wide before the zoom.
+    A pan (x_end) is keyframed on a Fusion Transform after Gyroflow, around the static mid-pan window."""
+    for s, it in zip(c.shots, items):
+        f = s.frame or {}
+        if not f:
+            continue
+        res = clips[s.src].GetClipProperty("Resolution") or ""
+        try:
+            sw, sh = (int(v) for v in res.lower().split("x"))
+        except ValueError:
+            log.append(f"no resolution for {s.note}: reframe skipped")
+            continue
+        z = max(1.0, float(f.get("zoom", 1.0)))
+        x0 = float(f.get("x", 0.5))
+        x1 = float(f.get("x_end", x0))
+        half = 0.5 * (sh * 9 / 16 / z) / sw                    # half the window, as a fraction of source width
+        xm = min(max((x0 + x1) / 2, half), 1 - half)
+        width = sw * 1920 / sh * z
+        ok = it.SetProperty("ZoomX", z) and it.SetProperty("ZoomY", z) and it.SetProperty("Pan", (0.5 - xm) * width)
+        if int(f.get("rot", 0)) % 360 == 180:                   # camera mounted upside down
+            ok = ok and it.SetProperty("RotationAngle", 180.0)
+        if not ok:
+            log.append(f"Pan/Zoom refused on {s.note}")
+        if abs(x1 - x0) > 1e-4 and not pan_comp(it, s, x0, x1, half, c.fps):
+            log.append(f"pan not keyframed on {s.note}: static at the mid-pan framing")
+
+
+def pan_comp(it, s: cl.Shot, x0: float, x1: float, half: float, fps: float) -> bool:
+    """Eased horizontal pan as a Fusion Transform (Center X keyframes) feeding MediaOut. The Inspector Pan already
+    centres the window at the middle of the pan, so the Transform moves the image by +-(x1 - x0) / 2 of its width."""
+    try:
+        comp = gyroflow.find(it) or (it.GetFusionCompByIndex(1) if it.GetFusionCompCount() else it.AddFusionComp())
+        if not comp:
+            return False
+        tools = {t.GetAttrs()["TOOLS_RegID"]: t for t in (comp.GetToolList(False) or {}).values()}
+        out = tools.get("MediaOut")
+        if out is None:
+            return False
+        comp.Lock()
+        tr = comp.AddTool("Transform", -32768, -32768)
+        tr.SetAttrs({"TOOLS_Name": "Reframe_pan"})
+        tr.Input = out.Input.GetConnectedOutput()
+        out.Input = tr.Output
+        start, end = comp.GetAttrs()["COMPN_RenderStart"], comp.GetAttrs()["COMPN_RenderEnd"]
+        a, b = min(max(x0, half), 1 - half), min(max(x1, half), 1 - half)
+        xm = (a + b) / 2
+        path = comp.XYPath()
+        tr.Center = path
+        tr.Center[start] = [0.5 - (a - xm), 0.5]
+        tr.Center[end] = [0.5 - (b - xm), 0.5]
+        spline = path.X.GetConnectedOutput().GetTool() if hasattr(path, "X") else None
+        if spline is not None:                                  # flat tangents = ease in / out, like the preview
+            kf = spline.GetKeyFrames()
+            for k, v in kf.items():
+                v["LH"], v["RH"] = {1: k - (end - start) / 3, 2: v[1]}, {1: k + (end - start) / 3, 2: v[1]}
+            spline.SetKeyFrames(kf, True)
+        comp.Unlock()
+        return True
+    except Exception:  # noqa: BLE001 - Fusion scripting raises plain errors; keep the build going
+        return False
+
+
 def find_or_import(mp, folder, path: str):
     mp.SetCurrentFolder(folder)
     for clip in folder.GetClipList() or []:
@@ -200,17 +273,20 @@ def main() -> int:
     ap.add_argument("--name", default="REEL")
     ap.add_argument("--template", type=Path, default=DEFAULT_TEMPLATE, help=".drx with 5+ empty serial nodes (one cube per node)")
     ap.add_argument("--regrade", metavar="TIMELINE", help="skip the build; (re)load the grades onto this existing timeline")
-    ap.add_argument("--aspect", default="8:7", choices=["8:7", "16:9"], help="picture aspect the grades were solved on")
+    ap.add_argument("--aspect", default="8:7", choices=["8:7", "16:9", "9:16"],
+                    help="picture aspect the grades were solved on; 9:16 = reframed from the full sensor (Shot.frame)")
     ap.add_argument("--no-gyroflow", action="store_true", help="don't add the Gyroflow plugin, whatever config.toml says")
     ap.add_argument("--lut-primaries", action="store_true", help="node 1 as a LUT instead of Resolve's own primaries (CDL)")
     ap.add_argument("--lut-nodes", action="store_true", help="nodes 2/3/5 as .cube LUTs instead of DCTLs with sliders")
+    ap.add_argument("--final", action="store_true",
+                    help="then render the Instagram master ([reel] spec) and print the READY FOR EXPORT checklist")
+    ap.add_argument("--no-music", action="store_true", help="with --final: leave the song out (added later in Edits)")
     ap.add_argument("--config", type=Path)
     args = ap.parse_args()
     cfg = config.load(args.config)
     c = cl.CutList.load(args.cutlist)
     cache = args.cutlist.parent / ".preview_cache"
-    crop = None if args.aspect == "8:7" else "crop=iw:iw*9/16"
-    rel = stage_luts(c, cache, args.name, crop, cfg)
+    rel = stage_luts(c, cache, args.name, args.aspect, cfg)
     missing = [n for n, r in enumerate(rel, 1) if r is None]
     if missing:
         print(f"no solved grade in the cache for shot(s) {missing}: run review.py fast --look cst5 first", file=sys.stderr)
@@ -238,11 +314,10 @@ def main() -> int:
         pm.SaveProject()
         print(f"regraded {tl.GetName()}: {expanded} shot(s) as 5-node trees, {sum(r is not None for r in rel) - expanded} whole-chain, {len(v1) - sum(r is not None for r in rel)} ungraded; "
               f"Gyroflow updated on {len(stab.get('updated', [])) + len(stab.get('added', []))}")
-        for m in log:
-            print("  !", m)
-        return 0
+        return finish(p, tl, c, cfg, args, rel, len(stab.get("updated", [])) + len(stab.get("added", [])), log)
     for k, v in {"timelineResolutionWidth": "1080", "timelineResolutionHeight": "1920", "timelineFrameRate": str(c.fps),
-                 "colorScienceMode": "davinciYRGB", "timelineInputResMismatchBehavior": "scaleToFit"}.items():
+                 "colorScienceMode": "davinciYRGB",
+                 "timelineInputResMismatchBehavior": "scaleToCrop" if args.aspect == "9:16" else "scaleToFit"}.items():
         if not p.SetSetting(k, v):
             log.append(f"could not set {k}={v}")
     p.RefreshLUTList()
@@ -299,15 +374,38 @@ def main() -> int:
     expanded = load_grades(c, v1, rel, args.template, log, not args.lut_primaries, not args.lut_nodes)
     fade_out(c, tl)
     stab = stabilize(c, tl, cfg, args.no_gyroflow, log)
+    if args.aspect == "9:16":
+        reframe_items(c, v1, clips, log)
     pm.SaveProject()
     graded = sum(r is not None for r in rel)
     print(f"built {p.GetName()} / {tl.GetName()}: {len(v1)} shots, {c.duration():.1f}s, "
           f"{expanded} shot(s) as 5-node trees, {graded - expanded} as a whole-chain LUT on node 1, "
           f"{len(v1) - graded} UNGRADED, "
           f"{len(stab.get('added', []))} stabilized by Gyroflow")
+    return finish(p, tl, c, cfg, args, rel, len(stab.get("added", [])), log)
+
+
+def finish(p, tl, c: cl.CutList, cfg: dict, args, rel: list, stabilized: int, log: list[str]) -> int:
+    """Print the build log, then either render the Instagram master and its READY FOR EXPORT verdict (--final) or
+    say how to get there. Exit status 1 when the master is not ready."""
     for m in log:
         print("  !", m)
-    return 0
+    graded = sum(r is not None for r in rel)
+    if not args.final:
+        print(f"  next: check {tl.GetName()} in Resolve, then rerun with --regrade {tl.GetName()} --final "
+              f"to render the Instagram master and get the export checklist")
+        return 0
+    try:
+        out = deliver.render(p, tl, cfg["reel"], cfg["paths"]["exports"] / p.GetName(), tl.GetName(),
+                             no_music=args.no_music, music_track=int(cfg["reel"].get("music_track", 2)))
+    except RuntimeError as e:
+        print(f"render failed: {e}", file=sys.stderr)
+        return 1
+    ok, text = deliver.verdict(out, cfg["reel"], no_music=args.no_music, graded=graded, shots=len(c.shots),
+                               manual=sum(s.manual for s in c.shots), stabilized=stabilized,
+                               music=Path(c.music).stem if c.music else "")
+    print(text)
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":

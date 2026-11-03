@@ -47,7 +47,8 @@ def _frame_geometry(vertical: bool, letterbox: bool = False, aspect: str = "16:9
 
 def reframe(s: cl.Shot, animate: bool = True) -> str:
     """The shot's 9:16 window on the full sensor frame as an ffmpeg crop. frame = {"x": centre as a fraction of the
-    source width, "x_end": centre at the end of the shot (eased pan), "zoom": 1.0 = full sensor height}.
+    source width, "x_end": centre at the end of the shot (eased pan), "zoom": 1.0 = full sensor height,
+    "rot": 180 for a camera mounted upside down (x is measured on the righted picture)}.
     animate=False gives the static window at the middle of the pan: the framing the grade is solved on, and the one
     build_reel_project.py sets as Pan/Zoom in Resolve."""
     f = s.frame or {}
@@ -59,7 +60,8 @@ def reframe(s: cl.Shot, animate: bool = True) -> str:
         xc = f"({x0:.4f}+{x1 - x0:.4f}*{p}*{p}*(3-2*{p}))"     # smoothstep ease in/out
     else:
         xc = f"{(x0 + x1) / 2:.4f}"
-    return f"crop=ih*9/16/{z:.4f}:ih/{z:.4f}:clip({xc}*iw-ow/2\\,0\\,iw-ow):(ih-oh)/2"
+    flip = "hflip,vflip," if int(f.get("rot", 0)) % 360 == 180 else ""     # camera mounted upside down
+    return f"{flip}crop=ih*9/16/{z:.4f}:ih/{z:.4f}:clip({xc}*iw-ow/2\\,0\\,iw-ow):(ih-oh)/2"
 
 
 def _segment(src: str, in_s: float, dur: float, cube: Path | None, vf_geom: str, fps: float, out: Path,
@@ -189,6 +191,7 @@ def build(c: cl.CutList, cfg: dict, out: Path, look: str = "reel", vertical: boo
     reframed = vertical and not letterbox
     if reframed and hires:
         w, h = 1080, 1920
+        pic_h = h
     post = []
     if look in ("cinema", "fivenode", "cst5"):   # soft vignette + fine animated grain on the picture (before the bars)
         post += ["vignette=angle=PI/12", "noise=c0s=5:c0f=t+u"]
@@ -210,10 +213,12 @@ def build(c: cl.CutList, cfg: dict, out: Path, look: str = "reel", vertical: boo
         prof = prof_cache[src.as_posix()]
         if look == "cst5" and prof == "GP-Log2" and not s.grade.get("cst_lut"):
             notes.append(f"shot {n}: GP-Log2 needs grade.cst_lut (the GP-Log2 -> Rec.709 .cube) for cst5, shown ungraded")
-        elif look == "cst5" and (prof == "GP-Log" or prof == "GP-Log2"):
+        elif look == "cst5" and (prof in ("GP-Log", "GP-Log2") or s.grade.get("cst_lut")):   # any source with its own CST cube
             cube, gkey, gnotes = _cst5_cube(src, s, cube_dir, shot_crop)
             notes += [f"shot {n}: {x}" for x in gnotes]
             shot_post = _spatial(s.grade, w, pic_h)
+        elif look == "cst5":                     # display-referred source (phone B-roll): shown as shot
+            notes.append(f"shot {n}: profile {prof!r} is not log, shown as shot")
         elif look == "fivenode" and prof_cache[src.as_posix()] in ("GP-Log", "GP-Log2"):
             cube, gkey, gnotes = _fivenode_cube(src, s, prof_cache[src.as_posix()], cfg, cube_dir)
             notes += [f"shot {n}: {x}" for x in gnotes]

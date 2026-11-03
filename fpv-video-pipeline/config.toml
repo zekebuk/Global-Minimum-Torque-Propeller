@@ -83,9 +83,13 @@ source_fps = 59.94
 width = 1080
 height = 1920
 fps = 29.97
-# Instagram re-encodes everything; give it a clean, high-bitrate master.
+# Instagram re-encodes everything to ~3-6 Mbps; a clean 15-20 Mbps H.264 High master is all it can use. More than
+# ~25 Mbps at 1080p buys nothing, and 4K only helps from a clean 4K source. render.py / build_reel_project.py --final
+# read the finished file back and print the READY FOR EXPORT checklist (fpvpipe/deliver.py).
 codec = "H264"
-bitrate_kbps = 25000
+bitrate_kbps = 20000
+profile = "High"
+multipass = true
 # Color tags written into the file. Rec.709 transfer = the 1-1-1 tag the platforms expect; Resolve's default
 # Gamma 2.4 tag (1-2-1) is the classic cause of washed-out uploads. render.py verifies the tag after rendering.
 color_space_tag = "Rec.709"

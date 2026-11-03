@@ -237,15 +237,21 @@ keyframe Transform ▸ Position X to follow the gap or subject. Studio's **Smart
 ```bash
 python scripts/render.py reel    --timeline REEL_final
 python scripts/render.py youtube --timeline YT_final
+python scripts/build_reel_project.py reel.json --name MOAB_reel --regrade MOAB_reel_v10 --final   # cut-list reels
+python scripts/render.py reel --check E:/EXPORTS/MOAB_reel/MOAB_reel_v10.mp4                     # checklist only
 ```
 
 | | Reel | YouTube |
 |---|---|---|
 | Resolution | 1080×1920 | 3840×2160, even from a 2.7K/5.3K source (4K uploads get YouTube's higher-bitrate VP9/AV1 encodes) |
 | Frame rate | 29.97 (or 59.94 for very fast content) | 59.94 (or match source) |
-| Codec | H.264, ~25 Mbps | H.265 ~80 Mbps (YouTube's own SDR 4K60 guideline is ~53–68 Mbps for H.264) |
-| Audio | AAC 320 kbps, 48 kHz | AAC 320 kbps, 48 kHz |
-| Color | Rec.709 Gamma 2.4 | Rec.709 Gamma 2.4 |
+| Codec | H.264 High, 2-pass, ~20 Mbps (Instagram re-encodes to 3–6 Mbps; more than ~25 buys nothing) | H.265 ~80 Mbps (YouTube's own SDR 4K60 guideline is ~53–68 Mbps for H.264) |
+| Audio | AAC 320 kbps, 48 kHz, −14 LUFS / −1 dBTP (Instagram normalises *down* only) | AAC 320 kbps, 48 kHz |
+| Color | Rec.709, 1-1-1 tags | Rec.709, 1-1-1 tags |
+
+A reel render ends with the **READY FOR EXPORT** block (`fpvpipe/deliver.py`): picture / colour tags / audio / loudness /
+length / size / grades, each read back from the finished file with ffprobe. `NOT READY` names what to fix. `--no-music`
+masters (song added in Edits) skip the loudness gate.
 
 If an export looks washed out in QuickTime on a Mac, that's the macOS gamma-tag difference, not your grade. Judge it in the
 YouTube or Instagram app.
