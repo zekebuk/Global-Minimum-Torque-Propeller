@@ -47,6 +47,7 @@ class CutList:
     beats_s: list[float] = field(default_factory=list)
     version: int = 1
     titles: list[dict] = field(default_factory=list)   # text overlays, see fpvpipe/titles.py
+    fade_out_s: float = 0.0                              # fade picture and music to black over the last N seconds
 
     # ---------------------------------------------------------------- io
     @classmethod

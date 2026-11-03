@@ -211,7 +211,7 @@ def cmd_fast(args, cfg):
     out = Path(args.cutlist).parent / f"{c.name}_v{c.version}_fast.mp4"
     t0 = time.time()
     r = fastpreview.build(c, cfg, out, look=args.look, vertical=vertical, profile_of=profile_of,
-                          letterbox=args.letterbox)
+                          letterbox=args.letterbox, aspect=args.aspect)
     print(f"preview {out} in {time.time() - t0:.1f}s ({r.rendered} shot(s) rendered, {r.reused} reused, "
           f"{out.stat().st_size / 1e6:.1f} MB)")
     for n in r.notes:
@@ -257,7 +257,8 @@ def main() -> int:
     q = sub.add_parser("fast"); q.add_argument("--cutlist", type=Path, required=True); q.add_argument("--session")
     q.add_argument("--look", default="reel", help="reel | youtube (camera LUT + solver) | cinema | fivenode | cst5 (CST in/out + LGG + curves/HSL + look)"); q.add_argument("--horizontal", action="store_true", help="16:9 (YouTube)")
     q.add_argument("--profile", help="force the camera profile for every shot, e.g. GP-Log")
-    q.add_argument("--letterbox", action="store_true", help="16:9 picture on a 9:16 canvas with black bars")
+    q.add_argument("--letterbox", action="store_true", help="picture on a 9:16 canvas with black bars")
+    q.add_argument("--aspect", default="16:9", choices=["16:9", "8:7"], help="letterboxed picture aspect (8:7 = full GoPro sensor frame)")
     for s in (f, e, b, p, q):
         s.add_argument("--config", type=Path)
     args = ap.parse_args()

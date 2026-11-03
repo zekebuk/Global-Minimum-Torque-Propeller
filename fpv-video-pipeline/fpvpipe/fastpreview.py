@@ -33,9 +33,13 @@ class PreviewResult:
     notes: list[str]
 
 
-def _frame_geometry(vertical: bool, letterbox: bool = False) -> tuple[int, int, str]:
-    if letterbox:  # 16:9 picture centred on a 1080x1920 canvas; the pad is applied after grain/vignette
-        return 1080, 1920, "scale=1080:608:force_original_aspect_ratio=increase,crop=1080:608"
+PIC_H = {"16:9": 608, "8:7": 944}   # picture height on the 1080x1920 canvas for each letterboxed aspect
+
+
+def _frame_geometry(vertical: bool, letterbox: bool = False, aspect: str = "16:9") -> tuple[int, int, str]:
+    if letterbox:  # the full picture centred on a 1080x1920 canvas; the pad is applied after grain/vignette
+        ph = PIC_H[aspect]
+        return 1080, 1920, f"scale=1080:{ph}:force_original_aspect_ratio=increase,crop=1080:{ph}"
     if vertical:   # 9:16, centre crop (FPV sources are 4:3 / 8:7 / 16:9)
         return 540, 960, "scale=540:960:force_original_aspect_ratio=increase,crop=540:960"
     return 960, 540, "scale=960:540:force_original_aspect_ratio=increase,crop=960:540"
@@ -77,7 +81,7 @@ def _cinema_cube(src: Path, s: cl.Shot, cube_dir: Path) -> tuple[Path, str, floa
 def _fivenode_cube(src: Path, s: cl.Shot, profile: str, cfg: dict, cube_dir: Path) -> tuple[Path, str, list[str]]:
     """Solve the 5-node grade on the shot's used range and bake nodes 1-5 into one cube (plus one cube per node and
     the solved values next to it, for building the same tree in Resolve). Cached by source range + targets."""
-    t = {k: v for k, v in s.grade.items() if k not in ("clarity", "sky_grad")}   # spatial tools are not node targets
+    t = {k: v for k, v in s.grade.items() if k not in ("clarity", "sky_grad", "unify")}   # not node targets
     raw = (f"{src.resolve()}|{src.stat().st_mtime_ns}|{s.in_s:.3f}|{s.dur:.3f}|{profile}|{sorted(t.items())}|"
            f"{sorted(fivenode.TARGETS.items())}|five15")
     gkey = "five_" + hashlib.sha1(raw.encode()).hexdigest()[:16]
@@ -96,21 +100,34 @@ def _fivenode_cube(src: Path, s: cl.Shot, profile: str, cfg: dict, cube_dir: Pat
     return cube, gkey, g.notes
 
 
-def _cst5_cube(src: Path, s: cl.Shot, cube_dir: Path) -> tuple[Path, str, list[str]]:
+def _cst5_cube(src: Path, s: cl.Shot, cube_dir: Path, crop: str | None = None) -> tuple[Path, str, list[str]]:
     """grade5 (the owner's 5-node layout) solved on the shot's used range; one cube for the chain plus one per node
     and the wheel values next to it, cached by source range + targets + code version."""
     t = {k: v for k, v in s.grade.items() if k not in ("clarity", "sky_grad")}
     raw = (f"{src.resolve()}|{src.stat().st_mtime_ns}|{s.in_s:.3f}|{s.dur:.3f}|{sorted(t.items())}|"
-           f"{sorted(grade5.TARGETS.items())}|cst5.6")
+           f"{sorted(grade5.TARGETS.items())}|{sorted(grade5.UNIFY.items())}|{crop}|cst5.16")
     gkey = "cst5_" + hashlib.sha1(raw.encode()).hexdigest()[:16]
     cube, meta = cube_dir / f"{gkey}.cube", cube_dir / f"{gkey}.json"
     if cube.exists() and meta.exists():
         return cube, gkey, json.loads(meta.read_text())["notes"]
-    frames = grading.sample_frames(src, s.in_s, s.span, n=5, width=256)
-    g = grade5.solve(grading.pool(frames, 30000), t)
-    cs.write_cube(cube, lambda v: g.apply(v), n=65, title=gkey)
+    frames = grading.sample_frames(src, s.in_s, s.span, n=5, width=256, crop=crop)
+    px = grading.pool(frames, 30000)
+    g = grade5.solve(px, t)
+    u = s.grade.get("unify", True)                       # the reel-wide unifying node (False to exempt a shot)
+    if u is not False:
+        un = grade5.solve_unify(g.apply(px), u if isinstance(u, dict) else None)
+        chain = lambda v: un.apply(g.apply(v))
+        g.notes.append(f"UNIFY: lift {un.lift:+.3f} gain x{un.gain:.2f} gamma {1 / un.power:.2f} "
+                       f"rock {un.rock_rot:+.0f}deg x{un.rock_scale:.2f} chroma x{un.chroma_scale:.2f}")
+    else:
+        un, chain = None, g.apply
+    cs.write_cube(cube, chain, n=65, title=gkey)
     grade5.write_node_cubes(g, cube_dir / gkey, "node")
-    meta.write_text(json.dumps(g.to_dict(), indent=1))
+    if un is not None:
+        cs.write_cube(cube_dir / gkey / "node_unify.cube", un.apply, n=33, title=f"{gkey} unify")
+    d = g.to_dict()
+    d["unify"] = un.to_dict() if un else None
+    meta.write_text(json.dumps(d, indent=1))
     return cube, gkey, g.notes
 
 
@@ -130,14 +147,21 @@ def _spatial(grade: dict, w: int, h: int) -> list[str]:
 
 
 def build(c: cl.CutList, cfg: dict, out: Path, look: str = "reel", vertical: bool = True,
-          profile_of=None, cache_dir: Path | None = None, letterbox: bool = False) -> PreviewResult:
+          profile_of=None, cache_dir: Path | None = None, letterbox: bool = False,
+          aspect: str = "16:9") -> PreviewResult:
     cache = cache_dir or out.parent / ".preview_cache"
     seg_dir, cube_dir, grade_dir = cache / "segments", cache / "cubes", cache / "grades"
     for d in (seg_dir, cube_dir, grade_dir):
         d.mkdir(parents=True, exist_ok=True)
     order = cfg["color"].get("nodes", {}).get("order", "scene")
     fps = float(c.fps)
-    w, h, geom = _frame_geometry(vertical, letterbox)
+    w, h, geom = _frame_geometry(vertical, letterbox, aspect)
+    pic_h = PIC_H[aspect] if letterbox else h
+    # the framing the grade is solved on = the framing delivered (the letterboxed picture, or the 9:16 centre crop)
+    if letterbox or not vertical:
+        pic_crop = "crop=iw:iw*9/16" if aspect == "16:9" else None     # 8:7 = the whole sensor frame
+    else:
+        pic_crop = "crop=ih*9/16:ih"
     post = []
     if look in ("cinema", "fivenode", "cst5"):   # soft vignette + fine animated grain on the picture (before the bars)
         post += ["vignette=angle=PI/12", "noise=c0s=5:c0f=t+u"]
@@ -155,13 +179,13 @@ def build(c: cl.CutList, cfg: dict, out: Path, look: str = "reel", vertical: boo
         cube, gkey = None, "ungraded"
         shot_post = []
         if look == "cst5" and prof_cache[src.as_posix()] == "GP-Log":
-            cube, gkey, gnotes = _cst5_cube(src, s, cube_dir)
+            cube, gkey, gnotes = _cst5_cube(src, s, cube_dir, pic_crop)
             notes += [f"shot {n}: {x}" for x in gnotes]
-            shot_post = _spatial(s.grade, w, h if not letterbox else 608)
+            shot_post = _spatial(s.grade, w, pic_h)
         elif look == "fivenode" and prof_cache[src.as_posix()] in ("GP-Log", "GP-Log2"):
             cube, gkey, gnotes = _fivenode_cube(src, s, prof_cache[src.as_posix()], cfg, cube_dir)
             notes += [f"shot {n}: {x}" for x in gnotes]
-            shot_post = _spatial(s.grade, w, h if not letterbox else 608)
+            shot_post = _spatial(s.grade, w, pic_h)
         elif look == "cinema" and prof_cache[src.as_posix()] == "GP-Log":
             cube, gkey, ev = _cinema_cube(src, s, cube_dir)
             notes.append(f"shot {n}: exposure {ev:+.2f} stops")
@@ -189,15 +213,16 @@ def build(c: cl.CutList, cfg: dict, out: Path, look: str = "reel", vertical: boo
     out.parent.mkdir(parents=True, exist_ok=True)
     total = c.duration()
     has_music = bool(c.music and Path(c.music).exists())
+    fade = float(getattr(c, "fade_out_s", 0.0) or 0.0)         # picture + music fade at the end (seconds)
     if c.music and not has_music:
         notes.append(f"music not found: {c.music}")
     cmd = ["ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", str(lst)]
     vmap, fc = "0:v", []
     if c.titles:   # text is burned in with one extra encode pass; without titles the segments are just copied
         from . import titles as tt
-        pic_h = 608 if letterbox else h
         pngs = [tt.render_png(t, w, pic_h, cache / f"title_{i}.png") for i, t in enumerate(c.titles)]
-        t_in, t_fc, t_last = tt.overlay_args(c.titles, pngs, (h - pic_h) // 2 if letterbox else 0)
+        t_in, t_fc, t_last = tt.overlay_args(c.titles, pngs, (h - pic_h) // 2 if letterbox else 0,
+                                             (max(0.0, total - fade), fade) if fade else None)
         cmd += t_in
         fc, vmap = ["-filter_complex", t_fc], f"[{t_last}]"
     music_idx = 1 + len(c.titles)
@@ -205,8 +230,13 @@ def build(c: cl.CutList, cfg: dict, out: Path, look: str = "reel", vertical: boo
         cmd += ["-ss", f"{c.music_in_s:.3f}", "-t", f"{total:.3f}", "-i", c.music]
     cmd += fc + ["-map", vmap]
     if has_music:
+        afade = max(fade, 0.4)
         cmd += ["-map", f"{music_idx}:a", "-c:a", "aac", "-b:a", "192k",
-                "-af", f"afade=t=out:st={max(0.0, total - 0.4):.3f}:d=0.4"]
+                "-af", f"afade=t=out:st={max(0.0, total - afade):.3f}:d={afade:.3f}"]
+    if fade and not c.titles:                                   # the fade needs an encode pass; titles already do one
+        fc, vmap = ["-filter_complex", f"[0:v]fade=t=out:st={max(0.0, total - fade):.3f}:d={fade:.3f}[fo]"], "[fo]"
+        cmd[cmd.index("-map") + 1] = vmap
+        cmd[cmd.index("-map"):cmd.index("-map")] = fc
     if c.titles:
         cmd += ["-c:v", "libx264", "-preset", "veryfast", "-b:v", bitrate, "-maxrate", bitrate, "-bufsize", bitrate,
                 "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709"]

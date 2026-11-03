@@ -57,6 +57,8 @@ TARGETS = {
     "shadow_sat": 1.15,          # chroma x this below luma 0.12
     "hi_sat_max": 0.22,         # chroma ceiling in the brightest 5% (compression banding)
     "blue_gain": 1.45,           # Hue vs Sat: blues
+    "green_gain": 1.0,          # Hue vs Sat: greens (shrubs, trees) - flat midday light wants them to separate
+    "warm_split": 0.0,          # Hue vs Sat by luma on warm hues: +x = sunlit rock more saturated, shaded less
     "sky_hue": 16.0,             # Hue vs Hue: bright cyans this many degrees toward blue
     "sky_lift": 0.0,            # Hue vs Lum: sky brightness in stops
     # node 5
@@ -101,7 +103,8 @@ def scopes(rgb) -> dict:
     c = np.hypot(cb, cr)
     q = np.percentile(y, [0.5, 50, 99.5])
     return {"black": float(q[0]), "mid": float(q[1]), "white": float(q[2]), "sat_mean": float(c.mean()),
-            "sat_p95": float(np.percentile(c, 95)), "hi_sat": float(np.percentile(c[y > np.percentile(y, 95)], 95))}
+            "sat_p95": float(np.percentile(c, 95)),
+            "hi_sat": float(np.percentile(c[y >= np.percentile(y, 95)], 95))}   # >=: a clipped top 5% is one value
 
 
 # ---------------------------------------------------------------- nodes
@@ -133,6 +136,8 @@ class ToneSat:                      # node 4
     sky_hue: float = 0.0
     sky_lift: float = 0.0
     rock_gain: np.ndarray = field(default_factory=lambda: np.ones(3))   # qualified on warm hues only
+    green: float = 1.0
+    warm_split: float = 0.0
 
     def curve(self, u):             # S around the pivot: a power above and below it, continuous at the pivot;
         p, k = np.clip(self.pivot, 0.05, 0.95), 1 + self.s                  # over-range (u > 1) passes through
@@ -432,6 +437,24 @@ RESOLVE_CST_LUT = "E:/ASSETS/Resolve_CST_GoPro_GPLog_to_Rec709.cube"   # export 
 STOP = np.log(2) / np.log(400)                                          # one stop in GP-Log code units
 
 
+@dataclass
+class LogPrimary(Primary):
+    """Primary on log codes plus a shadow-only lift: x' = x (1 + G (t/(x+t))^2) on scene light, full gain 2^stops
+    below the threshold t (a shot percentile), fading to none by ~3t. Monotonic for lifts up to ~4.8 stops; the gain
+    is computed on the mean so hue and saturation are kept."""
+    lift_stops: float = 0.0
+    lift_at: float = 0.0        # log code (mean of RGB) of the threshold
+
+    def apply(self, x):
+        v = super().apply(x)
+        if self.lift_stops:
+            lin = (400.0 ** np.clip(v, 0, 1) - 1) / 399
+            n = lin.mean(axis=1, keepdims=True)
+            t = (400.0 ** self.lift_at - 1) / 399
+            v = np.log(np.maximum(lin * (1 + (2.0 ** self.lift_stops - 1) * (t / (n + t)) ** 2), 0) * 399 + 1) / np.log(400)
+        return v
+
+
 def _bisect(too_low, lo, hi, n=22):
     for _ in range(n):
         m = (lo + hi) / 2
@@ -461,6 +484,11 @@ class LogToneSat(ToneSat):
             d = d * cosr + np.cross(k, d) * sinr + k * (d @ k)[:, None] * (1 - cosr)
         w_blue = np.clip(1 - np.abs((hue + 12 + 180) % 360 - 180) / 35, 0, 1) ** 1.5 * np.clip(c / 0.03, 0, 1)
         g = self.sat * (1 + w_blue * (self.blue - 1))
+        w_green = np.clip(1 - np.abs((hue + 135 + 180) % 360 - 180) / 40, 0, 1) * np.clip(c / 0.03, 0, 1)  # green ~ -135
+        g = g * (1 + w_green * (self.green - 1))
+        if self.warm_split:                            # warm hues: sunlit faces up, shaded faces down
+            w_warm = np.clip(1 - np.abs(hue - 130) / 50, 0, 1)
+            g = g * (1 + self.warm_split * w_warm * np.clip((yd - 0.45) / 0.25, -1, 1))
         g = g * (1 - (1 - self.shadow_sat) * np.clip((0.12 - yd) / 0.06, 0, 1))
         g = g * (1 - (1 - self.hi_limit) * np.clip((yd - 0.75) / 0.2, 0, 1))
         out = m + d * g[:, None]
@@ -509,24 +537,30 @@ def solve_scene(log_rgb: np.ndarray, over: dict | None = None) -> Grade5:
     y0 = disp_y(Primary())
     meter = y0 < np.percentile(y0, 90)
 
-    prim = Primary(lift=np.zeros(3), gain=np.ones(3), power=1.0, offset=0.0)
+    prim = LogPrimary(lift=np.zeros(3), gain=np.ones(3), power=1.0, offset=0.0)
     # exposure: one offset for all channels so the metered median lands on mid
     prim.offset = _bisect(lambda e: np.median(disp_y(replace(prim, offset=e))[meter]) < t["mid"], -0.4, 0.4)
-    for _ in range(2):
+    for _ in range(3):
         l = _bisect(lambda v: np.percentile(disp_y(replace(prim, lift=np.full(3, v))), 0.5) < t["black"], -0.4, 0.4)
         prim.lift = np.full(3, l)                                        # black point
         if t.get("white_gain", True) and np.percentile(disp_y(prim), 99.5) < t["white"]:   # white point, only upward
             g_ = _bisect(lambda v: np.percentile(disp_y(replace(prim, gain=np.full(3, v))), 99.5) < t["white"], 1.0, 2.0)
             prim.gain = np.full(3, g_)
-        lo_p, hi_p = t["power_range"]
+        lo_p, hi_p = t.get("scene_power_range", (0.55, 1.6))
         prim.power = _bisect(lambda p: np.median(disp_y(replace(prim, power=p))[meter]) > t["mid"], lo_p, hi_p)
     prim.lift, prim.gain = prim.lift + wb_off, prim.gain + wb_off         # same add to lift and gain = pure offset
+    if t.get("shadow_lift"):      # shadow-only lift, threshold at the shot's lift_pct percentile of the log codes
+        m_log = prim.apply(px).mean(axis=1)
+        prim.lift_stops, prim.lift_at = float(t["shadow_lift"]), float(np.percentile(m_log, t.get("lift_pct", 15.0)))
+        notes.append(f"1 PRIMARY: shadow lift +{t['shadow_lift']:.1f} stops below p{t.get('lift_pct', 15.0):.0f}")
+    # the solved lift/gain are RGB-equal by construction, so the trim survives untouched (nothing re-solves after it)
     if abs(np.median(disp_y(prim)[meter]) - t["mid"]) > 0.03:
         notes.append("1 PRIMARY: median off target within the gamma range")
 
     a1 = prim.apply(px)
     tone = LogToneSat(pivot=float(np.median(a1.mean(1))), s=t["s_curve"], shadow_sat=t["shadow_sat"],
-                      blue=t["blue_gain"], sky_hue=t["sky_hue"], sky_lift=t["sky_lift"])
+                      blue=t["blue_gain"], sky_hue=t["sky_hue"], sky_lift=t["sky_lift"],
+                      green=t["green_gain"], warm_split=t["warm_split"])
     tone.key = cst_fn
 
     def m4(tn):
@@ -539,6 +573,18 @@ def solve_scene(log_rgb: np.ndarray, over: dict | None = None) -> Grade5:
     if mm["hi_sat"] > t["hi_sat_max"]:
         tone.hi_limit = _bisect(lambda h: m4(replace(tone, hi_limit=h))["hi_sat"] <= t["hi_sat_max"], 0.0, 1.0)
         notes.append(f"2 TONE+SAT: highlight chroma limited (x{tone.hi_limit:.2f} at the top)")
+    if t.get("sky") is not None:       # shot matching: every shot's sky to one target {Y, c, hue} (display)
+        tgt = t["sky"]
+        rs = rock_sky(cst_fn(tone.apply(a1)))
+        if "sky" in rs and rs["sky_n"] > 150:
+            tone.sky_hue = float(np.clip(tone.sky_hue + (tgt["hue"] - rs["sky"]["hue"]), -30, 30))
+            # bounded: a sky that cannot reach the target within these stays short of it (past them it bands/cooks)
+            tone.blue = _bisect(lambda v: rock_sky(cst_fn(replace(tone, blue=v).apply(a1))).get("sky", rs["sky"])["c"] < tgt["c"], 0.7, 1.6)
+            tone.sky_lift = _bisect(lambda v: rock_sky(cst_fn(replace(tone, sky_lift=v).apply(a1))).get("sky", rs["sky"])["Y"] < tgt["Y"], -0.5, 0.5)
+            m = rock_sky(cst_fn(tone.apply(a1)))["sky"]
+            notes.append(f"2 TONE+SAT: sky matched (Y {m['Y']:.2f} c {m['c']:.3f} hue {m['hue']:.0f})")
+        else:
+            notes.append("2 TONE+SAT: too little sky to match")
     look = LogLook(vibrance=t["vibrance"])
     look.key = cst_fn
     g = Grade5(t["camera_gamut"], prim, tone, look, notes, transform="scene", conv_lut=lut)
@@ -546,3 +592,75 @@ def solve_scene(log_rgb: np.ndarray, over: dict | None = None) -> Grade5:
                "final": {k: round(v, 4) for k, v in scopes(cst_fn(look.apply(tone.apply(a1)))).items()},
                "neutral_confidence": round(float(nz["confidence"]), 3), "neutral_cast_log": round(cast, 4)}
     return g
+
+
+# ================================================================ unifying grade (a timeline-level node)
+#
+# Applied AFTER each shot's own grade, in display space: measures the graded shot and pulls it part of the way to
+# anchors shared by the whole reel, so the per-shot grades can differ in character while the reel reads as one.
+#   tone   lift / gain / power: p5, median and p95 toward the anchors
+#   rock   warm hues (sandstone): hue rotated toward the anchor hue, chroma scaled toward the anchor chroma
+#   chroma overall chroma scaled toward the anchor
+# strength 0 = off, 1 = land exactly on the anchors. Every step is monotonic.
+
+UNIFY = {"strength": 0.6, "p5": 0.06, "mid": 0.44, "p95": 0.84, "rock_hue": 128.0, "rock_chroma": 0.18,
+         "chroma": 0.14, "max_hue_rot": 12.0}
+
+
+@dataclass
+class Unify:
+    lift: float = 0.0
+    gain: float = 1.0
+    power: float = 1.0
+    rock_rot: float = 0.0        # degrees, warm hues only
+    rock_scale: float = 1.0      # chroma, warm hues only
+    chroma_scale: float = 1.0
+
+    def apply(self, rgb):
+        y0 = rgb @ np.array([KR, KG, KB])
+        yt = np.power(np.clip(self.lift + self.gain * np.clip(y0, 0, 1), 0, 1), self.power)
+        rgb = np.clip(rgb * (yt / np.maximum(y0, 1e-4))[:, None], 0, 1)
+        y, cb, cr = _ycc(rgb)
+        hue, c = np.degrees(np.arctan2(cr, cb)), np.hypot(cb, cr)
+        w = np.clip(1 - np.abs(hue - 130) / 50, 0, 1) * np.clip(c / 0.03, 0, 1)      # warm (rock) qualifier
+        rot = np.radians(w * self.rock_rot)
+        cb, cr = cb * np.cos(rot) - cr * np.sin(rot), cb * np.sin(rot) + cr * np.cos(rot)
+        g = self.chroma_scale * (1 + w * (self.rock_scale - 1))
+        return np.clip(_rgb(y, cb * g, cr * g), 0, 1)
+
+    def to_dict(self):
+        return {k: round(float(v), 4) for k, v in asdict(self).items()}
+
+
+def solve_unify(graded: np.ndarray, u: dict | None = None) -> Unify:
+    """graded: (N,3) display pixels of the shot after its own grade (the delivered framing)."""
+    t = {**UNIFY, **(u or {})}
+    s = t["strength"]
+    y, cb, cr = _ycc(graded)
+    p5, med, p95 = np.percentile(y, [5, 50, 95])
+    B, M, W = p5 + s * (t["p5"] - p5), med + s * (t["mid"] - med), p95 + s * (t["p95"] - p95)
+
+    def fit(pw):     # for a given power, lift/gain that put p5 and p95 on B and W; returns the median that results
+        Bt, Wt = max(B, 1e-3) ** (1 / pw), max(W, 1e-3) ** (1 / pw)
+        g = (Wt - Bt) / max(p95 - p5, 1e-3)
+        l = Bt - g * p5
+        return l, g, (max(l + g * med, 1e-3)) ** pw
+    lo_p, hi_p = 0.75, 1.33                               # bisect the power so the median lands too (joint fit:
+    for _ in range(24):                                   # setting lift/gain and then a gamma undid the blacks)
+        pw = (lo_p + hi_p) / 2
+        lo_p, hi_p = (pw, hi_p) if fit(pw)[2] > M else (lo_p, pw)
+    power = (lo_p + hi_p) / 2
+    lift, gain, _ = fit(power)
+    gain = float(np.clip(gain, 0.7, 1.4))
+    lift = float(np.clip(lift, -0.15, 0.15))
+    un = Unify(lift, gain, float(power))
+    out = un.apply(graded)
+    yy, cb2, cr2 = _ycc(out)
+    hue, c = np.degrees(np.arctan2(cr2, cb2)), np.hypot(cb2, cr2)
+    rock = (hue > 90) & (hue < 180) & (c > 0.03) & (yy > 0.2) & (yy < 0.8)
+    if rock.sum() > 200:
+        h_r, c_r = float(np.median(hue[rock])), float(np.median(c[rock]))
+        un.rock_rot = float(np.clip(s * (t["rock_hue"] - h_r), -t["max_hue_rot"], t["max_hue_rot"]))
+        un.rock_scale = float(np.clip((t["rock_chroma"] / max(c_r, 1e-3)) ** s, 0.7, 1.4))
+    un.chroma_scale = float(np.clip((t["chroma"] / max(c.mean(), 1e-3)) ** s, 0.8, 1.25))
+    return un

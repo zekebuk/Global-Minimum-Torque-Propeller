@@ -30,6 +30,9 @@ and 4 unclipped, as Resolve does in float, and land in node 5's shoulder.
 
 ## Exposure and contrast (node 3)
 
+- **Solve on the delivered framing.** The 8:7 sensor frame carries sky and lit ground that a 16:9 cut never
+  shows; sampling the full frame graded one shot a third too dark for what the viewer saw. `sample_frames(crop=)`
+  takes the preview's crop.
 - **Meter the median without the brightest 10%.** Sky and sun otherwise drag exposure down.
 - **Never let two nodes fight over exposure.** v1–v6 darkened in node 1 (into a shoulder) and stretched back in
   node 3 (×2.2): squash-then-stretch reads gray and dead no matter what saturation is added. Now one node owns

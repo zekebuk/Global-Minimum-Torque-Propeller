@@ -12,15 +12,25 @@ import numpy as np
 from . import colorsci as cs, media
 
 
-def sample_frames(path: Path, start: float, dur: float, n: int = 7, width: int = 384) -> list[np.ndarray]:
-    """Decode n frames as 16-bit RGB (full range, like Resolve's 'auto' data levels for video files)."""
+def sample_frames(path: Path, start: float, dur: float, n: int = 7, width: int = 384,
+                  crop: str | None = None) -> list[np.ndarray]:
+    """Decode n frames as 16-bit RGB (full range, like Resolve's 'auto' data levels for video files).
+    crop: an ffmpeg crop expression for the delivered framing (e.g. "crop=iw:iw*9/16"), so a grade is solved on
+    exactly the picture the viewer sees - the 8:7 sensor frame carries sky and ground a 16:9 cut never shows."""
     info = media.video_summary(media.ffprobe(path))
-    h = int(round(info["height"] * width / max(info["width"], 1) / 2) * 2)
+    if crop:
+        import re
+        m = re.search(r"crop=iw:iw\*(\d+)/(\d+)", crop)
+        aspect = int(m.group(2)) / int(m.group(1)) if m else info["width"] / info["height"]
+        h = int(round(width / aspect / 2) * 2)
+    else:
+        h = int(round(info["height"] * width / max(info["width"], 1) / 2) * 2)
     frames = []
     for k in range(n):
         t = start + dur * (k + 0.5) / n
         raw = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{t:.3f}", "-i", str(path), "-frames:v", "1",
-                              "-vf", f"scale={width}:{h}", "-pix_fmt", "rgb48le", "-f", "rawvideo", "-"],
+                              "-vf", (crop + "," if crop else "") + f"scale={width}:{h}", "-pix_fmt", "rgb48le",
+                              "-f", "rawvideo", "-"],
                              capture_output=True).stdout
         a = np.frombuffer(raw, "<u2").astype(np.float64) / 65535.0
         if a.size == width * h * 3:
