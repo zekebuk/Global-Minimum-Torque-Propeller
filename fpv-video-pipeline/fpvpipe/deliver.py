@@ -156,7 +156,7 @@ def checks(info: dict, spec: dict, lufs: tuple[float, float] | None = None, grad
     kb = info["bitrate_kbps"]
     # Resolve's encoder lands anywhere from ~half to the requested rate on clean footage; what must not happen is a
     # starved file (< 8 Mbps at 1080p) or one Instagram refuses outright
-    rate_ok = 8000 <= kb <= 60000
+    rate_ok = 8000 <= kb <= spec.get("max_kbps", 60000)      # a 4K YouTube master carries far more than a reel
     out.append(Check(pic_ok and codec_ok and rate_ok, "picture",
                      f"{info['width']}x{info['height']} {info['fps']:.2f}p {info['codec'].upper()} {info['profile']}, {kb / 1000:.1f} Mbps"
                      + ("" if pic_ok else f"  (want {w}x{h} {fps}p)") + ("" if codec_ok else "  (want H.264 High or Main)")
@@ -182,7 +182,7 @@ def checks(info: dict, spec: dict, lufs: tuple[float, float] | None = None, grad
             out.append(Check(l_ok or no_music, "loudness", f"{li:.1f} LUFS, peak {pk:.1f} dBTP{why}"))
     sec, limit = info["seconds"], float(spec.get("max_seconds", 90))
     out.append(Check(IG_MIN_SECONDS <= sec <= limit, "length", f"{sec:.1f} s (limit {limit:.0f})"))
-    out.append(Check(info["mb"] <= IG_MAX_MB, "size", f"{info['mb']:.0f} MB"))
+    out.append(Check(info["mb"] <= spec.get("max_mb", IG_MAX_MB), "size", f"{info['mb']:.0f} MB"))
     if graded is not None and shots is not None:
         out.append(Check(graded == shots, "grades", f"{graded}/{shots} shots graded"
                          + (f", {manual} by hand" if manual else "") + (f", Gyroflow on {stabilized}" if stabilized else "")

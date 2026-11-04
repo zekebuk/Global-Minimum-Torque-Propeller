@@ -65,6 +65,7 @@ class Rig:
         self.crop = b.shot_crop(self.c.shots[0], a.aspect)
         self.out = a.cutlist.parent / "converge"
         self.out.mkdir(exist_ok=True)
+        (self.cache / "cubes").mkdir(parents=True, exist_ok=True)     # a cut list that was never previewed has none
         self.resolve = rlib.connect()
         self.pm = self.resolve.GetProjectManager()
         self.p = self.pm.GetCurrentProject()

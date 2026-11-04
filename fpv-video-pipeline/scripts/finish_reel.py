@@ -72,7 +72,7 @@ def main() -> int:
     tl = p.GetCurrentTimeline()
     spec = {**cfg["reel"], "width": w, "height": h}
     if a.aspect == "uhd":            # YouTube: H.265, its own rate, no reel length limit
-        spec = {**spec, **cfg["youtube"], "bitrate_kbps": 45000, "max_seconds": 900, "fps": c.fps}
+        spec = {**spec, **cfg["youtube"], "bitrate_kbps": 45000, "max_seconds": 900, "fps": c.fps, "max_kbps": 200000, "max_mb": 8000}
     out = deliver.render(p, tl, spec, cfg["paths"]["exports"] / a.project, c.name, log=lambda *x, **k: None)
     lufs, gain = deliver.set_loudness(out)
     print(f"loudness {lufs:.1f} LUFS, gain {gain:+.1f} dB", flush=True)
