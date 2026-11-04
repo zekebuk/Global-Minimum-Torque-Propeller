@@ -35,8 +35,8 @@ TOL = {"med": 0.012, "p1": 0.007, "chroma": 0.006}
 DEFAULT = {"med": 0.25, "p1": 0.012, "chroma": 0.07, "clip": 0.005}
 
 
-def timecode(f: int) -> str:
-    return f"{f // 108000:02d}:{(f // 1800) % 60:02d}:{(f // 30) % 60:02d}:{f % 30:02d}"
+def timecode(f: int, rate: int = 30) -> str:
+    return f"{f // (rate * 3600):02d}:{(f // (rate * 60)) % 60:02d}:{(f // rate) % 60:02d}:{f % rate:02d}"
 
 
 def pixels(paths) -> np.ndarray:
@@ -95,7 +95,7 @@ class Rig:
         for n in ns:
             it, paths = items[n - 1], []
             for q, fr in enumerate((.25, .5, .8)):
-                self.tl.SetCurrentTimecode(timecode(it.GetStart() + int(it.GetDuration() * fr)))
+                self.tl.SetCurrentTimecode(timecode(it.GetStart() + int(it.GetDuration() * fr), int(round(self.c.fps))))
                 time.sleep(self.wait)
                 path = self.out / f"{tag}_{n:02d}_{q}.png"
                 if self.p.ExportCurrentFrameAsStill(str(path)):
@@ -147,7 +147,7 @@ def converge(r: Rig, shots: list[int], iters: int) -> list[int]:
                 g["black"] = round((lo + hi) / 2, 5)
             else:
                 g["black"] = round(float(np.clip(g["black"] - .7 * (m["p1"] - t["p1"]), 0, .08)), 5)
-            sat = float(np.clip(g["sat_max"] * (t["chroma"] / max(m["chroma"], .01)) ** .8, .6, 1.5))
+            sat = float(np.clip(g["sat_max"] * (t["chroma"] / max(m["chroma"], .01)) ** .8, .6, 1.3))   # past 1.3 shadows go red
             g["sat_min"] = g["sat_max"] = round(sat, 3)
     for n, (e, g, m, it) in best.items():
         r.c.shots[n - 1].grade = g
@@ -179,10 +179,12 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("cutlist", type=Path)
     ap.add_argument("--project", required=True)
-    ap.add_argument("--aspect", default="4:3", choices=["8:7", "16:9", "9:16", "4:3"])
+    ap.add_argument("--aspect", default="4:3", choices=["8:7", "16:9", "9:16", "4:3", "uhd"])
     ap.add_argument("--shots", type=int, nargs="*", help="shot numbers (default: all; empty with --unify: none)")
     ap.add_argument("--iters", type=int, default=7)
     ap.add_argument("--unify", type=float, metavar="STRENGTH", help="then add the unifying layer at this strength (0-1)")
+    ap.add_argument("--keep-unify", action="store_true", help="fix single shots under the reel's existing unifying node")
+    ap.add_argument("--no-loop", action="store_true", help="just load the listed shots' grades from the cut list, no iterations")
     ap.add_argument("--wait", type=float, default=6.0, help="seconds for Resolve to finish a frame before each still")
     ap.add_argument("--config", type=Path)
     a = ap.parse_args()
@@ -191,9 +193,11 @@ def main() -> int:
     try:
         shots = a.shots if a.shots is not None else list(range(1, len(r.c.shots) + 1))
         if shots:
-            for s in (r.c.shots[n - 1] for n in shots):
-                s.grade["unify"] = False
-            converge(r, shots, a.iters)
+            if not a.keep_unify:
+                for s in (r.c.shots[n - 1] for n in shots):
+                    s.grade["unify"] = False
+            if not a.no_loop:
+                converge(r, shots, a.iters)
             r.load(shots, f"settled{int(time.time()) % 100000}")
         if a.unify is not None:
             unify(r, a.unify)

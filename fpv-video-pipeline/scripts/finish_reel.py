@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from fpvpipe import config, cutlist as cl, deliver, resolve as rlib, titles as tt  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
-SIZE = {"4:3": (1440, 1080), "9:16": (1080, 1920)}
+SIZE = {"4:3": (1440, 1080), "9:16": (1080, 1920), "uhd": (3840, 2160)}
 
 
 def run(*args):
@@ -35,7 +35,7 @@ def phone_copy(master: Path, out: Path, limit_mib: float = 29.0) -> float:
         dur = float(r.stdout.strip())
     kbps = int(limit_mib * 8 * 1024 / dur) - 200
     kbps = min(kbps, 8000)
-    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(master), "-c:v", "libx264", "-preset", "slow", "-b:v", f"{kbps}k",
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(master), "-vf", "scale=1280:-2", "-c:v", "libx264", "-preset", "slow", "-b:v", f"{kbps}k",
                     "-maxrate", f"{int(kbps * 1.3)}k", "-bufsize", f"{kbps * 2}k", "-pix_fmt", "yuv420p", "-colorspace", "bt709",
                     "-color_primaries", "bt709", "-color_trc", "bt709", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart",
                     str(out)], check=True)
@@ -50,6 +50,7 @@ def main() -> int:
     ap.add_argument("--unify", type=float, default=0.35)
     ap.add_argument("--iters", type=int, default=5)
     ap.add_argument("--masters", type=Path)
+    ap.add_argument("--render-only", action="store_true", help="Resolve is on the project already: only render, check and copy")
     ap.add_argument("--config", type=Path)
     a = ap.parse_args()
     cfg, c = config.load(a.config), cl.CutList.load(a.cutlist)
@@ -60,15 +61,18 @@ def main() -> int:
     if flat:                                                  # the builder imports this PNG; no preview render needed
         tt.render_png(flat[0], w, h, cache / f"{c.name}_title_0.png")
 
-    run(HERE / "build_reel_project.py", a.cutlist, "--name", a.project, "--aspect", a.aspect)
-    run(HERE / "converge_grade.py", a.cutlist, "--project", a.project, "--aspect", a.aspect, "--iters", a.iters, "--unify", a.unify)
-    if any(t.get("behind") for t in c.titles):
-        run(HERE / "title_behind_resolve.py", a.cutlist, "--project", a.project, "--width", w, "--height", h)
+    if not a.render_only:
+        run(HERE / "build_reel_project.py", a.cutlist, "--name", a.project, "--aspect", a.aspect)
+        run(HERE / "converge_grade.py", a.cutlist, "--project", a.project, "--aspect", a.aspect, "--iters", a.iters, "--unify", a.unify)
+        if any(t.get("behind") for t in c.titles):
+            run(HERE / "title_behind_resolve.py", a.cutlist, "--project", a.project, "--width", w, "--height", h)
 
     resolve = rlib.connect()
     p = resolve.GetProjectManager().GetCurrentProject()
     tl = p.GetCurrentTimeline()
     spec = {**cfg["reel"], "width": w, "height": h}
+    if a.aspect == "uhd":            # YouTube: H.265, its own rate, no reel length limit
+        spec = {**spec, **cfg["youtube"], "bitrate_kbps": 45000, "max_seconds": 900, "fps": c.fps}
     out = deliver.render(p, tl, spec, cfg["paths"]["exports"] / a.project, c.name, log=lambda *x, **k: None)
     lufs, gain = deliver.set_loudness(out)
     print(f"loudness {lufs:.1f} LUFS, gain {gain:+.1f} dB", flush=True)

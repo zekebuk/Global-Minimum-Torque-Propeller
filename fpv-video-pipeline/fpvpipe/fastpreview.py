@@ -254,9 +254,10 @@ def build(c: cl.CutList, cfg: dict, out: Path, look: str = "reel", vertical: boo
     if reframed and hires:
         w, h = 1080, 1920
         pic_h = h
-    full43 = not vertical and aspect == "4:3"
+    full43 = not vertical and (aspect == "4:3" or (aspect == "16:9" and hires))   # whole frames, framed per shot
+    ratio = "3/4" if aspect == "4:3" else "9/16"
     if full43:
-        w, h = (1440, 1080) if hires else (960, 720)
+        w, h = ((1440, 1080) if hires else (960, 720)) if aspect == "4:3" else (1920, 1080)
         pic_h = h
     post = []
     if look in ("cinema", "fivenode", "cst5"):   # soft vignette + fine animated grain on the picture (before the bars)
@@ -282,7 +283,7 @@ def build(c: cl.CutList, cfg: dict, out: Path, look: str = "reel", vertical: boo
             yp = float((s.frame or {}).get("y", 0.5))     # where the window sits vertically (0 = top)
             xp = float((s.frame or {}).get("x", 0.5))     # window centre as a fraction of the source width
             flip43 = "hflip,vflip," if int((s.frame or {}).get("rot", 0)) % 360 == 180 else ""
-            shot_geom = f"{flip43}crop=iw/{z:.4f}:iw/{z:.4f}*3/4:clip({xp:.4f}*iw-ow/2\\,0\\,iw-ow):(ih-oh)*{yp:.3f},scale={w}:{h}:flags=lanczos,setsar=1"
+            shot_geom = f"{flip43}crop=iw/{z:.4f}:iw/{z:.4f}*{ratio}:clip({xp:.4f}*iw-ow/2\\,0\\,iw-ow):(ih-oh)*{yp:.3f},scale={w}:{h}:flags=lanczos,setsar=1"
         prof = prof_cache[src.as_posix()]
         if look == "cst5" and prof == "GP-Log2" and not s.grade.get("cst_lut"):
             notes.append(f"shot {n}: GP-Log2 needs grade.cst_lut (the GP-Log2 -> Rec.709 .cube) for cst5, shown ungraded")
