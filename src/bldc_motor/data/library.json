@@ -1,0 +1,176 @@
+{
+  "_about": "ILLUSTRATIVE component library. Values are generic, order-of-magnitude placeholders representative of common FPV size classes. They are NOT manufacturer data and NOT measurements. Replace them with fitted values from your own bench tests (bldc-motor fit) before drawing engineering conclusions.",
+  "motors": {
+    "generic_1404_3800kv": {
+      "kv_rpm_per_v": 3800,
+      "r_ll_ohm": 0.21,
+      "i0_a": 0.45,
+      "i0_a_per_krpm": 0.006,
+      "pole_pairs": 6,
+      "mass_g": 9.0,
+      "max_current_a": 18,
+      "thermal": {
+        "c_winding_j_per_k": 1.2,
+        "c_stator_j_per_k": 4.0,
+        "g_winding_stator_w_per_k": 1.2,
+        "g_stator_ambient_static_w_per_k": 0.02,
+        "g_stator_ambient_ref_w_per_k": 0.9,
+        "omega_ref_rad_s": 4000.0,
+        "convection_exponent": 0.8
+      },
+      "source": "illustrative",
+      "notes": "3-inch / 4S size class placeholder"
+    },
+    "generic_2207_1950kv": {
+      "kv_rpm_per_v": 1950,
+      "r_ll_ohm": 0.065,
+      "i0_a": 0.9,
+      "i0_a_per_krpm": 0.03,
+      "pole_pairs": 7,
+      "mass_g": 32.0,
+      "max_current_a": 50,
+      "thermal": {
+        "c_winding_j_per_k": 4.0,
+        "c_stator_j_per_k": 20.0,
+        "g_winding_stator_w_per_k": 3.5,
+        "g_stator_ambient_static_w_per_k": 0.05,
+        "g_stator_ambient_ref_w_per_k": 2.5,
+        "omega_ref_rad_s": 3000.0,
+        "convection_exponent": 0.8
+      },
+      "source": "illustrative",
+      "notes": "5-inch / 6S size class placeholder"
+    },
+    "generic_2207_2550kv": {
+      "kv_rpm_per_v": 2550,
+      "r_ll_ohm": 0.04,
+      "i0_a": 1.1,
+      "i0_a_per_krpm": 0.035,
+      "pole_pairs": 7,
+      "mass_g": 32.0,
+      "max_current_a": 55,
+      "thermal": {
+        "c_winding_j_per_k": 4.0,
+        "c_stator_j_per_k": 20.0,
+        "g_winding_stator_w_per_k": 3.5,
+        "g_stator_ambient_static_w_per_k": 0.05,
+        "g_stator_ambient_ref_w_per_k": 2.5,
+        "omega_ref_rad_s": 3000.0,
+        "convection_exponent": 0.8
+      },
+      "source": "illustrative",
+      "notes": "5-inch / 4S size class placeholder (same stator as the 1950kv, fewer turns)"
+    },
+    "generic_2808_1300kv": {
+      "kv_rpm_per_v": 1300,
+      "r_ll_ohm": 0.07,
+      "i0_a": 0.8,
+      "i0_a_per_krpm": 0.025,
+      "pole_pairs": 7,
+      "mass_g": 46.0,
+      "max_current_a": 45,
+      "thermal": {
+        "c_winding_j_per_k": 6.0,
+        "c_stator_j_per_k": 28.0,
+        "g_winding_stator_w_per_k": 4.0,
+        "g_stator_ambient_static_w_per_k": 0.07,
+        "g_stator_ambient_ref_w_per_k": 3.0,
+        "omega_ref_rad_s": 2000.0,
+        "convection_exponent": 0.8
+      },
+      "source": "illustrative",
+      "notes": "7-inch long-range / 6S size class placeholder"
+    }
+  },
+  "propellers": {
+    "generic_3x3_tri": {
+      "diameter_in": 3.0,
+      "pitch_in": 3.0,
+      "blade_count": 3,
+      "ct_coeffs": [
+        0.15
+      ],
+      "cp_coeffs": [
+        0.105
+      ],
+      "mass_g": 2.0,
+      "source": "illustrative"
+    },
+    "generic_5.1x4.6_tri": {
+      "diameter_in": 5.1,
+      "pitch_in": 4.6,
+      "blade_count": 3,
+      "ct_coeffs": [
+        0.155,
+        0.0,
+        -0.18
+      ],
+      "cp_coeffs": [
+        0.105,
+        0.02,
+        -0.13
+      ],
+      "mass_g": 4.3,
+      "source": "illustrative"
+    },
+    "generic_7x3.5_bi": {
+      "diameter_in": 7.0,
+      "pitch_in": 3.5,
+      "blade_count": 2,
+      "ct_coeffs": [
+        0.105
+      ],
+      "cp_coeffs": [
+        0.05
+      ],
+      "mass_g": 6.5,
+      "source": "illustrative"
+    }
+  },
+  "batteries": {
+    "lipo_4s_650": {
+      "cells_series": 4,
+      "capacity_mah": 650,
+      "r_cell_ohm": 0.008,
+      "mass_g": 78,
+      "source": "illustrative"
+    },
+    "lipo_4s_1500": {
+      "cells_series": 4,
+      "capacity_mah": 1500,
+      "r_cell_ohm": 0.0035,
+      "mass_g": 175,
+      "source": "illustrative"
+    },
+    "lipo_6s_1300": {
+      "cells_series": 6,
+      "capacity_mah": 1300,
+      "r_cell_ohm": 0.0035,
+      "mass_g": 210,
+      "source": "illustrative"
+    },
+    "lipo_6s_2200": {
+      "cells_series": 6,
+      "capacity_mah": 2200,
+      "r_cell_ohm": 0.003,
+      "mass_g": 340,
+      "source": "illustrative"
+    }
+  },
+  "escs": {
+    "generic_esc": {
+      "r_series_ohm": 0.008,
+      "i_quiescent_a": 0.05,
+      "max_duty": 1.0,
+      "r_leads_ohm": 0.004,
+      "source": "illustrative"
+    },
+    "generic_esc_small": {
+      "r_series_ohm": 0.015,
+      "i_quiescent_a": 0.03,
+      "max_duty": 1.0,
+      "r_leads_ohm": 0.006,
+      "source": "illustrative"
+    }
+  }
+}

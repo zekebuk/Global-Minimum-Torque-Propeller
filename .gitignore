@@ -51,3 +51,9 @@ external/**/bin/
 external/**/obj/
 
 # Keep small locked CSV/JSON data and thesis-ready output manifests tracked.
+
+# Packaging metadata from editable installs
+*.egg-info/
+
+# Regenerable BLDC motor toolkit outputs (bldc-motor CLI, run_motor_development_demo.py)
+outputs/motor/

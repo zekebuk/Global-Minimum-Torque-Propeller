@@ -12,6 +12,7 @@ The repository is a research workflow, not a general propeller design package. T
 | `scripts/helpers/` | Helper functions used by the final workflow scripts. |
 | `scripts/gui/` | Interactive launchers for the Streamlit aero UI and MATLAB FEA viewer. |
 | `src/prandtl_prop/` | Retained importable package and tested source modules from the cleaned thesis workflow. |
+| `src/bldc_motor/` | BLDC motor development toolkit for FPV multirotors (separate from the thesis workflow; see `docs/motor_development.md`). |
 | `data/geometry/` | Locked MIL/GMT station-based geometry CSVs used by the workflow. |
 | `data/processed/` | Locked BEMT station data and summary files. |
 | `outputs/geometry_exports/` | Regenerated geometry exports. |
@@ -19,7 +20,7 @@ The repository is a research workflow, not a general propeller design package. T
 | `outputs/reports/` | Regenerated workflow reports. |
 | `outputs/figures/` | Regenerated thesis-ready figures. |
 | `docs/` | Workflow notes, appendix-ready code summary, audit notes, and figure inventory. |
-| `tests/` | Pytest checks for locked constants, geometry sanity, and modeled results. |
+| `tests/` | Pytest checks for locked constants, geometry sanity, modeled results, and the BLDC motor toolkit (`test_bldc_*.py`). |
 | `archive/` | Legacy scripts, exploratory notebooks, and old generated outputs preserved for history only. |
 
 The final workflow is intentionally separated from historical development material. Archived files are not part of the thesis-grade reproducible workflow and are not cited as final methodology.
@@ -77,6 +78,25 @@ python scripts/gui/start_matlab_fea_ui.py
 ```
 
 The MATLAB launcher opens the native propeller beam viewer by default. Use `--viewer me504` to request the ME504 plotting app adapter.
+
+## BLDC Motor Development Toolkit (FPV)
+
+`src/bldc_motor/` provides motor development infrastructure for brushless FPV multirotor motors. It is independent of the locked thesis result and does not modify it.
+
+- **Models:** a DC-equivalent motor model (Kv, line-to-line R, speed-dependent I0, copper and magnet temperature coefficients), a CT/CP propeller model, and a battery → ESC → motor → prop operating-point solver that includes pack sag.
+- **Thermal:** a two-node electro-thermal model with speed-dependent convection, covering steady state and transient throttle profiles.
+- **Bench data:** thrust-stand CSV import with unit-aware headers, steady-state plateau extraction, and derived metrics (g/W, efficiency, CT, CP, FM).
+- **Identification:** Kv, I0(ω), R, prop coefficients and thermal parameters, with guards against the bus-side scale degeneracy (R must be measured, or full-throttle/no-load points supplied).
+- **Matching:** motor/prop/battery sweeps at hover and punch-out, with current, temperature and sag flags.
+
+```bash
+python -m pip install -e .
+bldc-motor list
+bldc-motor match --dry-mass-g 250 --batteries lipo_6s_1300 lipo_4s_1500
+python scripts/run_motor_development_demo.py   # synthetic end-to-end pipeline -> outputs/motor/demo/
+```
+
+The bundled component library is **illustrative**: generic size-class placeholders, not manufacturer or measured data. Model equations, assumptions, the bench-test protocol and the CSV schema are in `docs/motor_development.md`.
 
 ## Locked Modeled Result
 

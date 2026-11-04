@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "prandtl-propeller"
 version = "0.1.0"
-description = "Thesis research code for MIL and GMT-inspired multirotor propeller comparison."
+description = "Thesis research code for MIL and GMT-inspired multirotor propeller comparison, plus a BLDC motor development toolkit for FPV multirotors."
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "Zeke Bukovansky" }]
@@ -17,11 +17,17 @@ dependencies = [
     "matplotlib",
 ]
 
+[project.scripts]
+bldc-motor = "bldc_motor.cli:main"
+
 [project.optional-dependencies]
 dev = ["pytest", "black", "ruff"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+bldc_motor = ["data/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -47,3 +47,12 @@ These launchers start the archived Streamlit aero-solver UI and MATLAB propeller
 - MATLAB: required for the legacy 3D beam/frame structural workflow and interactive FEA viewer.
 - Abaqus: required for native `.cae`, `.odb`, and related structural solver files.
 - OpenVSP and PSU-WOPWOP: exploratory aeroacoustic tooling is present but is not a locked validation basis.
+
+## BLDC Motor Development Toolkit
+
+The `bldc_motor` package and `bldc-motor` CLI are a separate FPV motor-development workflow. They are not part of the locked thesis result. See `docs/motor_development.md`.
+
+```bash
+python scripts/run_motor_development_demo.py
+pytest tests/test_bldc_*.py
+```
