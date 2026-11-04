@@ -243,6 +243,8 @@ def frame_items_43(c: cl.CutList, items, clips: dict, log: list[str]):
         ok = it.SetProperty("ZoomX", z) and it.SetProperty("ZoomY", z)
         ok = ok and it.SetProperty("Pan", (0.5 - float(f.get("x", 0.5))) * fit_w)
         ok = ok and it.SetProperty("Tilt", (float(f.get("y", 0.5)) - 0.5) * (fit_h - 1080))
+        if int(f.get("rot", 0)) % 360 == 180:                   # camera mounted upside down
+            ok = ok and it.SetProperty("RotationAngle", 180.0)
         if not ok:
             log.append(f"Zoom/Pan/Tilt refused on {s.note}")
 
@@ -400,13 +402,13 @@ def main() -> int:
     music = find_or_import(mp, bins["02_Music"], c.music) if c.music else None
     title, title_seq = None, False
     if c.titles:
-        seq_ptr = cache / "title_0_seq.txt"
+        seq_ptr = cache / f"{c.name}_title_0_seq.txt"
         if (c.titles[0].get("track") or c.titles[0].get("behind")) and seq_ptr.exists():        # tracked title: the preview's PNG sequence
             title, title_seq = import_sequence(mp, bins["03_Graphics"], Path(seq_ptr.read_text().strip()), c), True
             if title is None:
                 log.append("tracked title sequence could not be imported (run review.py fast first)")
-        elif (cache / "title_0.png").exists():
-            title = find_or_import(mp, bins["03_Graphics"], str(cache / "title_0.png"))
+        elif (cache / f"{c.name}_title_0.png").exists():
+            title = find_or_import(mp, bins["03_Graphics"], str(cache / f"{c.name}_title_0.png"))
     mp.SetCurrentFolder(root)
     bad = [s for s, m in clips.items() if m is None]
     if bad:
@@ -485,12 +487,18 @@ def finish(p, tl, c: cl.CutList, cfg: dict, args, rel: list, stabilized: int, lo
               f"to render the Instagram master and get the export checklist")
         return 0
     try:
-        out = deliver.render(p, tl, cfg["reel"], cfg["paths"]["exports"] / p.GetName(), tl.GetName(),
+        spec = dict(cfg["reel"])
+        if args.aspect == "4:3":
+            spec.update(width=1440, height=1080)
+        out = deliver.render(p, tl, spec, cfg["paths"]["exports"] / p.GetName(), tl.GetName(),
                              no_music=args.no_music, music_track=int(cfg["reel"].get("music_track", 2)))
+        if not args.no_music:
+            lufs, gain = deliver.set_loudness(out)
+            print(f"loudness {lufs:.1f} LUFS, gain {gain:+.1f} dB")
     except RuntimeError as e:
         print(f"render failed: {e}", file=sys.stderr)
         return 1
-    ok, text = deliver.verdict(out, cfg["reel"], no_music=args.no_music, graded=graded, shots=len(c.shots),
+    ok, text = deliver.verdict(out, spec, no_music=args.no_music, graded=graded, shots=len(c.shots),
                                manual=sum(s.manual for s in c.shots), stabilized=stabilized,
                                music=Path(c.music).stem if c.music else "")
     print(text)

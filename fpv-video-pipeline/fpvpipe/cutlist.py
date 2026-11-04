@@ -29,6 +29,7 @@ class Shot:
     speed: float = 1.0                           # playback speed: 1.25 = 25% faster (source span / speed on the timeline)
     gyroflow: dict = field(default_factory=dict)  # per-shot Gyroflow plugin overrides, e.g. {"smoothness": 35}
     manual: bool = False                          # graded by hand in Resolve: --regrade leaves this shot's nodes alone
+    target: dict = field(default_factory=dict)    # what scripts/converge_grade.py steers to: {"med", "p1", "chroma", "clip"}
     frame: dict = field(default_factory=dict)     # 9:16 reframe from the full sensor: {"x": 0.5, "x_end": 0.6, "zoom": 1.0}
                                                   # x = window centre as a fraction of source width (fastpreview.reframe)
     ramp: list = field(default_factory=list)      # speed ramp [[source_s, speed], ...] eased between points (fpvpipe/ramp.py);

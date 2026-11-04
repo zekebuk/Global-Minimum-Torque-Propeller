@@ -83,6 +83,22 @@ def render(project, tl, spec: dict, out_dir: Path, name: str, no_music: bool = F
     return out_dir / f"{name}.mp4"
 
 
+def set_loudness(path: Path, target_lufs: float = -14.0, peak_max: float = -1.0) -> tuple[float, float]:
+    """Linear gain on the audio to reach target_lufs (never past peak_max), 48 kHz AAC, picture stream-copied. In place.
+    A mastered song sits near -8 LUFS and clips the AAC encode; the platforms turn it down anyway. Returns (before, gain)."""
+    now = loudness(path)
+    if now is None:
+        return float("nan"), 0.0
+    lufs, peak = now
+    gain = min(target_lufs - lufs, peak_max - peak)
+    tmp = path.with_name(path.stem + "_lufs" + path.suffix)
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(path), "-map", "0:v", "-map", "0:a", "-c:v", "copy",
+                    "-af", f"volume={gain:.2f}dB,aresample=48000", "-c:a", "aac", "-b:a", "256k", "-ac", "2",
+                    "-movflags", "+faststart", str(tmp)], check=True)
+    tmp.replace(path)
+    return lufs, gain
+
+
 # ---------------------------------------------------------------------------------------------- reading the file back
 def probe(path: Path) -> dict:
     """What is actually in the file: picture, codec/profile, bitrate, colour tags, audio, length, size."""

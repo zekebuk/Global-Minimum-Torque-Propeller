@@ -556,7 +556,8 @@ def solve_scene(log_rgb: np.ndarray, over: dict | None = None) -> Grade5:
     y0 = disp_y(Primary())
     meter = y0 < np.percentile(y0, 90)
 
-    prim = LogPrimary(lift=np.zeros(3), gain=np.ones(3), power=1.0, offset=0.0)
+    # "log_gain" < 1 pulls the top of the log range down: highlight control the exposure offset cannot give
+    prim = LogPrimary(lift=np.zeros(3), gain=np.full(3, float(t.get("log_gain", 1.0))), power=1.0, offset=0.0)
     # exposure: one offset for all channels so the metered median lands on mid
     prim.offset = _bisect(lambda e: np.median(disp_y(replace(prim, offset=e))[meter]) < t["mid"], -0.4, 0.4)
     for _ in range(3):

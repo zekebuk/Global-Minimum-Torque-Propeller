@@ -213,7 +213,7 @@ def tracked_title(c: cl.CutList, t: dict, i: int, w: int, pic_h: int, fps: float
             frames = np.frombuffer(raw, np.uint8).reshape(-1, hh, hw, 3)
         render = tt.render_flythrough if t.get("fly") else tt.render_tracked
         pattern, n = render(t, w, pic_h, path, out_dir, fps, frames=frames)
-    (cache / f"title_{i}_seq.txt").write_text(str(out_dir))      # pointer for the Resolve builder
+    (cache / f"{c.name}_title_{i}_seq.txt").write_text(str(out_dir))      # pointer for the Resolve builder
     return str(out_dir / "f_%04d.png"), n, fps
 
 
@@ -223,14 +223,14 @@ def behind_title(c: cl.CutList, t: dict, i: int, w: int, pic_h: int, fps: float,
     from . import titles as tt
     starts = c.starts()
     k = max(j for j, st in enumerate(starts) if st <= t["start"] + 1e-6)
-    key = hashlib.sha1(f"{Path(segs[k]).name}|{sorted(map(str, t.items()))}|{w}x{pic_h}|behind3".encode()).hexdigest()[:12]
+    key = hashlib.sha1(f"{Path(segs[k]).name}|{sorted(map(str, t.items()))}|{w}x{pic_h}|behind4".encode()).hexdigest()[:12]
     out_dir = cache / f"title_{i}_seq_{key}"
     n = int(round(t["dur"] * fps))
     if not (out_dir / f"f_{n - 1:04d}.png").exists():
         raw = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{seg_head[k] + t['start'] - starts[k]:.3f}", "-i", str(segs[k]),
                               "-frames:v", str(n), "-vf", "format=rgb24", "-f", "rawvideo", "-"], capture_output=True).stdout
         tt.render_behind(t, np.frombuffer(raw, np.uint8).reshape(-1, pic_h, w, 3), out_dir, fps)
-    (cache / f"title_{i}_seq.txt").write_text(str(out_dir))      # pointer for the Resolve builder
+    (cache / f"{c.name}_title_{i}_seq.txt").write_text(str(out_dir))      # pointer for the Resolve builder
     return str(out_dir / "f_%04d.png"), n, fps
 
 
@@ -281,7 +281,8 @@ def build(c: cl.CutList, cfg: dict, out: Path, look: str = "reel", vertical: boo
             z = max(1.0, float((s.frame or {}).get("zoom", 1.0)))
             yp = float((s.frame or {}).get("y", 0.5))     # where the window sits vertically (0 = top)
             xp = float((s.frame or {}).get("x", 0.5))     # window centre as a fraction of the source width
-            shot_geom = f"crop=iw/{z:.4f}:iw/{z:.4f}*3/4:clip({xp:.4f}*iw-ow/2\\,0\\,iw-ow):(ih-oh)*{yp:.3f},scale={w}:{h}:flags=lanczos,setsar=1"
+            flip43 = "hflip,vflip," if int((s.frame or {}).get("rot", 0)) % 360 == 180 else ""
+            shot_geom = f"{flip43}crop=iw/{z:.4f}:iw/{z:.4f}*3/4:clip({xp:.4f}*iw-ow/2\\,0\\,iw-ow):(ih-oh)*{yp:.3f},scale={w}:{h}:flags=lanczos,setsar=1"
         prof = prof_cache[src.as_posix()]
         if look == "cst5" and prof == "GP-Log2" and not s.grade.get("cst_lut"):
             notes.append(f"shot {n}: GP-Log2 needs grade.cst_lut (the GP-Log2 -> Rec.709 .cube) for cst5, shown ungraded")
@@ -373,7 +374,7 @@ def build(c: cl.CutList, cfg: dict, out: Path, look: str = "reel", vertical: boo
             elif t.get("track"):                                # title rides the ground of the shot under it
                 pngs.append(tracked_title(c, t, i, w, pic_h, fps, cache, pic_crop, segs, seg_head, (h - pic_h) // 2 if letterbox else 0))
             else:
-                pngs.append(tt.render_png(t, w, pic_h, cache / f"title_{i}.png"))
+                pngs.append(tt.render_png(t, w, pic_h, cache / f"{c.name}_title_{i}.png"))
         t_in, t_fc, last = tt.overlay_args(c.titles, pngs, (h - pic_h) // 2 if letterbox else 0,
                                            (max(0.0, total - fade), fade) if fade else None, base=last, first_input=n_in)
         cmd += t_in

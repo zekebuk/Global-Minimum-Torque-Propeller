@@ -73,3 +73,20 @@ and 4 unclipped, as Resolve does in float, and land in node 5's shoulder.
 - **Resolve scripting:** `ExportLUT` works from the Color page with the clip selected; cumulative node exports
   (nodes 1..k enabled) measure what each node does. The API cannot add nodes, and `ApplyGradeFromDRX` hung the
   app, so the 5-node tree is built as one LUT per node (`write_node_cubes`) for Resolve to load.
+
+## Closed-loop grading in Resolve (Senja, 2026-11-04)
+
+`scripts/converge_grade.py` grades on what Resolve outputs, not on a model of it: solve the 5-node grade, load it, export
+stills from the Color page, read the scopes, adjust, repeat. Then a unifying node with anchors measured from the reel.
+
+- **Measure real output.** Gyroflow, sizing and every node are in the stills. A title on V2 is not: its track is off.
+- **Black has a cliff.** With a conversion cube's toe, p1 can jump 0.05 for a black change of 0.004, so a proportional step
+  flips between two states forever. Bracket the target and bisect.
+- **Exposure can't fix clipped highlights.** Chasing them with exposure crushed a shot to a median of 0.11. `log_gain` < 1
+  pulls down the top of the log range and leaves the median to the solver.
+- **Deep shadows need their own tool.** `shadow_lift` holds texture in a crack without lifting the shot.
+- **Anchors come from the reel.** The stock unify anchors are Moab's sandstone. Median p5 / mid / p95 / chroma and warm hue of
+  the reel itself, at strength 0.35, nearly halved the chroma spread without flattening any shot.
+- **A hand grade as the CST works.** The Mefjord grade baked to a cube, with exposure and saturation solved under it, carries
+  that look across lighting. It tints overcast skies magenta on this footage: trim `wb_g` on those shots.
+- **Targets are per shot.** A mirror lake at dusk should not have the median of a sunlit ridge.

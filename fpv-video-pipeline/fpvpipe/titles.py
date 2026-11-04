@@ -527,12 +527,22 @@ def summit_mask(frame: np.ndarray, band=(0.45, 0.70), xr=(0.36, 0.60)) -> np.nda
     y = a @ np.array([KR_, KG_, KB_])
     rock = (a[..., 0] > a[..., 2] + 0.02) | (y < 0.25)
     y0, y1, x0, x1 = int(h * band[0]), int(h * band[1]), int(w * xr[0]), int(w * xr[1])
-    # solid land: in each column everything below the first run of rock, so shaded faces never let letters through
-    hits = np.lib.stride_tricks.sliding_window_view(rock[y0:y1, x0:x1], 8, axis=0).all(axis=-1)
+    # solid land, grown upward from the bottom of the box: each column is rock until the first run of sky, so a dark
+    # cloud above the summit can never count as rock and shaded faces never let letters through
     box = np.zeros((h, w), bool)
-    for cx in np.flatnonzero(hits.any(axis=0)):
-        box[y0 + hits[:, cx].argmax():, x0 + cx] = True
-    m = Image.fromarray((box * 255).astype(np.uint8)).filter(ImageFilter.MedianFilter(5)).filter(ImageFilter.GaussianBlur(1.2))
+    for cx in range(x0, x1):
+        sky = 0
+        top = y1
+        for yy in range(y1 - 1, y0 - 1, -1):
+            if rock[yy, cx]:
+                sky, top = 0, yy
+            else:
+                sky += 1
+                if sky >= 8:
+                    break
+        box[top:y1, cx] = True
+    m = Image.fromarray((box * 255).astype(np.uint8)).filter(ImageFilter.MaxFilter(11)).filter(ImageFilter.MinFilter(11))  # closes thin gaps
+    m = m.filter(ImageFilter.MedianFilter(5)).filter(ImageFilter.GaussianBlur(1.2))
     return np.asarray(m, float) / 255
 
 
