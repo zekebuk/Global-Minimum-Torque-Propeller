@@ -278,7 +278,7 @@ def main() -> int:
     q.add_argument("--transitions", choices=["auto", "cut", "keep"], default="keep",
                    help="auto: choose each cut's transition from the music (hard beat = hard cut) and the motion "
                         "(flash / directional flow / dissolve), saved into the cut list; cut: remove them all")
-    q.add_argument("--aspect", default="16:9", choices=["16:9", "8:7"], help="letterboxed picture aspect (8:7 = full GoPro sensor frame)")
+    q.add_argument("--aspect", default="16:9", choices=["16:9", "8:7", "4:3"], help="letterboxed picture aspect (8:7 = full GoPro sensor frame); 4:3 with --horizontal = the whole sensor frame, no bars")
     for s in (f, e, b, p, q):
         s.add_argument("--config", type=Path)
     args = ap.parse_args()

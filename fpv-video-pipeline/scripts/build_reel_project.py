@@ -93,6 +93,8 @@ def shot_crop(s: cl.Shot, aspect: str) -> str | None:
     """The framing the shot's grade was solved on (must match fastpreview.build for the same aspect)."""
     if aspect == "9:16":
         return fastpreview.reframe(s, animate=False)
+    if aspect == "4:3":
+        return "crop=iw:iw*3/4"
     return None if aspect == "8:7" else "crop=iw:iw*9/16"
 
 
@@ -223,6 +225,28 @@ def stabilize(c: cl.CutList, tl, cfg: dict, off: bool, log: list[str]) -> dict[s
     return stab
 
 
+def frame_items_43(c: cl.CutList, items, clips: dict, log: list[str]):
+    """4:3 timeline, sources set to fill 1440x1080: a shot's frame {"zoom", "x", "y"} as Inspector Zoom / Pan / Tilt,
+    the same window as fastpreview's 4:3 crop. An 8:7 source fills the width and overhangs top and bottom."""
+    for s, it in zip(c.shots, items):
+        f = s.frame or {}
+        if not f:
+            continue
+        res = clips[s.src].GetClipProperty("Resolution") or ""
+        try:
+            sw, sh = (int(v) for v in res.lower().split("x"))
+        except ValueError:
+            log.append(f"no resolution for {s.note}: framing skipped")
+            continue
+        z = max(1.0, float(f.get("zoom", 1.0)))
+        fit_w, fit_h = 1440 * z, sh * 1440 / sw * z            # the picture on the timeline, in pixels
+        ok = it.SetProperty("ZoomX", z) and it.SetProperty("ZoomY", z)
+        ok = ok and it.SetProperty("Pan", (0.5 - float(f.get("x", 0.5))) * fit_w)
+        ok = ok and it.SetProperty("Tilt", (float(f.get("y", 0.5)) - 0.5) * (fit_h - 1080))
+        if not ok:
+            log.append(f"Zoom/Pan/Tilt refused on {s.note}")
+
+
 def reframe_items(c: cl.CutList, items, clips: dict, log: list[str]):
     """9:16 timeline, sources set to fill: each shot's frame (fastpreview.reframe) as Inspector Pan / Zoom.
     Pan is in timeline pixels; a source W x H fills 1920 high, so it is W * 1920 / H wide before the zoom.
@@ -315,8 +339,8 @@ def main() -> int:
     ap.add_argument("--name", default="REEL")
     ap.add_argument("--template", type=Path, default=DEFAULT_TEMPLATE, help=".drx with 5+ empty serial nodes (one cube per node)")
     ap.add_argument("--regrade", metavar="TIMELINE", help="skip the build; (re)load the grades onto this existing timeline")
-    ap.add_argument("--aspect", default="8:7", choices=["8:7", "16:9", "9:16"],
-                    help="picture aspect the grades were solved on; 9:16 = reframed from the full sensor (Shot.frame)")
+    ap.add_argument("--aspect", default="8:7", choices=["8:7", "16:9", "9:16", "4:3"],
+                    help="picture aspect the grades were solved on; 9:16 = reframed from the full sensor (Shot.frame); 4:3 = 1440x1080, the whole sensor")
     ap.add_argument("--no-gyroflow", action="store_true", help="don't add the Gyroflow plugin, whatever config.toml says")
     ap.add_argument("--lut-primaries", action="store_true", help="node 1 as a LUT instead of Resolve's own primaries (CDL)")
     ap.add_argument("--lut-nodes", action="store_true", help="nodes 2/3/5 as .cube LUTs instead of DCTLs with sliders")
@@ -361,9 +385,9 @@ def main() -> int:
               f"Gyroflow updated on {len(stab.get('updated', [])) + len(stab.get('added', []))}; "
               f"speed ramps: {', '.join(f'{k} {v}' for k, v in ramps.items() if k != 'none') or 'none'}")
         return finish(p, tl, c, cfg, args, rel, len(stab.get("updated", [])) + len(stab.get("added", [])), log)
-    for k, v in {"timelineResolutionWidth": "1080", "timelineResolutionHeight": "1920", "timelineFrameRate": str(c.fps),
+    for k, v in {"timelineResolutionWidth": "1440" if args.aspect == "4:3" else "1080", "timelineResolutionHeight": "1080" if args.aspect == "4:3" else "1920", "timelineFrameRate": str(c.fps),
                  "colorScienceMode": "davinciYRGB",
-                 "timelineInputResMismatchBehavior": "scaleToCrop" if args.aspect == "9:16" else "scaleToFit"}.items():
+                 "timelineInputResMismatchBehavior": "scaleToCrop" if args.aspect in ("9:16", "4:3") else "scaleToFit"}.items():
         if not p.SetSetting(k, v):
             log.append(f"could not set {k}={v}")
     p.RefreshLUTList()
@@ -377,7 +401,7 @@ def main() -> int:
     title, title_seq = None, False
     if c.titles:
         seq_ptr = cache / "title_0_seq.txt"
-        if c.titles[0].get("track") and seq_ptr.exists():        # tracked title: the preview's PNG sequence
+        if (c.titles[0].get("track") or c.titles[0].get("behind")) and seq_ptr.exists():        # tracked title: the preview's PNG sequence
             title, title_seq = import_sequence(mp, bins["03_Graphics"], Path(seq_ptr.read_text().strip()), c), True
             if title is None:
                 log.append("tracked title sequence could not be imported (run review.py fast first)")
@@ -434,6 +458,8 @@ def main() -> int:
     stab = stabilize(c, tl, cfg, args.no_gyroflow, log)
     if args.aspect == "9:16":
         reframe_items(c, v1, clips, log)
+    elif args.aspect == "4:3":
+        frame_items_43(c, v1, clips, log)
     ramps = retime.apply_timeline(resolve, c, v1, log)
     for name in fusioncomp.persist_track(tl):               # API-made comps are lost on reload unless re-imported
         log.append(f"Fusion comp on {name} could not be saved into the project")

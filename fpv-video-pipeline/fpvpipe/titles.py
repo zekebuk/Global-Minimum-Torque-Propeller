@@ -494,3 +494,62 @@ def render_flythrough(t: dict, w: int, h: int, path: np.ndarray, out_dir: Path, 
         out = np.dstack([np.clip(rgb_s, 0, 255), np.clip(a, 0, 1) * 255]).astype(np.uint8)
         Image.fromarray(out, "RGBA").save(out_dir / f"f_{k:04d}.png", compress_level=1)
     return str(out_dir / "f_%04d.png"), n
+
+
+# ---------------------------------------------------------------- a flat word with one summit in front of it
+def word_mask(t: dict, w: int, h: int) -> np.ndarray:
+    """The word as a 0..1 mask, supersampled. "width" = fraction of the picture width, "baseline" = fraction of its
+    height; an O in "slash": [letter indices] gets a long thin stroke through it, the way a poster sets the Nordic O."""
+    S, text = 3, t["text"].upper()
+    path = FONTS.get(t.get("font"), t.get("font"))
+    size = 200
+    for _ in range(6):
+        size = max(8, int(size * w * t.get("width", 0.7) * S / sum(ImageFont.truetype(path, size).getlength(c) for c in text)))
+    font = ImageFont.truetype(path, size)
+    im = Image.new("L", (w * S, h * S), 0)
+    d = ImageDraw.Draw(im)
+    x, base = (w * S - sum(font.getlength(c) for c in text)) / 2, h * S * t.get("baseline", 0.6)
+    cap = font.getbbox("N")[3] - font.getbbox("N")[1]
+    for i, c in enumerate(text):
+        adv = font.getlength(c)
+        d.text((x, base), c, font=font, fill=255, anchor="ls")
+        if i in t.get("slash", []):
+            cx, cy = x + adv / 2, base - cap / 2
+            d.line([(cx - adv * .42, cy + cap * .72), (cx + adv * .42, cy - cap * .72)], fill=255, width=max(2, int(size * .008)))
+        x += adv
+    return np.asarray(im.resize((w, h), Image.LANCZOS), float) / 255
+
+
+def summit_mask(frame: np.ndarray, band=(0.45, 0.70), xr=(0.36, 0.60)) -> np.ndarray:
+    """Warm or dark rock against a cool sky, only inside the box around the summit, feathered. 0..1 at frame size."""
+    h, w = frame.shape[:2]
+    a = frame.astype(float) / 255
+    y = a @ np.array([KR_, KG_, KB_])
+    rock = (a[..., 0] > a[..., 2] + 0.02) | (y < 0.25)
+    y0, y1, x0, x1 = int(h * band[0]), int(h * band[1]), int(w * xr[0]), int(w * xr[1])
+    # solid land: in each column everything below the first run of rock, so shaded faces never let letters through
+    hits = np.lib.stride_tricks.sliding_window_view(rock[y0:y1, x0:x1], 8, axis=0).all(axis=-1)
+    box = np.zeros((h, w), bool)
+    for cx in np.flatnonzero(hits.any(axis=0)):
+        box[y0 + hits[:, cx].argmax():, x0 + cx] = True
+    m = Image.fromarray((box * 255).astype(np.uint8)).filter(ImageFilter.MedianFilter(5)).filter(ImageFilter.GaussianBlur(1.2))
+    return np.asarray(m, float) / 255
+
+
+KR_, KG_, KB_ = 0.2126, 0.7152, 0.0722
+
+
+def render_behind(t: dict, frames: np.ndarray, out_dir: Path, fps: float) -> tuple[str, int]:
+    """The flat word as a PNG sequence with the summit cut out frame by frame and the fades baked in. frames = the
+    graded shot under the title, at picture size. Same sequence for the preview and Resolve's V2 track."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    n, h, w = len(frames), *frames.shape[1:3]
+    word = word_mask(t, w, h)
+    rgb = np.array(t.get("color_rgb", (247, 245, 237)), np.uint8)
+    fade = t.get("fade", 0.6)
+    for k in range(n):
+        a = min(1.0, k / fps / fade, (n - 1 - k) / fps / fade) * t.get("opacity", 0.93)
+        alpha = word * (1 - summit_mask(frames[k], t.get("band", (0.45, 0.70)), t.get("xr", (0.36, 0.60)))) * max(0.0, a)
+        im = np.dstack([np.broadcast_to(rgb, (h, w, 3)), (alpha * 255).astype(np.uint8)])
+        Image.fromarray(im, "RGBA").save(out_dir / f"f_{k:04d}.png", compress_level=1)
+    return str(out_dir / "f_%04d.png"), n

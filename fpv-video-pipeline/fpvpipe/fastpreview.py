@@ -42,6 +42,8 @@ def _frame_geometry(vertical: bool, letterbox: bool = False, aspect: str = "16:9
     if letterbox:  # the full picture centred on a 1080x1920 canvas; the pad is applied after grain/vignette
         ph = PIC_H[aspect]
         return 1080, 1920, f"scale=1080:{ph}:force_original_aspect_ratio=increase,crop=1080:{ph}"
+    if not vertical and aspect == "4:3":   # the whole sensor; 8:7 sources lose a little top and bottom
+        return 960, 720, "scale=960:720:force_original_aspect_ratio=increase,crop=960:720"
     if vertical:   # 9:16, centre crop (FPV sources are 4:3 / 8:7 / 16:9)
         return 540, 960, "scale=540:960:force_original_aspect_ratio=increase,crop=540:960"
     return 960, 540, "scale=960:540:force_original_aspect_ratio=increase,crop=960:540"
@@ -215,6 +217,23 @@ def tracked_title(c: cl.CutList, t: dict, i: int, w: int, pic_h: int, fps: float
     return str(out_dir / "f_%04d.png"), n, fps
 
 
+def behind_title(c: cl.CutList, t: dict, i: int, w: int, pic_h: int, fps: float, cache: Path, segs: list,
+                 seg_head: list) -> tuple[str, int, float]:
+    """The word behind the summit (titles.render_behind), keyed on the graded segment. Cached by segment + settings."""
+    from . import titles as tt
+    starts = c.starts()
+    k = max(j for j, st in enumerate(starts) if st <= t["start"] + 1e-6)
+    key = hashlib.sha1(f"{Path(segs[k]).name}|{sorted(map(str, t.items()))}|{w}x{pic_h}|behind3".encode()).hexdigest()[:12]
+    out_dir = cache / f"title_{i}_seq_{key}"
+    n = int(round(t["dur"] * fps))
+    if not (out_dir / f"f_{n - 1:04d}.png").exists():
+        raw = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{seg_head[k] + t['start'] - starts[k]:.3f}", "-i", str(segs[k]),
+                              "-frames:v", str(n), "-vf", "format=rgb24", "-f", "rawvideo", "-"], capture_output=True).stdout
+        tt.render_behind(t, np.frombuffer(raw, np.uint8).reshape(-1, pic_h, w, 3), out_dir, fps)
+    (cache / f"title_{i}_seq.txt").write_text(str(out_dir))      # pointer for the Resolve builder
+    return str(out_dir / "f_%04d.png"), n, fps
+
+
 def build(c: cl.CutList, cfg: dict, out: Path, look: str = "reel", vertical: bool = True,
           profile_of=None, cache_dir: Path | None = None, letterbox: bool = False,
           aspect: str = "16:9", hires: bool = False) -> PreviewResult:
@@ -228,12 +247,16 @@ def build(c: cl.CutList, cfg: dict, out: Path, look: str = "reel", vertical: boo
     pic_h = PIC_H[aspect] if letterbox else h
     # the framing the grade is solved on = the framing delivered (the letterboxed picture, or the 9:16 centre crop)
     if letterbox or not vertical:
-        pic_crop = "crop=iw:iw*9/16" if aspect == "16:9" else None     # 8:7 = the whole sensor frame
+        pic_crop = {"16:9": "crop=iw:iw*9/16", "4:3": "crop=iw:iw*3/4"}.get(aspect)     # 8:7 = the whole sensor frame
     else:
         pic_crop = None                     # vertical: each shot's own 9:16 window on the sensor (reframe)
     reframed = vertical and not letterbox
     if reframed and hires:
         w, h = 1080, 1920
+        pic_h = h
+    full43 = not vertical and aspect == "4:3"
+    if full43:
+        w, h = (1440, 1080) if hires else (960, 720)
         pic_h = h
     post = []
     if look in ("cinema", "fivenode", "cst5"):   # soft vignette + fine animated grain on the picture (before the bars)
@@ -254,6 +277,11 @@ def build(c: cl.CutList, cfg: dict, out: Path, look: str = "reel", vertical: boo
         shot_post = []
         shot_crop = reframe(s, animate=False) if reframed else pic_crop
         shot_geom = f"{reframe(s)},scale={w}:{h}:flags=lanczos" if reframed else geom
+        if full43:                               # "zoom" trims the lens edges off the 4:3 frame
+            z = max(1.0, float((s.frame or {}).get("zoom", 1.0)))
+            yp = float((s.frame or {}).get("y", 0.5))     # where the window sits vertically (0 = top)
+            xp = float((s.frame or {}).get("x", 0.5))     # window centre as a fraction of the source width
+            shot_geom = f"crop=iw/{z:.4f}:iw/{z:.4f}*3/4:clip({xp:.4f}*iw-ow/2\\,0\\,iw-ow):(ih-oh)*{yp:.3f},scale={w}:{h}:flags=lanczos,setsar=1"
         prof = prof_cache[src.as_posix()]
         if look == "cst5" and prof == "GP-Log2" and not s.grade.get("cst_lut"):
             notes.append(f"shot {n}: GP-Log2 needs grade.cst_lut (the GP-Log2 -> Rec.709 .cube) for cst5, shown ungraded")
@@ -340,7 +368,9 @@ def build(c: cl.CutList, cfg: dict, out: Path, look: str = "reel", vertical: boo
         from . import titles as tt
         pngs = []
         for i, t in enumerate(c.titles):
-            if t.get("track"):                                  # title rides the ground of the shot under it
+            if t.get("behind"):                                 # flat word, one summit in front of it
+                pngs.append(behind_title(c, t, i, w, pic_h, fps, cache, segs, seg_head))
+            elif t.get("track"):                                # title rides the ground of the shot under it
                 pngs.append(tracked_title(c, t, i, w, pic_h, fps, cache, pic_crop, segs, seg_head, (h - pic_h) // 2 if letterbox else 0))
             else:
                 pngs.append(tt.render_png(t, w, pic_h, cache / f"title_{i}.png"))

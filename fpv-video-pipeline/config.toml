@@ -49,6 +49,7 @@ base_grade_drx = ""
 [color.luts]
 "GP-Log" = "E:/ASSETS/GPLOG_Creative_EV0 - a9g8a0000004G5nAAE.cube"            # HERO11 (Labs) / HERO12 / HERO13
 "GP-Log2" = "E:/ASSETS/GPLOG2_to_Rec709_65_EV+1.8_Rolloff.cube"          # Mission 1 / Mission 1 Pro (LUTs ship with the camera)
+"Senja Mefjord" = "E:/EXPORTS/senja_full_grade.cube"                      # the Mefjord project's whole grade, used as the CST of a shot's node 4
 "D-Log M" = "E:/ASSETS/DJI Avata 2 D-Log M to Rec.709 V1._.cube"            # DJI Avata 2 (DJI publishes this LUT)
 
 # Node layout the auto grader writes into (must match your .drx node template; see docs/COLOR_ALGORITHM.md).
