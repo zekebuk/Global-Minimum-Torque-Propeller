@@ -187,7 +187,8 @@ Resolve's own stabilizer (Color page ▸ Tracker ▸ Stabilizer) is a fallback f
 > hand-placed one. The full rule set, the xfade-expression mechanics and what was tried and rejected (fades, flashes,
 > wipes, a sandstorm) are in [TRANSITIONS.md](TRANSITIONS.md).
 
-> **Titles in the landscape.** A title with `"track": true` (plus `"anchor": [x, y]` on the picture and `"tilt"`)
+> **Titles in the landscape.** The default and preferred title is flat 2D; see [TITLES.md](TITLES.md) for why. These
+> options remain for hand use. A title with `"track": true` (plus `"anchor": [x, y]` on the picture and `"tilt"`)
 > rides the ground of the shot under it: `titles.track` measures the terrain's translation and expansion under the
 > anchor by sub-pixel phase correlation, `titles.render_tracked` lays the word back onto the ground plane (keystone +
 > foreshortening), moves and scales it with that motion (scale softened, word kept inside the frame at its largest)
@@ -195,6 +196,29 @@ Resolve's own stabilizer (Color page ▸ Tracker ▸ Stabilizer) is a fallback f
 > image-sequence clip on V2, so Resolve shows the same thing. The reference look (text as a true 3D object — Fusion
 > Camera Tracker → Text3D, lit, occluded by the terrain) needs a solved camera and stays a hand step on the Fusion
 > page; the 2D track holds up for slow forward reveals like the MOAB opener.
+>
+> `"fly": true` goes further (`titles.render_flythrough`): each letter is an extruded quad in camera space, projected
+> through a wide lens. The letters rise from behind the terrain one after another, the word drifts with the ground and
+> swings slowly with a band of sun across it, then the camera pushes through it and the letters leave past the lens
+> with motion blur, on the cut. `"occlude": true` hides letters only behind rock that stands well above its
+> neighbours (a spire, not a broad wall) and only while the word is farther away than the towers. It is still a
+> rendered PNG sequence in Resolve, not a live Fusion comp; `"weight"`, `"pitch"`, `"fly_out"` and the anchor tune it.
+>
+> `"seated": true` (with `"fly": true`) is the calm version the MOAB reel uses: the word lies back on the ground plane
+> (`"pitch": 55`), follows the terrain (`"follow"`), fades in and out in place (`"fade_in"`, `"fade_out"`) and casts a
+> soft shadow away from the sun, with no push, swing or occlusion. It is the calmer of the two 3D options.
+>
+> **Live Fusion 3D title.** `scripts/fusion_title.py` copies a timeline and puts a real 3D scene on its V2 title clip:
+> Text3D (extruded, bevelled), Camera3D, a directional sun and an ambient fill through Merge3D and Renderer3D. V2 sits
+> above the grade and is the 8:7 picture, so the text skips the log nodes and cannot reach the bars. The camera's
+> position is keyframed from `titles.track`, so the word holds its place over the terrain while its perspective changes.
+> The word leans back onto the land and casts a soft 2D shadow (`ShadowDark` / `ShadowSoft` / `ShadowCast`). A matte
+> sequence keyed from the opener's graded segment in the last `review.py fast` run (spires only) drives `TowerMatte`, so
+> rock standing in front of the word hides it; run the fast preview first, or the title builds without occlusion.
+> Nudge the anchor so a spire falls between letters rather than through one.
+> Tune it on the Fusion page or with `--set size=0.7`. Not used: `InsertFusionCompositionIntoTimeline`, which lands on
+> V1 and ripples the cut. The font must be known to Fusion: the script registers Dune Rise from `E:/ASSETS/Fonts` with
+> `FontManager.AddFont` for the session; install it in Windows to make it permanent.
 
 ### 4a. Project color setup (done by `build_resolve_project.py`)
 

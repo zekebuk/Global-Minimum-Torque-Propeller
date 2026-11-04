@@ -194,7 +194,7 @@ def tracked_title(c: cl.CutList, t: dict, i: int, w: int, pic_h: int, fps: float
     starts = c.starts()
     k = max(j for j, st in enumerate(starts) if st <= t["start"] + 1e-6)
     s = c.shots[k]
-    key = hashlib.sha1(f"{s.src}|{s.in_s:.3f}|{s.dur:.3f}|{s.speed}|{s.ramp}|{sorted(t.items())}|{w}x{pic_h}|{fps}|{crop}|fit2".encode()).hexdigest()[:12]
+    key = hashlib.sha1(f"{s.src}|{s.in_s:.3f}|{s.dur:.3f}|{s.speed}|{s.ramp}|{sorted(t.items())}|{w}x{pic_h}|{fps}|{crop}|fly3".encode()).hexdigest()[:12]
     out_dir = cache / f"title_{i}_seq_{key}"
     n = int(round(t["dur"] * fps)) + 1
     if not (out_dir / f"f_{n - 1:04d}.png").exists():
@@ -209,7 +209,8 @@ def tracked_title(c: cl.CutList, t: dict, i: int, w: int, pic_h: int, fps: float
                                   "-i", str(segs[k]), "-vf", f"crop=iw:{pic_h}:0:{pic_y},scale={hw}:{hh},format=rgb24",
                                   "-f", "rawvideo", "-"], capture_output=True).stdout
             frames = np.frombuffer(raw, np.uint8).reshape(-1, hh, hw, 3)
-        pattern, n = tt.render_tracked(t, w, pic_h, path, out_dir, fps, frames=frames)
+        render = tt.render_flythrough if t.get("fly") else tt.render_tracked
+        pattern, n = render(t, w, pic_h, path, out_dir, fps, frames=frames)
     (cache / f"title_{i}_seq.txt").write_text(str(out_dir))      # pointer for the Resolve builder
     return str(out_dir / "f_%04d.png"), n, fps
 
@@ -371,5 +372,6 @@ def build(c: cl.CutList, cfg: dict, out: Path, look: str = "reel", vertical: boo
     if r.returncode:
         raise RuntimeError(f"ffmpeg failed assembling the preview:\n{r.stderr.strip()[-2000:]}")
     (out.with_suffix(".json")).write_text(json.dumps({"shots": len(c.shots), "duration_s": round(total, 3),
-                                                      "rendered": rendered, "reused": reused, "notes": notes}, indent=2))
+                                                      "rendered": rendered, "reused": reused, "notes": notes,
+                                                      "segments": [str(q) for q in segs], "seg_head": seg_head}, indent=2))
     return PreviewResult(out, rendered, reused, notes)

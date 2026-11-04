@@ -12,7 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
 FONTS = {
     "stencil": "C:/Windows/Fonts/STENCIL.TTF",      # weathered, broken letterforms
@@ -300,12 +300,13 @@ def render_tracked(t: dict, w: int, h: int, path: np.ndarray, out_dir: Path, fps
     return str(out_dir / "f_%04d.png"), n
 
 
-def occlusion_mask(frame: np.ndarray, text: np.ndarray, size: tuple[int, int]) -> np.ndarray:
+def occlusion_mask(frame: np.ndarray, text: np.ndarray, size: tuple[int, int], spires_only: bool = False) -> np.ndarray:
     """Where near rock stands in front of the word. frame: the shot's graded RGB (uint8, any size, same aspect);
     text: boolean mask of the word at full size. Near sunlit rock is saturated and not too bright, the hazy distance
     and sky are not, so a saturation key finds the rock; per column, the first rock row from the top is the skyline.
     In the columns where that skyline rises above the bottom of the word, the rock below it is in front of the
-    letters: those pixels (feathered) are returned as 0..1 at full size."""
+    letters: those pixels (feathered) are returned as 0..1 at full size. spires_only keeps just the columns that stand
+    well above their neighbours, so a spire cuts through a letter while a broad wall leaves it readable."""
     w, h = size
     f = frame.astype(np.float32)
     mx, mn = f.max(axis=2), f.min(axis=2)
@@ -323,9 +324,173 @@ def occlusion_mask(frame: np.ndarray, text: np.ndarray, size: tuple[int, int]) -
     bottom = rows.max()
     out = np.zeros((fh, fw), np.float32)
     first = np.where(rk.any(axis=0), rk.argmax(axis=0), fh)               # skyline row per frame column
-    for cx in range(int(cols.min() * sx), int(cols.max() * sx) + 1):
+    win = max(2, int(0.1 * fw))
+    for cx in range(int(cols.min() * sx), min(fw - 1, int(cols.max() * sx)) + 1):
         top = first[cx]
+        if spires_only and np.median(first[max(0, cx - win):cx + win + 1]) - top < 0.05 * fh:
+            continue
         if top < bottom * sy:                                               # the rock rises into the word here
             out[int(top):, cx] = rk[int(top):, cx]
     m = Image.fromarray((out * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(1.5)).resize((w, h), Image.BILINEAR)
     return np.asarray(m, np.float32) / 255 * text
+
+
+# ---------------------------------------------------------------- fly-through: the word as an object in the scene
+# "fly": true renders the title in real 3D instead of warping a flat image: each letter is a quad in camera space
+# with an extruded back, projected through a wide lens (the Python equivalent of Fusion's Text3D + Camera3D + Merge3D).
+# It rises from behind the towers letter by letter, drifts with the terrain and swings slowly, then the camera pushes
+# through it: the letters accelerate past the lens with motion blur and leave the frame on the cut.
+# "seated": true is the calm version of the same renderer: the word lies back on the ground plane, follows the terrain
+# exactly, fades in and out in place and casts a soft shadow away from the sun. No push, no swing, nothing moves by itself.
+
+def fly_scale(tt: float, dur: float, t_out: float = 1.3, s_end: float = 6.0) -> float:
+    """The word's screen scale over time (1 = its hold size): a slow creep, then an accelerating push past the lens."""
+    t_fly = dur - t_out
+    if tt < t_fly:
+        return 0.92 + 0.13 * max(0.0, tt) / t_fly
+    u = min(1.0, (tt - t_fly) / t_out)
+    return 1.05 * (s_end / 1.05) ** (u ** 2.2)
+
+
+def emerge(tt: float, i: int, stagger: float = 0.12, length: float = 0.9) -> float:
+    """Letter i's arrival, 0..1 with an ease-out: letters rise one after another."""
+    p = min(1.0, max(0.0, (tt - i * stagger) / length))
+    return 1 - (1 - p) ** 3
+
+
+def render_flythrough(t: dict, w: int, h: int, path: np.ndarray, out_dir: Path, fps: float,
+                      frames: np.ndarray | None = None) -> tuple[str, int]:
+    """PNG sequence of the fly-through (see above). path = titles.track; frames = the shot's graded picture, so the
+    towers hide the letters while the word is still behind them. Returns (ffmpeg pattern, frame count)."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    dur, n = float(t["dur"]), len(path)
+    seated = bool(t.get("seated"))
+    t_out = float(t.get("fly_out", 1.3))
+    t_fly = dur if seated else dur - t_out
+    k_fly = min(n - 1, int(t_fly * fps))
+    follow = float(t.get("follow", 0.8)) if seated else 0.6   # how much of the ground's expansion the word takes
+    grow = (1.0 if seated else 1.05) * float(path[:k_fly + 1, 2].max()) ** follow
+    text = t["text"].upper()
+    fpath = FONTS.get(t.get("font", "stencil"), t.get("font", FONTS["stencil"]))
+    size = max(8, int(h * t.get("size", 0.17)))
+    track_em = t.get("tracking", 0.9)
+    font = ImageFont.truetype(fpath, size)
+    word = sum(font.getlength(ch) for ch in text) + size * track_em * (len(text) - 1)
+    if word * grow > 0.86 * w:                             # the whole word stays in frame through the hold
+        size = int(size * 0.86 * w / (word * grow))
+        font = ImageFont.truetype(fpath, size)
+    ss = 1.6                                               # letters drawn larger than needed: the push magnifies them
+    stroke = int(round(float(t.get("weight", 0.012)) * size * ss))   # thin display faces need body to read as objects
+    pad = 8 + stroke
+    big = ImageFont.truetype(fpath, int(size * ss))
+    widths = [font.getlength(ch) for ch in text]
+    gap = size * track_em
+    pen = -(sum(widths) + gap * (len(text) - 1)) / 2
+    asc, desc = font.getmetrics()
+    letters = []
+    for i, (ch, cw) in enumerate(zip(text, widths)):
+        a2, d2 = big.getmetrics()
+        im = Image.new("L", (int(big.getlength(ch)) + 2 * pad, a2 + d2 + 2 * pad), 0)
+        ImageDraw.Draw(im).text((pad, pad), ch, font=big, fill=255, stroke_width=stroke, stroke_fill=255)
+        letters.append({"im": im, "small": im.reduce(2), "x": pen - pad / ss, "y": -(asc + desc) / 2 - pad / ss,
+                        "w": im.width / ss, "h": im.height / ss, "z": (-0.05, 0.04, -0.03, 0.05)[i % 4] * size})
+        pen += cw + gap
+    f = 0.6 * w                                            # a wide lens, like the footage
+    pitch = np.radians(float(t.get("pitch", 55.0 if seated else 10.0)))   # top edge leans away
+    extrude = float(t.get("extrude", 0.05 if seated else 0.2)) * size
+    ground_haze = float(t.get("haze", 0.12)) if seated else 0.0           # the air between the lens and the word
+    col = np.array(Image.new("RGB", (1, 1), t.get("color", "#fbf3e3")).getpixel((0, 0)), np.float32) * 0.94
+    side_near, side_far = np.array([176, 138, 98], np.float32), np.array([90, 60, 40], np.float32)
+    haze_col = np.array([205, 196, 190], np.float32)
+    ax, ay = t.get("anchor", (0.5, 0.3))
+    foe = np.array([0.5 * w, 0.42 * h])                    # where the camera is heading during the push
+    strength = float(t.get("occlude_strength", 0.6)) if t.get("occlude") and frames is not None else 0.0
+    xs = np.arange(w, dtype=np.float32)
+
+    def scene(tt: float, layers: int, canvas: np.ndarray) -> float:
+        kf = min(n - 1.0, max(0.0, tt * fps))
+        k0 = int(kf)
+        k1 = min(n - 1, k0 + 1)
+        dx, dy, sc = path[k0] + (path[k1] - path[k0]) * (kf - k0)
+        sf = 1.0 if seated else fly_scale(tt, dur, t_out)
+        s_all = sf * sc ** follow
+        centre = np.array([ax * w + dx * w, ay * h + dy * h])
+        if sf > 1.05:                                      # the push: everything streams out from the heading
+            centre = foe + (centre - foe) * (sf / 1.05)
+        yaw = np.radians(float(t.get("yaw", 0.0)) if seated
+                         else -9.0 + 16.0 * min(1.0, tt / max(t_fly, 1e-3)))  # a slow swing: the word turns as we pass
+        cy_, sy_, cp, sp = np.cos(yaw), np.sin(yaw), np.cos(pitch), np.sin(pitch)
+        for i, L in sorted(enumerate(letters), key=lambda a: -a[1]["z"]):
+            e = emerge(tt, 0, 0.0, float(t.get("fade_in", 1.2))) if seated else emerge(tt, i)
+            if e <= 0:
+                continue
+            scale = s_all if seated else s_all * (0.4 + 0.6 * e)
+            z0 = f / scale
+            lift = 0.0 if seated else 0.07 * h * (1 - e)
+            haze = ground_haze if seated else min(1.0, (1 - e) * 1.2)
+            src = L["small"] if scale < 0.8 else L["im"]
+            sw, sh_ = src.size
+            for j in range(layers - 1, -1, -1):
+                ez = extrude * j / max(1, layers - 1)
+                quad = []
+                for qx, qy in ((0, 0), (L["w"], 0), (L["w"], L["h"]), (0, L["h"])):
+                    X, Y, Z = L["x"] + qx, L["y"] + qy, L["z"] + ez
+                    Y2, Z2 = Y * cp + Z * sp, -Y * sp + Z * cp      # pitch
+                    X3, Z3 = X * cy_ + Z2 * sy_, -X * sy_ + Z2 * cy_  # yaw
+                    zc = z0 + Z3
+                    if zc < 0.12 * f:                       # behind the near plane: this letter has passed the lens
+                        quad = None
+                        break
+                    quad.append((centre[0] + f * X3 / zc, centre[1] + lift + f * Y2 / zc))
+                if quad is None:
+                    continue
+                qa = np.array(quad)
+                x0, y0 = max(0, int(np.floor(qa[:, 0].min()))), max(0, int(np.floor(qa[:, 1].min())))
+                x1, y1 = min(w, int(np.ceil(qa[:, 0].max())) + 1), min(h, int(np.ceil(qa[:, 1].max())) + 1)
+                if x1 <= x0 or y1 <= y0:
+                    continue
+                coef = _perspective([(0, 0), (sw, 0), (sw, sh_), (0, sh_)], [(u - x0, v - y0) for u, v in quad])
+                m = np.asarray(src.transform((x1 - x0, y1 - y0), Image.PERSPECTIVE, coef, Image.BICUBIC), np.float32) / 255
+                c = col if j == 0 else side_near + (side_far - side_near) * (j / max(1, layers - 1))
+                c = c + (haze_col - c) * haze
+                a = (m * e)[..., None]
+                canvas[y0:y1, x0:x1, :3] = c * a + canvas[y0:y1, x0:x1, :3] * (1 - a)
+                canvas[y0:y1, x0:x1, 3:] = a + canvas[y0:y1, x0:x1, 3:] * (1 - a)
+        return sf
+
+    word_half = (sum(widths) + gap * (len(text) - 1)) / 2
+    for k in range(n):
+        tt = k / fps
+        shutter = 0.5 / fps
+        ds = 0.0 if seated else abs(fly_scale(tt + shutter, dur, t_out) - fly_scale(tt, dur, t_out)) * word_half
+        subs = int(min(10, ds / 5 + 1))                    # motion blur only where things actually move fast
+        layers = 10 if subs == 1 else 5
+        acc = np.zeros((h, w, 4), np.float32)
+        sf = 1.0
+        for q in range(subs):
+            canvas = np.zeros((h, w, 4), np.float32)
+            sf = scene(tt + shutter * q / subs, layers, canvas)
+            acc += canvas
+        acc /= subs
+        rgb, a = acc[..., :3], acc[..., 3]
+        if not seated and 1.0 < tt < t_fly:                # a band of low sun passes across the word during the hold
+            xc = -0.2 * w + 1.4 * w * (tt - 1.0) / max(t_fly - 1.0, 1e-3)
+            rgb = rgb * (1 + 0.2 * np.exp(-(((xs - xc) / (0.14 * w)) ** 2)))[None, :, None]
+            rgb = np.minimum(rgb, a[..., None] * 255)
+        k_occ = strength * min(1.0, max(0.0, (1.3 - sf) / 0.25))      # nearer than the towers: nothing hides it
+        if k_occ > 0 and a.max() > 0:
+            hide = 1 - k_occ * occlusion_mask(frames[min(k, len(frames) - 1)], a > 0.03, (w, h), spires_only=True)
+            rgb, a = rgb * hide[..., None], a * hide
+        fade = min(1.0, (dur - tt) / (float(t.get("fade_out", 1.0)) if seated else 0.12 * t_out))  # gone on the cut
+        rgb, a = rgb * fade, a * fade
+        sh_k = float(t.get("shadow", 0.5)) * min(1.0, max(0.0, (1.8 - sf) / 0.5))
+        if sh_k > 0 and a.max() > 0:
+            mask = Image.fromarray((a * 255).astype(np.uint8))
+            if seated:                                     # cast on the ground, away from the low sun on the right
+                mask = ImageChops.offset(mask, -int(0.014 * w), int(0.012 * h))
+            blur = np.asarray(mask.filter(ImageFilter.GaussianBlur(h * 0.01)), np.float32) / 255 * sh_k
+            a = a + blur * (1 - a)
+        rgb_s = rgb / np.maximum(a[..., None], 1e-4)
+        out = np.dstack([np.clip(rgb_s, 0, 255), np.clip(a, 0, 1) * 255]).astype(np.uint8)
+        Image.fromarray(out, "RGBA").save(out_dir / f"f_{k:04d}.png", compress_level=1)
+    return str(out_dir / "f_%04d.png"), n
