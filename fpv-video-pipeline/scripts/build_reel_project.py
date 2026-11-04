@@ -287,6 +287,19 @@ def pan_comp(it, s: cl.Shot, x0: float, x1: float, half: float, fps: float) -> b
         return False
 
 
+def import_sequence(mp, folder, seq_dir: Path, c: cl.CutList):
+    """The tracked title's PNG sequence (titles.render_tracked) as one image-sequence clip, imported once."""
+    frames = sorted(seq_dir.glob("f_*.png"))
+    if not frames:
+        return None
+    mp.SetCurrentFolder(folder)
+    for clip in folder.GetClipList() or []:
+        if seq_dir.as_posix() in (clip.GetClipProperty("File Path") or "").replace("\\", "/"):
+            return clip
+    items = mp.ImportMedia([{"FilePath": str(seq_dir / "f_%04d.png"), "StartIndex": 0, "EndIndex": len(frames) - 1}]) or []
+    return items[0] if items else None
+
+
 def find_or_import(mp, folder, path: str):
     mp.SetCurrentFolder(folder)
     for clip in folder.GetClipList() or []:
@@ -361,8 +374,15 @@ def main() -> int:
         bins[b] = next((f for f in root.GetSubFolderList() or [] if f.GetName() == b), None) or mp.AddSubFolder(root, b)
     clips = {src: find_or_import(mp, bins["01_Footage"], src) for src in dict.fromkeys(s.src for s in c.shots)}
     music = find_or_import(mp, bins["02_Music"], c.music) if c.music else None
-    title_png = cache / "title_0.png"
-    title = find_or_import(mp, bins["03_Graphics"], str(title_png)) if c.titles and title_png.exists() else None
+    title, title_seq = None, False
+    if c.titles:
+        seq_ptr = cache / "title_0_seq.txt"
+        if c.titles[0].get("track") and seq_ptr.exists():        # tracked title: the preview's PNG sequence
+            title, title_seq = import_sequence(mp, bins["03_Graphics"], Path(seq_ptr.read_text().strip()), c), True
+            if title is None:
+                log.append("tracked title sequence could not be imported (run review.py fast first)")
+        elif (cache / "title_0.png").exists():
+            title = find_or_import(mp, bins["03_Graphics"], str(cache / "title_0.png"))
     mp.SetCurrentFolder(root)
     bad = [s for s, m in clips.items() if m is None]
     if bad:
@@ -404,7 +424,7 @@ def main() -> int:
         if mp.AppendToTimeline([{"mediaPoolItem": title, "mediaType": 1, "trackIndex": 2, "startFrame": 0,
                                  "endFrame": int(round(t["dur"] * c.fps)) - 1, "recordFrame": start + int(round(t["start"] * c.fps))}]):
             v2 = tl.GetItemListInTrack("video", 2) or []
-            if v2:
+            if v2 and not title_seq:                              # a tracked sequence has its fades baked in
                 v2[0].SetFades({"FadeIn": int(round(0.7 * c.fps)), "FadeOut": int(round(0.7 * c.fps))})
         else:
             log.append("title refused")

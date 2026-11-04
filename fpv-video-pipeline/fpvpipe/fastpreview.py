@@ -19,6 +19,8 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+
+import numpy as np
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -183,6 +185,35 @@ def _spatial(grade: dict, w: int, h: int) -> list[str]:
     return f
 
 
+def tracked_title(c: cl.CutList, t: dict, i: int, w: int, pic_h: int, fps: float, cache: Path,
+                  crop: str | None, segs: list, seg_head: list, pic_y: int) -> tuple[str, int, float]:
+    """Track the shot under the title and render the title as a PNG sequence riding it (titles.track / render_tracked).
+    With "occlude", the shot's graded segment is decoded (half size) so near rock can hide the letters behind it.
+    Cached by shot range + title settings; Resolve's builder imports the same sequence."""
+    from . import titles as tt
+    starts = c.starts()
+    k = max(j for j, st in enumerate(starts) if st <= t["start"] + 1e-6)
+    s = c.shots[k]
+    key = hashlib.sha1(f"{s.src}|{s.in_s:.3f}|{s.dur:.3f}|{s.speed}|{s.ramp}|{sorted(t.items())}|{w}x{pic_h}|{fps}|{crop}|fit2".encode()).hexdigest()[:12]
+    out_dir = cache / f"title_{i}_seq_{key}"
+    n = int(round(t["dur"] * fps)) + 1
+    if not (out_dir / f"f_{n - 1:04d}.png").exists():
+        off = t["start"] - starts[k]                        # the title starts this far into the shot
+        src_off = s.in_s + (ramp.source_time(s.ramp, s.in_s, s.out_s, off)[()] - s.in_s if s.ramp else off * s.speed)
+        path = tt.track(Path(s.src), float(src_off), t["dur"] * (s.avg_speed if not s.ramp else 1.0), fps,
+                        anchor=t.get("anchor", (0.5, 0.6)), crop=crop)
+        frames = None
+        if t.get("occlude"):
+            hw, hh = w // 2, pic_h // 2
+            raw = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{seg_head[k] + off:.3f}", "-t", f"{t['dur'] + 0.1:.3f}",
+                                  "-i", str(segs[k]), "-vf", f"crop=iw:{pic_h}:0:{pic_y},scale={hw}:{hh},format=rgb24",
+                                  "-f", "rawvideo", "-"], capture_output=True).stdout
+            frames = np.frombuffer(raw, np.uint8).reshape(-1, hh, hw, 3)
+        pattern, n = tt.render_tracked(t, w, pic_h, path, out_dir, fps, frames=frames)
+    (cache / f"title_{i}_seq.txt").write_text(str(out_dir))      # pointer for the Resolve builder
+    return str(out_dir / "f_%04d.png"), n, fps
+
+
 def build(c: cl.CutList, cfg: dict, out: Path, look: str = "reel", vertical: bool = True,
           profile_of=None, cache_dir: Path | None = None, letterbox: bool = False,
           aspect: str = "16:9", hires: bool = False) -> PreviewResult:
@@ -209,7 +240,7 @@ def build(c: cl.CutList, cfg: dict, out: Path, look: str = "reel", vertical: boo
     if letterbox:
         post.append(f"pad={w}:{h}:0:(oh-ih)/2:black")
     bitrate = "12M" if w * h > 1e6 else "4M"
-    notes, segs, seg_len, rendered, reused = [], [], [], 0, 0
+    notes, segs, seg_len, seg_head, rendered, reused = [], [], [], [], 0, 0
     prof_cache: dict[str, str] = {}
     fps_cache: dict[str, float] = {}             # source frame rates, only probed for ramped shots
 
@@ -269,6 +300,7 @@ def build(c: cl.CutList, cfg: dict, out: Path, look: str = "reel", vertical: boo
             rendered += 1
         segs.append(seg)
         seg_len.append(round(dur_x * fps) / fps)
+        seg_head.append(eh)
 
     out.parent.mkdir(parents=True, exist_ok=True)
     total = c.duration()
@@ -305,7 +337,12 @@ def build(c: cl.CutList, cfg: dict, out: Path, look: str = "reel", vertical: boo
         n_in, last = 1, "0:v"
     if c.titles:
         from . import titles as tt
-        pngs = [tt.render_png(t, w, pic_h, cache / f"title_{i}.png") for i, t in enumerate(c.titles)]
+        pngs = []
+        for i, t in enumerate(c.titles):
+            if t.get("track"):                                  # title rides the ground of the shot under it
+                pngs.append(tracked_title(c, t, i, w, pic_h, fps, cache, pic_crop, segs, seg_head, (h - pic_h) // 2 if letterbox else 0))
+            else:
+                pngs.append(tt.render_png(t, w, pic_h, cache / f"title_{i}.png"))
         t_in, t_fc, last = tt.overlay_args(c.titles, pngs, (h - pic_h) // 2 if letterbox else 0,
                                            (max(0.0, total - fade), fade) if fade else None, base=last, first_input=n_in)
         cmd += t_in

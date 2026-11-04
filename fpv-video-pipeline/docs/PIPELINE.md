@@ -187,6 +187,15 @@ Resolve's own stabilizer (Color page ▸ Tracker ▸ Stabilizer) is a fallback f
 > hand-placed one. The full rule set, the xfade-expression mechanics and what was tried and rejected (fades, flashes,
 > wipes, a sandstorm) are in [TRANSITIONS.md](TRANSITIONS.md).
 
+> **Titles in the landscape.** A title with `"track": true` (plus `"anchor": [x, y]` on the picture and `"tilt"`)
+> rides the ground of the shot under it: `titles.track` measures the terrain's translation and expansion under the
+> anchor by sub-pixel phase correlation, `titles.render_tracked` lays the word back onto the ground plane (keystone +
+> foreshortening), moves and scales it with that motion (scale softened, word kept inside the frame at its largest)
+> and bakes the fades, writing a PNG sequence. The preview overlays the sequence; the builder imports it as an
+> image-sequence clip on V2, so Resolve shows the same thing. The reference look (text as a true 3D object — Fusion
+> Camera Tracker → Text3D, lit, occluded by the terrain) needs a solved camera and stays a hand step on the Fusion
+> page; the 2D track holds up for slow forward reveals like the MOAB opener.
+
 ### 4a. Project color setup (done by `build_resolve_project.py`)
 
 - Color science **DaVinci YRGB** (not managed), timeline color space Rec.709 Gamma 2.4.
