@@ -115,7 +115,8 @@ See `docs/motor_design_pipeline.md` for the physics, DFM rules, RL formulation, 
 - a 9-sheet dimensioned drawing set (PDF/SVG), STEP models of every part and the assembly, and the lamination DXF;
 - the winding table, mechanical clearance checks and a CAD mass audit;
 - candidate suppliers with researched indicative prices;
-- an 11-station assembly line plan with $14.8k capital (under $15k including contingency), plus capacity, unit cost, ramp, quality and safety plans.
+- an 11-station assembly line plan with $14.4k capital (under $15k including contingency), plus capacity, unit cost, ramp, quality and safety plans;
+- a from-scratch 3-axis CNC needle winder (about $693 of hardware, about 3 min per stator), with verified G-code, a FluidNC config, a mandrel drawing and CAD (`docs/manufacturing/cnc_winder/`).
 
 Regenerate with `bldc-motor design package` and `bldc-motor design production` (needs `pip install -e ".[cad]"`). The drawings are unchecked prototype releases and the prices are not quotes; see `docs/manufacturing/README.md`.
 

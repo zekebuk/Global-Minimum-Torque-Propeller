@@ -18,13 +18,15 @@ Everything needed to quote, build and test the RL-optimised 5" freestyle motor
 | Mechanical checks and stack-up | `rl2407/mechanical_checks.md`, `mechanical_design.json` | 15 clearance and fit checks, axial datums, performance at true CAD mass |
 | Mass audit | `rl2407/mass_audit.csv` | CAD mass vs analytical model, by part group |
 | Suppliers and RFQs | `suppliers.md` | Candidate suppliers per part with indicative prices and verification status |
-| Assembly line plan | `assembly_line_plan.md`, `equipment_budget.csv`, `line_layout.svg` | 11 stations, $14.8k capital (< $15k incl. 15 % contingency), capacity, unit cost, ramp, quality and safety plan |
+| CNC needle winder | `cnc_winder/README.md`, `rl2407_winding.gcode`, `fluidnc_config.yaml`, `winder_bom.csv`, `cad/` | Phase-2 winder: kinematics, verified G-code, mandrel drawing and STEP, layout STEP, BOM (~$693) |
+| Assembly line plan | `assembly_line_plan.md`, `equipment_budget.csv`, `line_layout.svg` | 11 stations, $14.4k capital (< $15k incl. 15 % contingency), capacity, unit cost, ramp, quality and safety plan |
 
 Regenerate everything with:
 
 ```bash
 python -m pip install -e ".[rl,cad]"
 bldc-motor design package --design data/motor_designs/rl_5in_freestyle_6s_v1/design.json --out docs/manufacturing/rl2407
+bldc-motor design winder --out docs/manufacturing/cnc_winder
 bldc-motor design production --out docs/manufacturing
 ```
 
@@ -38,8 +40,10 @@ bldc-motor design production --out docs/manufacturing
    a deeper base pocket, or shorter leads. The model's fixed-mass term should be recalibrated
    from this audit.
 2. **Winding drives the line.** No automatic outrunner winder fits the budget, and
-   jig-indexed hand winding (10 min per motor) is the bottleneck. The budgeted open-source CNC
-   winder targets about 3 min and roughly $2.9 per motor of labour at $25/h.
+   jig-indexed hand winding (10 min per motor) is the bottleneck. The budgeted **from-scratch CNC
+   needle winder** (`cnc_winder/`, about $693 of hardware) does a stator in about 3.0 min, saving about $3 per
+   motor of labour at $25/h. Its toolpath is verified in software: turns per tooth match DWG-003 and it has
+   no collisions with the stator.
 3. **Two buys need quotes before anything else**, because they set most of the pilot cost:
    bonded and coated 0.10 mm stator stacks, and the custom arc magnets.
 4. **Confirmed standard parts:** the bearing is **684ZZ** (NMB L-940ZZ), not MR84ZZ, and the
