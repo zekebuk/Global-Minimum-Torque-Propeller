@@ -386,15 +386,30 @@ def build(c: cl.CutList, cfg: dict, out: Path, look: str = "reel", vertical: boo
     music_idx = n_in + len(c.titles)
     if has_music:
         cmd += ["-ss", f"{c.music_in_s:.3f}", "-t", f"{total:.3f}", "-i", c.music]
+    video_filtered = bool(chain)
+    afade = max(fade, 0.4)
+    audio_map, audio_opts = None, []
+    placed = [s for s in getattr(c, "sfx", []) if Path(s["file"]).exists()]
+    if placed:                                                  # music + sound effects, mixed in the filter graph
+        from . import sfx as sound
+        music_label = None
+        first = music_idx + (1 if has_music else 0)
+        if has_music:
+            chain.append(f"[{music_idx}:a]aresample=48000,aformat=channel_layouts=stereo[song]")
+            music_label = "[song]"
+        fx_in, fx_lines, mix = sound.mix_inputs(placed, total, first, music_label)
+        cmd += fx_in
+        chain += fx_lines + [f"{mix}afade=t=out:st={max(0.0, total - afade):.3f}:d={afade:.3f}[aout]"]
+        audio_map = "[aout]"
+    elif has_music:
+        audio_map = f"{music_idx}:a"
+        audio_opts = ["-af", f"afade=t=out:st={max(0.0, total - afade):.3f}:d={afade:.3f}"]
     if chain:
-        cmd += ["-filter_complex", ";".join(chain), "-map", f"[{last}]"]
-    else:
-        cmd += ["-map", last]
-    if has_music:
-        afade = max(fade, 0.4)
-        cmd += ["-map", f"{music_idx}:a", "-c:a", "aac", "-b:a", "192k",
-                "-af", f"afade=t=out:st={max(0.0, total - afade):.3f}:d={afade:.3f}"]
-    if chain:
+        cmd += ["-filter_complex", ";".join(chain)]
+    cmd += ["-map", f"[{last}]" if video_filtered else last]
+    if audio_map:
+        cmd += ["-map", audio_map, "-c:a", "aac", "-b:a", "192k", *audio_opts]
+    if video_filtered:
         cmd += ["-c:v", "libx264", "-preset", "veryfast", "-b:v", bitrate, "-maxrate", bitrate, "-bufsize", bitrate,
                 "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709"]
     else:

@@ -332,6 +332,45 @@ def import_sequence(mp, folder, seq_dir: Path, c: cl.CutList):
     return items[0] if items else None
 
 
+def place_sfx(p, mp, tl, c: cl.CutList, start: int, log: list[str]):
+    """The cut list's sound effects on A1 (hits, whooshes) and A3 (beds), at their levels. Overlapping sounds on one track
+    go on the next free track, because Resolve would overwrite them."""
+    if not getattr(c, "sfx", None):
+        return
+    root = mp.GetRootFolder()
+    folder = next((f for f in root.GetSubFolderList() or [] if f.GetName() == "04_SFX"), None) or mp.AddSubFolder(root, "04_SFX")
+    busy: dict[int, float] = {}
+    for s in sorted(c.sfx, key=lambda x: x["at"]):
+        clip = find_or_import(mp, folder, s["file"])
+        if clip is None:
+            log.append(f"could not import {s['file']}")
+            continue
+        fps = float(clip.GetClipProperty("FPS") or c.fps)
+        frames = str(clip.GetClipProperty("Frames") or "0")
+        length = int(frames) if frames.isdigit() else int(10 * fps)
+        want = int(round(float(s.get("dur") or length / fps) * fps))
+        track, at = int(s.get("track", 1)), float(s["at"])
+        end = at + want / fps
+        while track == 2 or busy.get(track, -1.0) > at:       # A2 is the song
+            track += 1
+        while (tl.GetTrackCount("audio") or 0) < track:
+            tl.AddTrack("audio", "stereo")
+        placed = 0
+        while placed < want:                                   # a loop is the file repeated
+            take = min(length, want - placed)
+            items = mp.AppendToTimeline([{"mediaPoolItem": clip, "mediaType": 2, "trackIndex": track, "startFrame": 0, "endFrame": take - 1,
+                                          "recordFrame": start + int(round((at + placed / fps) * c.fps))}])
+            if not items:
+                log.append(f"sound refused at {at:.2f}s: {Path(s['file']).name}")
+                break
+            items[0].SetProperty("AudioVolumeEnabled", True)
+            if not items[0].SetProperty("AudioVolume", float(s.get("gain_db", -12))):
+                log.append(f"could not set the level of {Path(s['file']).name}: check it by ear")
+            placed += take
+        busy[track] = end
+    mp.SetCurrentFolder(root)
+
+
 def find_or_import(mp, folder, path: str):
     mp.SetCurrentFolder(folder)
     for clip in folder.GetClipList() or []:
@@ -452,10 +491,14 @@ def main() -> int:
     start = tl.GetStartFrame()
     if music:
         mf = float(music.GetClipProperty("FPS") or c.fps)
-        if not mp.AppendToTimeline([{"mediaPoolItem": music, "mediaType": 2, "trackIndex": 1,
+        song_track = int(cfg["reel"].get("music_track", 2))   # where --no-music and reel_handoff look for it
+        while (tl.GetTrackCount("audio") or 0) < max(song_track, 3):
+            tl.AddTrack("audio", "stereo")
+        if not mp.AppendToTimeline([{"mediaPoolItem": music, "mediaType": 2, "trackIndex": song_track,
                                      "startFrame": int(round(c.music_in_s * mf)),
                                      "endFrame": int(round((c.music_in_s + c.duration()) * mf)) - 1, "recordFrame": start}]):
             log.append("music refused")
+        place_sfx(p, mp, tl, c, start, log)
     if title:
         t = c.titles[0]
         tl.AddTrack("video")
