@@ -7,3 +7,5 @@ highlights.json
 secrets/
 *.youtube.txt
 *.thumb.jpg
+sfx_links.json
+*.part

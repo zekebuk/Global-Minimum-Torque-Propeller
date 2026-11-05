@@ -49,3 +49,28 @@ def connect():
 
 def seconds_to_frames(seconds: float, fps: float) -> int:
     return int(round(seconds * fps))
+
+
+AUDIO_EXT = {".mp3", ".wav", ".aif", ".aiff", ".flac", ".m4a"}
+
+
+def import_sfx_library(media_pool, sfx_bin, sfx_root: Path) -> dict[str, int]:
+    """Mirror <SFX>/<category>/*.mp3 into the 03_SFX bin as one sub-bin per category (whoosh, impact, riser, bed ...).
+    Idempotent: a file already in its sub-bin (same name) is not imported again, so re-running a build adds only new
+    sounds. Returns {category: files imported}."""
+    imported: dict[str, int] = {}
+    sfx_root = Path(sfx_root)
+    if not sfx_root.is_dir():
+        return imported
+    for cat in sorted(p for p in sfx_root.iterdir() if p.is_dir()):
+        files = sorted(f for f in cat.iterdir() if f.suffix.lower() in AUDIO_EXT and not f.name.startswith("."))
+        if not files:
+            continue
+        sub = next((f for f in (sfx_bin.GetSubFolderList() or []) if f.GetName() == cat.name), None)
+        sub = sub or media_pool.AddSubFolder(sfx_bin, cat.name)
+        have = {c.GetName() for c in (sub.GetClipList() or [])}
+        new = [str(f) for f in files if f.name not in have]
+        if new:
+            media_pool.SetCurrentFolder(sub)
+            imported[cat.name] = len(media_pool.ImportMedia(new) or [])
+    return imported

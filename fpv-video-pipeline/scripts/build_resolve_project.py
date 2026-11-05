@@ -5,7 +5,8 @@
 
 What it does, in order:
   1. Creates (or opens) project FPV_<session>; 3840x2160 @ source fps, DaVinci YRGB (LUT-based color, section 4).
-  2. Bins: 01_Footage (Gyroflow intermediates if present, else raw GoPro), 02_Music, 03_SFX.
+  2. Bins: 01_Footage (Gyroflow intermediates if present, else raw GoPro), 02_Music, 03_SFX (the SFX library,
+     one sub-bin per category: whoosh, impact, riser, transition, drone, ambience, bed).
   3. Clip markers from highlights.json (red flip/roll, fuchsia dive, yellow aggressive, green smooth).
   4. Timeline YT_selects   - 16:9 4K, every clip in shooting order (chapters kept together).
      Timeline REEL_selects - 9:16 1080x1920, a string-out of the highlight windows, best first,
@@ -121,6 +122,14 @@ def main() -> int:
         mp.SetCurrentFolder(bins["02_Music"])
         imported = mp.ImportMedia([str(args.music)]) or []
         music_item = imported[0] if imported else None
+
+    # SFX library (ElevenLabs set via fetch_sfx.py / make_sfx_library.py): one sub-bin per category in 03_SFX.
+    sfx_root = cfg["paths"].get("sfx") or cfg["paths"]["music"].parent / "SFX"
+    got = rlib.import_sfx_library(mp, bins["03_SFX"], sfx_root)
+    if got:
+        print("SFX bin: " + ", ".join(f"{k} +{v}" for k, v in got.items()))
+    elif not sfx_root.is_dir():
+        log.append(f"no SFX library at {sfx_root}: run fetch_sfx.py (or make_sfx_library.py) to fill 03_SFX")
 
     # 3. Clip markers
     by_name = {}

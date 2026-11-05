@@ -1,0 +1,416 @@
+{
+  "source": "ElevenLabs Sound Effects v2 (eleven_text_to_sound_v2), generated via the ElevenLabs creative flow",
+  "flow_id": "ldTv5no0pWi0DkPTRtS7",
+  "generated": "2026-11-05",
+  "note": "No download links here (this repo is public). Links come from a private sfx_links.json; see docs/AUDIO_AND_PUBLISHING.md.",
+  "sounds": {
+    "whoosh/whoosh_short": {
+      "prompt": "fast close air whoosh pass-by, FPV drone speed, clean, no music, cinematic, under one second",
+      "duration_s": 2.0,
+      "loop": false,
+      "takes": [
+        {
+          "file": "whoosh/whoosh_short_1.mp3",
+          "generation_id": "0IBSjV6tdwVXTnk6jOaF",
+          "session_id": "OXFXjpy6wwdRKGoqokb2"
+        },
+        {
+          "file": "whoosh/whoosh_short_2.mp3",
+          "generation_id": "10RL3ipItghWAZSqiDzy",
+          "session_id": "fY6gns6roqpv6nriNQI7"
+        }
+      ]
+    },
+    "whoosh/whoosh_long": {
+      "prompt": "long deep cinematic whoosh sweeping left to right, airy, no music",
+      "duration_s": 1.8,
+      "loop": false,
+      "takes": [
+        {
+          "file": "whoosh/whoosh_long_1.mp3",
+          "generation_id": "1dpR0A6EkFoRftUDE2Be",
+          "session_id": "tgD61STegKN0sbWEHMie"
+        },
+        {
+          "file": "whoosh/whoosh_long_2.mp3",
+          "generation_id": "yVEPqaFahNzXOWOV6Pay",
+          "session_id": "W72RSZxMzuyvz95LlOPg"
+        }
+      ]
+    },
+    "whoosh/whoosh_reverse": {
+      "prompt": "reversed whoosh swelling into a cut, tight ending",
+      "duration_s": 1.2,
+      "loop": false,
+      "takes": [
+        {
+          "file": "whoosh/whoosh_reverse_1.mp3",
+          "generation_id": "rdMkRJSl7Cb8Cf7b17aT",
+          "session_id": "ji4Bbz1iT9UQpQBU1iEu"
+        },
+        {
+          "file": "whoosh/whoosh_reverse_2.mp3",
+          "generation_id": "6jw5wqdVRz2SU3wbbhXH",
+          "session_id": "gxWsdZy5GLcJgkk8qpqm"
+        }
+      ]
+    },
+    "impact/sub_hit": {
+      "prompt": "deep cinematic sub bass hit with short tail, boom, trailer impact",
+      "duration_s": 2.0,
+      "loop": false,
+      "takes": [
+        {
+          "file": "impact/sub_hit_1.mp3",
+          "generation_id": "te4Ua6VsXhqDkKQQzSiY",
+          "session_id": "LygYU3l4uNeaghqZ4Fcj"
+        },
+        {
+          "file": "impact/sub_hit_2.mp3",
+          "generation_id": "qbUNo8Z9576yS3GurL6j",
+          "session_id": "UquPMdhQzE33OqhQqcOr"
+        }
+      ]
+    },
+    "impact/impact_metal": {
+      "prompt": "punchy metallic impact hit with short reverb, cinematic",
+      "duration_s": 1.5,
+      "loop": false,
+      "takes": [
+        {
+          "file": "impact/impact_metal_1.mp3",
+          "generation_id": "uF1yliL3pltkBTTnJCXw",
+          "session_id": "cQc43lPXAEkTPRRbJN7I"
+        },
+        {
+          "file": "impact/impact_metal_2.mp3",
+          "generation_id": "GOpN4nV9MtrQKINWBOit",
+          "session_id": "C3vktHyBrrmwOoxRysi7"
+        }
+      ]
+    },
+    "riser/riser_1bar_128bpm": {
+      "prompt": "tension riser building up, synthetic, ends abruptly, cinematic",
+      "duration_s": 1.875,
+      "loop": false,
+      "takes": [
+        {
+          "file": "riser/riser_1bar_128bpm_1.mp3",
+          "generation_id": "XJ1pJrDocZZCuSjkGJTQ",
+          "session_id": "J0OTEBKFoccUkOlaoDaa"
+        },
+        {
+          "file": "riser/riser_1bar_128bpm_2.mp3",
+          "generation_id": "yeFgbBvrBm7oyJx3ZjyS",
+          "session_id": "oCAWSTQPpxeIEUgOELoK"
+        }
+      ]
+    },
+    "riser/riser_2bar_128bpm": {
+      "prompt": "long tension riser with rising pitch, ends abruptly on the downbeat",
+      "duration_s": 3.75,
+      "loop": false,
+      "takes": [
+        {
+          "file": "riser/riser_2bar_128bpm_1.mp3",
+          "generation_id": "bSieNoxi70423rjhnpj9",
+          "session_id": "I37tksGElLlD6KLSkUJp"
+        },
+        {
+          "file": "riser/riser_2bar_128bpm_2.mp3",
+          "generation_id": "PdYD50KakTTOyCnitALT",
+          "session_id": "4qbRSTdngBxWYWXtDUTL"
+        }
+      ]
+    },
+    "transition/tape_stop": {
+      "prompt": "tape stop slowdown effect, pitch dropping",
+      "duration_s": 0.9,
+      "loop": false,
+      "takes": [
+        {
+          "file": "transition/tape_stop_1.mp3",
+          "generation_id": "zt9o8AFb7JvVPhF1gH9i",
+          "session_id": "CxHx3q41TNhYMrzOeLYX"
+        },
+        {
+          "file": "transition/tape_stop_2.mp3",
+          "generation_id": "b13TEumeF6iW91mO7z8L",
+          "session_id": "K6idjGw9dUSunQqLA8Rs"
+        }
+      ]
+    },
+    "transition/glitch_stutter": {
+      "prompt": "short digital glitch stutter transition",
+      "duration_s": 0.6,
+      "loop": false,
+      "takes": [
+        {
+          "file": "transition/glitch_stutter_1.mp3",
+          "generation_id": "GZOFjeqfICNsc6thR2SJ",
+          "session_id": "J5XVDZwGayqvqHsqkDQ3"
+        },
+        {
+          "file": "transition/glitch_stutter_2.mp3",
+          "generation_id": "EVgJhk6W8NdYX6FesFlf",
+          "session_id": "2pKWurYmMoHOuc8n0IgZ"
+        }
+      ]
+    },
+    "drone/fpv_motor_rev": {
+      "prompt": "FPV racing drone motors revving hard, high pitched brushless motor whine",
+      "duration_s": 2.5,
+      "loop": false,
+      "takes": [
+        {
+          "file": "drone/fpv_motor_rev_1.mp3",
+          "generation_id": "irGzH8FBHFfeAycGmoY7",
+          "session_id": "XCsgiMayKp7usMXXhdvt"
+        },
+        {
+          "file": "drone/fpv_motor_rev_2.mp3",
+          "generation_id": "oRa00Ae84UOLyvmUm0Tp",
+          "session_id": "Cs74jfikQ1H4rSmCLcsT"
+        }
+      ]
+    },
+    "drone/fpv_flyby": {
+      "prompt": "FPV racing drone flying past close and fast, doppler, prop wash",
+      "duration_s": 2.5,
+      "loop": false,
+      "takes": [
+        {
+          "file": "drone/fpv_flyby_1.mp3",
+          "generation_id": "ojjRZnxwkrKFrPWbnuVr",
+          "session_id": "682mrdr8AdrqrjEF1ZMw"
+        },
+        {
+          "file": "drone/fpv_flyby_2.mp3",
+          "generation_id": "U4LtvSWwyCz53QXFGhX7",
+          "session_id": "szGBwIle2r1voidORxbV"
+        }
+      ]
+    },
+    "drone/prop_wash_loop": {
+      "prompt": "steady FPV drone propeller buzz, seamless loop, no doppler",
+      "duration_s": 6.0,
+      "loop": true,
+      "takes": [
+        {
+          "file": "drone/prop_wash_loop_1.mp3",
+          "generation_id": "FMZ1mgj9fPDwGnno2Vt9",
+          "session_id": "ScTQWiUA1rUG5sa9AmKs"
+        },
+        {
+          "file": "drone/prop_wash_loop_2.mp3",
+          "generation_id": "FR7xPi7RVAB0QHfVUmnv",
+          "session_id": "4dPPt6REj9zGsAywdUwB"
+        }
+      ]
+    },
+    "drone/motor_loop": {
+      "prompt": "FPV drone brushless motors at steady mid throttle, close, seamless loop, no doppler",
+      "duration_s": 10.0,
+      "loop": true,
+      "takes": [
+        {
+          "file": "drone/motor_loop_1.mp3",
+          "generation_id": "aZDSbeo1mq8O2LRj67aL",
+          "session_id": "oldUW4fvl1z2a2u2N8nw"
+        },
+        {
+          "file": "drone/motor_loop_2.mp3",
+          "generation_id": "P400VRzt2zJ3px2zexQ2",
+          "session_id": "fHmrGq41j8L2p2yFjxKa"
+        }
+      ]
+    },
+    "ambience/wind_rush_loop": {
+      "prompt": "high speed wind rush, seamless loop, no music",
+      "duration_s": 8.0,
+      "loop": true,
+      "takes": [
+        {
+          "file": "ambience/wind_rush_loop_1.mp3",
+          "generation_id": "KufFfXCXMZGLxKlPK64X",
+          "session_id": "cIFD75HRfC02zH9jm5aS"
+        },
+        {
+          "file": "ambience/wind_rush_loop_2.mp3",
+          "generation_id": "u4e7bMOsd5GbLybCRqdu",
+          "session_id": "HCr86db81bK2C2utjmTe"
+        }
+      ]
+    },
+    "ambience/dive_wind": {
+      "prompt": "wind rushing louder during a steep fast dive, building intensity",
+      "duration_s": 3.0,
+      "loop": false,
+      "takes": [
+        {
+          "file": "ambience/dive_wind_1.mp3",
+          "generation_id": "ir5s4ZQk4pTTGNeSFcxq",
+          "session_id": "B0QgeK2keGG6M4J6so5J"
+        },
+        {
+          "file": "ambience/dive_wind_2.mp3",
+          "generation_id": "KR0gIECm3cUkD0ussTwr",
+          "session_id": "R8GMBLkCVNv8Edv8ebVV"
+        }
+      ]
+    },
+    "bed/forest": {
+      "prompt": "calm forest ambience, light breeze in leaves, distant birds, no music, seamless loop",
+      "duration_s": 30.0,
+      "loop": true,
+      "takes": [
+        {
+          "file": "bed/forest_1.mp3",
+          "generation_id": "5qfi6abIlOTF2RADu0AR",
+          "session_id": "wn1LZzjz8aVy88QfBUta"
+        },
+        {
+          "file": "bed/forest_2.mp3",
+          "generation_id": "7CgDoKICfCqzk2Vq0cnL",
+          "session_id": "swwkDqdPv5U5UpcF6LFs"
+        }
+      ]
+    },
+    "bed/mountain_wind": {
+      "prompt": "high mountain ridge ambience, steady cold wind, open space, no music, seamless loop",
+      "duration_s": 30.0,
+      "loop": true,
+      "takes": [
+        {
+          "file": "bed/mountain_wind_1.mp3",
+          "generation_id": "K1cRTaRXMcnRKpCKX1c7",
+          "session_id": "tO4oYfQXPoN4C3S8SFBk"
+        },
+        {
+          "file": "bed/mountain_wind_2.mp3",
+          "generation_id": "0208vkjQbZyMkagCJPSS",
+          "session_id": "RNkNVWtauZok4qUvX5Fv"
+        }
+      ]
+    },
+    "bed/beach": {
+      "prompt": "ocean waves breaking on a beach, gentle wind, no music, seamless loop",
+      "duration_s": 30.0,
+      "loop": true,
+      "takes": [
+        {
+          "file": "bed/beach_1.mp3",
+          "generation_id": "UyN2OEE1GLC4rYinRnmn",
+          "session_id": "NL0VB3cSItegPfGJURb2"
+        },
+        {
+          "file": "bed/beach_2.mp3",
+          "generation_id": "uEWsC0CF9ducXheRVUdN",
+          "session_id": "1dYjLPzc3ZCr3qfEpkE5"
+        }
+      ]
+    },
+    "bed/river": {
+      "prompt": "fast river and waterfall rushing water ambience, no music, seamless loop",
+      "duration_s": 30.0,
+      "loop": true,
+      "takes": [
+        {
+          "file": "bed/river_1.mp3",
+          "generation_id": "QdmbtqEylMRrUBVdR9vv",
+          "session_id": "gshDv5KCRBa1BpIuvg2G"
+        },
+        {
+          "file": "bed/river_2.mp3",
+          "generation_id": "O2MrJYJwBMvaiHPYgyOV",
+          "session_id": "dFYArvnaSfbHtKfA31CM"
+        }
+      ]
+    },
+    "bed/city": {
+      "prompt": "distant city ambience from above, soft traffic hum, no voices close up, seamless loop",
+      "duration_s": 30.0,
+      "loop": true,
+      "takes": [
+        {
+          "file": "bed/city_1.mp3",
+          "generation_id": "XmLKBtxeATgmdDHW6Ahv",
+          "session_id": "PQoqvXtNfJlRJWa7zILK"
+        },
+        {
+          "file": "bed/city_2.mp3",
+          "generation_id": "edpc9dKHSXYiloOqA2Op",
+          "session_id": "Z3z9AUnh5NLd3xm8tO34"
+        }
+      ]
+    },
+    "bed/snow": {
+      "prompt": "quiet snowy mountain ambience, soft muffled wind, no music, seamless loop",
+      "duration_s": 30.0,
+      "loop": true,
+      "takes": [
+        {
+          "file": "bed/snow_1.mp3",
+          "generation_id": "MLxc5NlN4GKDxVKe8ETE",
+          "session_id": "PKsIBESg1KDMmh5OqPhA"
+        },
+        {
+          "file": "bed/snow_2.mp3",
+          "generation_id": "wg6h6BxDOHUkVoEqximE",
+          "session_id": "KnaQVJJN3SHwoYixyz5a"
+        }
+      ]
+    },
+    "bed/desert": {
+      "prompt": "dry desert ambience, warm light wind, insects far away, no music, seamless loop",
+      "duration_s": 30.0,
+      "loop": true,
+      "takes": [
+        {
+          "file": "bed/desert_1.mp3",
+          "generation_id": "OjQQc8lCrh8oiOUHqcfd",
+          "session_id": "8XIfTtG4swvGWVTaR0qq"
+        },
+        {
+          "file": "bed/desert_2.mp3",
+          "generation_id": "IAglQKfOSqxrwYpbd728",
+          "session_id": "gR7by6PEDbHF41GCHHko"
+        }
+      ]
+    },
+    "bed/night": {
+      "prompt": "night ambience, crickets, calm air, no music, seamless loop",
+      "duration_s": 30.0,
+      "loop": true,
+      "takes": [
+        {
+          "file": "bed/night_1.mp3",
+          "generation_id": "riCxhwKgOwO5BvDkiMUt",
+          "session_id": "OWAKBVEVB6RKgJ8vAoU6"
+        },
+        {
+          "file": "bed/night_2.mp3",
+          "generation_id": "aYO0eLi5IF973t7yZ1bU",
+          "session_id": "mKGDREls1UQaVyC3whul"
+        }
+      ]
+    },
+    "bed/quarry": {
+      "prompt": "open quarry ambience, wind over rock walls, distant machinery hum, seamless loop",
+      "duration_s": 30.0,
+      "loop": true,
+      "takes": [
+        {
+          "file": "bed/quarry_1.mp3",
+          "generation_id": "vvYJkj6XvBcIDO7xgfXr",
+          "session_id": "83pFRElgXbH9Jn7ExHWE"
+        },
+        {
+          "file": "bed/quarry_2.mp3",
+          "generation_id": "69CHrrPIrZHwFxJ9fQWg",
+          "session_id": "C53buf7TCdUOFxaSyXxA"
+        }
+      ]
+    }
+  }
+}

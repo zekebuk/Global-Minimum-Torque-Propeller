@@ -8,13 +8,26 @@
    ```
 
 ## SFX library (once, then reuse forever)
+**Already generated (Nov 2026):** 24 sounds × 2 takes made in the ElevenLabs creative flow - whooshes (short, long, reverse),
+sub-hit and metal impacts, 1- and 2-bar risers at 128 BPM, glitch/tape-stop transitions, FPV motor rev/flyby/loop/prop-wash,
+dive wind, and 30 s seamless beds (quarry, forest, mountain wind, beach, city, desert, river, snow, night).
+`assets/sfx_manifest.json` lists them (prompt, length, loop, generation ids). Download on the desktop with the private links
+file Claude sends you (it is never committed - the repo is public, and the links expire):
+```powershell
+python scripts\fetch_sfx.py --links $HOME\Downloads\sfx_links.json   # -> D:\FPV\SFX\<category>\<name>_<n>.mp3 + library.json
+```
+Each file is length-checked; existing files are skipped. If the links have expired, ask Claude for fresh ones.
+`build_resolve_project.py` then imports the folder automatically into `03_SFX`, one sub-bin per category
+(ambience, bed, drone, impact, riser, transition, whoosh); re-running only adds new files.
+
+To generate more with your own API key instead:
 ```powershell
 python scripts\make_sfx_library.py --dry-run                 # 14 sounds: whooshes, sub-hits, risers, drone, wind
 python scripts\make_sfx_library.py --bpm 128 --variants 3    # 3 takes each; risers sized to 1 and 2 bars at 128 BPM
 ```
 This writes `D:\FPV\SFX\<category>\*.mp3` plus `library.json`, a record of the prompt, model and date for each file. Re-running
-only fills gaps. Run it again with `--only riser --bpm 140` to get risers for a different tempo. Import the SFX folder into
-Resolve's `03_SFX` bin once.
+only fills gaps. Run it again with `--only riser --bpm 140` to get risers for a different tempo. The next
+`build_resolve_project.py` run picks the new files up in `03_SFX`.
 
 How to use them in a reel (see [STYLE_GUIDE.md](STYLE_GUIDE.md)):
 
