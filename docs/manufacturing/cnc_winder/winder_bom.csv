@@ -1,0 +1,17 @@
+item,qty,unit_usd,total_usd,source
+Elecrow 6x CNC Controller for FluidNC (ESP32),1,49.00,49.00,"https://www.elecrow.com/6x-cnc-controller-for-fluidnc.html (search result, 2026-11-05)"
+TMC2209 stepper driver modules,3,9.00,27.00,estimate
+"NEMA17 stepper 0.45 N·m (A, Z, X)",3,15.00,45.00,estimate
+MGN12H linear rail 200 mm + carriage (Z),1,30.95,30.95,https://www.fruugo.us/mgn12h-miniature-linear-rail-slide-guide-strength-linear-rail-guide-for-cnc-machines-200mm/p-402239549 (search result)
+MGN12H linear rail 150-200 mm + carriage (X),1,30.95,30.95,same as above
+"T8 lead screw 8 mm lead, 150 mm + anti-backlash nut + coupler",2,15.00,30.00,estimate
+"A axis: GT2 20T/100T pulleys + 200 mm belt (5:1), 8 mm shaft, 2 x KP08 pillow blocks",1,35.00,35.00,estimate
+"Stator mandrel (turned, DWG-W01) + clamp nut + T1 index pin",1,40.00,40.00,estimate - turn in-house or JLCCNC
+"Needle: 18RW 304 hypodermic tube 0.050 x 0.033 in (McMaster 8988K48), tip polished",1,20.00,20.00,https://www.mcmaster.com/hypodermic-tubing (price not shown - estimate)
+Needle holder + wire guide eyelet (ceramic),1,15.00,15.00,estimate
+"Wire tensioner, magnetic, 0.5-1.2 mm range (or DIY dancer + felt brake ~$30)",1,150.00,150.00,https://cncwindingmachine.en.made-in-china.com/product/cmuRLrQOOgkS/ (no price - estimate)
+Spool holder for 10 lb spool + guide pulleys,1,25.00,25.00,estimate
+"Frame: 2020 extrusion 2 m, 10 mm Al base plate, brackets, T-nuts",1,90.00,90.00,estimate
+"24 V 6 A power supply, E-stop, foot pedal, 3 limit switches, wiring, enclosure box",1,75.00,75.00,estimate
+"Printed parts (P1S, PETG/CF), fasteners",1,30.00,30.00,estimate
+TOTAL,,,692.90,

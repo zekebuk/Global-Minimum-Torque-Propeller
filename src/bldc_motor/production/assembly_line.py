@@ -9,8 +9,8 @@ Strategy (driven by the < USD 15k capital limit):
   6 turns per tooth of single-strand AWG23 suits this), termination, impregnation, both
   subassemblies, balancing, final assembly, and 100 % end-of-line test.
 * Automatic outrunner needle winders cost more than the whole budget (USD 15-25k+ listings).
-  The upgrade path is an open-source CNC winder (budgeted) or a commercial winder once volume
-  justifies it.
+  The upgrade path is the from-scratch 3-axis CNC winder in ``production.winder`` (budgeted, about
+  3 min per stator), and later a commercial winder once volume justifies it.
 
 Equipment prices come from the research of 2026-11-05 (see ``status``). Cycle times are
 engineering estimates to be replaced by a time study during the pilot build. Currency
@@ -22,6 +22,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 EUR = 1.16
+
+
+def _winder_bom_total() -> float:
+    from bldc_motor.production.winder import bom_total
+
+    return round(bom_total(), 2)
+
+
 BUDGET_USD = 15_000.0
 CONTINGENCY = 0.15
 
@@ -57,13 +65,13 @@ EQUIPMENT: tuple[Equipment, ...] = (
     ),
     Equipment(
         "cnc_winder",
-        "Open-source CNC needle winder build (aotenjo-xyz/winder, MIT) - phase 2",
+        "From-scratch 3-axis CNC needle winder (docs/manufacturing/cnc_winder) - phase 2",
         "S3",
-        1000.0,
-        "GitHub aotenjo-xyz/winder",
-        "https://github.com/aotenjo-xyz/winder",
+        _winder_bom_total(),
+        "in-house build (BOM: cnc_winder/winder_bom.csv)",
+        "",
         "estimate",
-        "No published BOM; development risk",
+        "Toolpath verified in software; ~3 min/stator vs 10 min by hand",
     ),
     Equipment(
         "press",

@@ -166,6 +166,26 @@ def cmd_production(args) -> int:
     return 0 if p.within_budget else 1
 
 
+def cmd_winder(args) -> int:
+    from bldc_motor.production.winder_package import build_winder_package, write_readme
+
+    result = build_winder_package(args.design, args.out, args.name)
+    readme = write_readme(result, args.out, args.name)
+    t = result["timing"]
+    print(
+        f"turns per tooth {result['verification']['turns_per_tooth']} -> {'MATCH' if result['turns_ok'] else 'MISMATCH'}"
+    )
+    print(
+        f"collisions: {result['verification']['collision_count']}; clearance checks: {'all OK' if all(c[3] for c in result['checks']) else 'FAILURES'}"
+    )
+    print(
+        f"cycle: machine {t['machine_min']:.2f} min + operator {t['operator_min']:.1f} min = {t['station_min']:.2f} min/stator; wire {result['wire_m']:.2f} m"
+    )
+    print(f"hardware BOM ~${result['bom_total']:,.0f}; wrote {readme} and {len(result['files'])} files")
+    ok = result["turns_ok"] and result["verification"]["collision_count"] == 0 and all(c[3] for c in result["checks"])
+    return 0 if ok else 1
+
+
 def add_design_commands(sub) -> None:
     design = sub.add_parser("design", help="RL-driven motor design pipeline (geometry -> hardware package)")
     dsub = design.add_subparsers(dest="design_command", required=True)
@@ -205,6 +225,12 @@ def add_design_commands(sub) -> None:
     p.add_argument("--volume", type=float, default=5000.0)
     p.add_argument("--out", default="docs/manufacturing")
     p.set_defaults(func=cmd_production)
+
+    p = dsub.add_parser("winder", help="from-scratch CNC needle winder: toolpath, G-code, verification, CAD, BOM")
+    p.add_argument("--design", default="data/motor_designs/rl_5in_freestyle_6s_v1/design.json")
+    p.add_argument("--name", default="RL2407")
+    p.add_argument("--out", default="docs/manufacturing/cnc_winder")
+    p.set_defaults(func=cmd_winder)
 
     p = dsub.add_parser("evaluate", help="evaluate a design JSON against a mission")
     p.add_argument("design")

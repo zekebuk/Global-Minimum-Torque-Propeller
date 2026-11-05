@@ -1,6 +1,6 @@
 key,item,station,qty,unit_usd,total_usd,vendor,url,price_status,notes
 wind_jig,"Hand winding kit: 3D-printed tooth-indexing jig, wire tensioner, spool stand, counters (2 seats)",S3,1,300.00,300.00,DIY (P1S-printed),,estimate,No commercial outrunner hand jig found
-cnc_winder,"Open-source CNC needle winder build (aotenjo-xyz/winder, MIT) - phase 2",S3,1,1000.00,1000.00,GitHub aotenjo-xyz/winder,https://github.com/aotenjo-xyz/winder,estimate,No published BOM; development risk
+cnc_winder,From-scratch 3-axis CNC needle winder (docs/manufacturing/cnc_winder) - phase 2,S3,1,692.90,692.90,in-house build (BOM: cnc_winder/winder_bom.csv),,estimate,Toolpath verified in software; ~3 min/stator vs 10 min by hand
 press,Grizzly T26414 2-ton arbor press + turned/printed anvils,S7/S8,1,271.47,271.47,Grizzly,https://www.grizzly.com/products/grizzly-2-ton-arbor-press/t26414,snippet,
 oven,"Labnique 30 L forced-air oven, 300 C",S6,1,998.00,998.00,Labnique via reach.dog,https://m.reach.dog/shop/labnique/products/digital-bench-top-forced-air-drying-oven-sterilizing-oven-with-over-heat-protection-and-adjustable-fan-speed-30l-1-1-cu-ft-300-c-800w-110v,snippet,Vent to outside for varnish solvents
 vent,Inline fan + duct for oven/varnish corner,S6,1,150.00,150.00,-,,estimate,

@@ -64,9 +64,28 @@ def suppliers_markdown() -> str:
     return "\n".join(lines) + "\n"
 
 
+def _winder_station_min() -> float:
+    """Station time of the from-scratch CNC winder for the reference design (machine + operator)."""
+
+    from bldc_motor.design import manufacturing_package as mp
+    from bldc_motor.design import mechanical, model
+    from bldc_motor.production import winder
+
+    design_path = (
+        Path(__file__).resolve().parents[3] / "data" / "motor_designs" / "rl_5in_freestyle_6s_v1" / "design.json"
+    )
+    if not design_path.exists():
+        return 3.0
+    design, _ = mp.load_design(design_path)
+    analysis = model.analyze(design)
+    tp = winder.generate(mechanical.derive(analysis), analysis)
+    return winder.cycle_time(tp)["station_min"]
+
+
 def plan_markdown(volume: float = 5000.0) -> str:
     p = al.plan(volume)
-    p_cnc = al.plan(volume, cnc_winder_min=3.0)
+    winder_min = _winder_station_min()
+    p_cnc = al.plan(volume, cnc_winder_min=winder_min)
     lines = [
         "# RL2407 assembly line plan (capital < $15k)",
         "",
@@ -87,8 +106,9 @@ def plan_markdown(volume: float = 5000.0) -> str:
         "",
         "Automatic outrunner needle winders were all found **above the entire budget** ($15-16k QIWEI, $18k Rimy, $25k+ NIDE "
         "listings; Vacuz quotes 90-150k RMB). This design was chosen partly for winding simplicity: 6 turns per tooth, "
-        "single-strand AWG23, slot fill 0.38 and a 2.5 mm needle opening. That makes jig-indexed hand winding realistic, and an "
-        "open-source CNC winder is budgeted as phase 2.",
+        "single-strand AWG23, slot fill 0.38 and a 2.5 mm needle opening. That makes jig-indexed hand winding realistic, and a "
+        f"**from-scratch 3-axis CNC needle winder** (~${al._winder_bom_total():,.0f} hardware, {winder_min:.1f} min/stator, toolpath verified; "
+        "see `cnc_winder/README.md`) is budgeted as phase 2.",
         "",
         "## Process flow",
         "",
@@ -143,7 +163,7 @@ def plan_markdown(volume: float = 5000.0) -> str:
         "",
         "## Capacity (single shift, 7 productive h/day, 230 days/yr)",
         "",
-        "| Operators | Hand winding (motors/yr) | With CNC winder at 3 min (motors/yr) |",
+        f"| Operators | Hand winding (motors/yr) | With CNC winder at {winder_min:.1f} min (motors/yr) |",
         "| --- | --- | --- |",
     ]
     for n in (1, 2, 3):
@@ -175,7 +195,7 @@ def plan_markdown(volume: float = 5000.0) -> str:
     lines += [
         "",
         f"At volume, labour (${p.unit_cost[list(p.unit_cost)[1]]['labour_usd']:.2f} at ${al.LABOUR_RATE_USD_H:.0f}/h) is the largest cost line, so the "
-        f"CNC winder (S3 10 -> 3 min) is worth about ${(p.unit_cost[list(p.unit_cost)[1]]['total_usd'] - p_cnc.unit_cost[list(p_cnc.unit_cost)[1]]['total_usd']):.2f}/motor. "
+        f"CNC winder (S3 10 -> {winder_min:.1f} min) is worth about ${(p.unit_cost[list(p.unit_cost)[1]]['total_usd'] - p_cnc.unit_cost[list(p_cnc.unit_cost)[1]]['total_usd']):.2f}/motor. "
         "Most BOM values are estimates until the RFQs in `suppliers.md` come back. Treat the pilot figures as planning numbers, not quotes.",
         "",
         "## Ramp plan",
