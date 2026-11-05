@@ -1,0 +1,144 @@
+# PF10 - fully 3D-printed 10-inch FPV frame with onboard Jetson
+# Single source of truth for the whole pipeline (analysis -> optimization -> CAD -> Onshape -> print plan).
+# Units: mm, g, N, s, deg unless a key says otherwise.
+#
+# Every value tagged "ASSUMPTION" is a placeholder chosen from first principles or typical
+# hardware; replace it with measured data for your parts (see docs/test_plan.md).
+
+project:
+  name: PF10
+  description: Fully printed 10-inch long-range FPV quad, modular arms, Jetson companion computer
+  printer: Bambu Lab X1 Carbon
+  printer_build_volume: [256, 256, 256]
+
+propulsion:
+  prop_diameter_in: 10.0
+  prop_blades: 2
+  # Static coefficients, n in rev/s: T = CT*rho*n^2*D^4, P = CP*rho*n^3*D^5
+  ct_static: 0.110          # ASSUMPTION - typical 10x5 two-blade static value
+  cp_static: 0.045          # ASSUMPTION
+  air_density: 1.225        # kg/m^3, sea level ISA
+  motor_max_thrust_N: 22.0  # ASSUMPTION - per motor, 6S, 2807-class 1300KV + 10x5; replace with thrust-stand data
+  motor_mass_g: 58.0        # ASSUMPTION - 2807 class incl. wires
+  prop_mass_g: 14.0
+  motor_base_diameter: 34.0
+  motor_height: 28.0        # base to prop seat
+  motor_cg_above_base: 12.0
+  motor_patterns: [16.0, 19.0]  # square M3 patterns supported on the arm pad (16x16 and 19x19)
+  motor_bolt_clearance_d: 3.3
+  motor_shaft_clearance_d: 9.0
+  motor_wire_count: 3
+  motor_wire_od: 1.9        # 18 AWG silicone wire OD
+
+electronics:
+  jetson:
+    name: Jetson Orin NX/Nano module on compact carrier, with heatsink + fan
+    envelope: [100.0, 80.0, 36.0]   # L x W x H, ASSUMPTION - covers Orin Nano devkit carrier footprint
+    mass_g: 175.0
+    # Carrier mounting-hole rectangle (center-to-center). PLACEHOLDER - measure your carrier.
+    # The tray has slots of +/- tray_slot_travel around this so most carriers fit without re-CAD.
+    mount_rect: [86.0, 58.0]
+    mount_hole_d: 2.7               # M2.5 clearance
+    tray_slot_travel: 4.0
+    fan_diameter: 40.0
+    power_W: 20.0                   # ASSUMPTION - Orin NX 16GB in 20 W mode
+    isolation_target_Hz: 30.0       # Jetson tray soft-mount natural frequency target
+  fc_stack:
+    pattern: 30.5
+    board_size: 37.0
+    height: 22.0                    # ESC + FC + soft mounts incl. connectors
+    mass_g: 38.0
+  vtx_mass_g: 35.0                  # digital VTX + camera
+  camera_width: 20.0                # 20 mm micro camera body (19 mm cameras use spacer)
+  camera_tilt_range_deg: [0, 45]
+  gps_mass_g: 15.0
+  receiver_mass_g: 5.0
+  bec_mass_g: 12.0                  # Jetson 5V/19V regulator
+  wiring_mass_g: 70.0               # ASSUMPTION - wires, XT60, MR30, heat shrink
+  hardware_mass_g: 40.0             # ASSUMPTION - bolts, nuts, heat-set inserts, grommets
+  battery:
+    name: 6S2P 21700 Li-ion (endurance pack; swap for LiPo by editing below)
+    envelope: [140.0, 72.0, 44.0]
+    mass_g: 860.0
+    strap_width: 20.0
+
+layout:
+  # Geometry optimisation of motor positions (see frame_pipeline/layout.py)
+  prop_tip_clearance_min: 20.0      # prop tip to adjacent prop tip
+  prop_to_canopy_clearance_min: 8.0 # prop disc to canopy footprint in plan view
+  arm_angle_bounds_deg: [35.0, 55.0]  # arm angle measured from the forward (+X) axis
+  max_aspect_deviation: 0.25        # |front-spacing/side-spacing - 1| limit (tuning symmetry)
+  camera_keepout_front: 18.0        # extra length in front of the canopy for the camera cage
+
+body:
+  wall_t: 2.0
+  bottom_plate_t: 3.2
+  top_plate_t: 3.0
+  jetson_margin: 3.0                # canopy/body footprint margin around Jetson envelope
+  canopy_wall_t: 1.26                # 3 loops x 0.42 mm (PETG-HF, 0.4 nozzle)
+  grommet_height: 6.0               # Jetson tray standoff above top plate
+  socket_wall_t: 3.0                # material each side of the arm tenon
+  socket_clearance: 0.15            # per side, sliding fit for printed PA parts
+  stiffness_knockdown: 0.6          # ASSUMPTION - plate cut-outs/lightening reduce box EI to 60 %
+  insert_boss_d: 7.0
+  m3_insert_hole_d: 4.0             # M3 x 5.7 brass heat-set insert pilot
+  m3_clearance_d: 3.3
+  m3_nut_af: 5.6                    # nyloc nut across flats + clearance
+  m3_nut_pocket_depth: 2.6
+
+arm:
+  # Optimisation bounds (see frame_pipeline/arm_opt.py). Print orientation: flight-top face on the bed.
+  width_bounds: [14.0, 28.0]
+  root_height_bounds: [12.0, 34.0]
+  taper_ratio_bounds: [0.40, 1.00]  # tip height / root height
+  wall_loop_bounds: [2, 7]          # web thickness = loops * line_width
+  skin_layer_bounds: [4, 14]        # flange thickness = layers * layer_height
+  min_tip_height: 10.0
+  channel_min_width: 8.0            # wire channel width (3 x 18 AWG + slack)
+  channel_min_height: 6.0           # channel height at the tip, incl. 45 deg self-supporting roof
+  tenon_length: 30.0                # length of arm root inside the body socket
+  tenon_ear_width: 8.0              # extra tenon width per side for the clamp bolts (M3, >= 2.3 mm wall each side)
+  pad_diameter: 36.0                # motor pad (19x19 pattern needs >= 2*13.4 + 2*(1.65 + 1.3 wall))
+  motor_clamp_t: 4.0                # material under motor bolts (counterbored from below)
+  edge_fillet: 1.5
+  drag_coefficient: 1.0             # ASSUMPTION - rounded box in slipstream
+  slipstream_factor: 1.5            # local slipstream velocity / hover induced velocity at the arm
+  fe_elements: 24
+
+loads:
+  dynamic_factor: 1.25              # limit load = max thrust * this (gusts, punch-outs)
+  safety_factor: 1.5                # ultimate / limit
+  fatigue_alt_fraction: 0.5         # alternating thrust amplitude / hover thrust (1P imbalance + control)
+  tip_slope_limit_deg: 1.0          # max thrust-vector tilt from arm bending at limit load
+  # Modal placement. A printed 150 mm arm with an 80 g motor cannot be pushed above hover blade-pass
+  # (~180 Hz) at sane mass, so every mode must instead sit OUTSIDE the cruise-throttle bands of the
+  # rotor harmonics k*1P (k = 1..harmonic_count), each widened by band_margin. Transient sweeps during
+  # punch-outs are handled by the Betaflight RPM filter (bidirectional DShot).
+  cruise_thrust_factor: 1.3         # cruise band = hover .. this * hover thrust (per motor)
+  # Excitation orders: 1P (mass/aero imbalance) + blade-pass multiples (blades sweeping over the arm:
+  # 2P, 4P, 6P for a 2-blade prop). Odd higher orders are weak and not banned. Edit for 3-blade props.
+  harmonics: [1, 2, 4, 6]
+  band_margin: 1.15
+  min_modal_frequency_Hz: 100.0     # absolute floor
+  fuse_ratio_min: 1.3               # body socket strength / arm root strength (arm must break first)
+  joint_contact_layer: 1.0          # ASSUMPTION - effective compliant layer at socket contact (mm)
+  joint_contact_fraction: 0.3       # ASSUMPTION - fraction of socket faces actually in contact
+
+optimization:
+  nonarm_frame_mass_initial_g: 160.0   # printed parts except arms; replaced by CAD mass after the first CAD pass
+  closure_iterations: 5
+  closure_tol_g: 2.0
+  seed: 7
+  de_maxiter: 100
+  de_popsize: 15
+
+materials_assignment:
+  arm: PPA-CF
+  bottom_body: PAHT-CF
+  top_plate: PAHT-CF
+  jetson_tray: PAHT-CF
+  canopy: PETG-HF
+  camera_mount: PETG-HF
+  battery_pad: PETG-HF
+  landing_foot: PETG-HF
+  gps_mast: PETG-HF

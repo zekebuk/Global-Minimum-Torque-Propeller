@@ -1,0 +1,114 @@
+# Printed-material database for the Bambu Lab X1C.
+#
+# "tds" values: Bambu Lab technical data sheets (ISO 527 tensile, ISO 178 flexural), solid coupons,
+# retrieved 2026-11-05:
+#   PPA-CF  TDS V1.0  https://store.bblcdn.eu/s8/default/f592e57fe69c40289897513bdd2b61bc/Bambus_PPA-CF_Technical_Data_Sheet_2ab26420-79f5-4692-888e-090006814050.pdf
+#   PAHT-CF TDS V3.0  https://wiki.bambulab.com/filament-acc/asacf-pahtcf/65f1b18a6d6142d794a1a6a00f1496ef.pdf  (dry state)
+#   PETG HF TDS V1.0  https://store.bblcdn.com/3a230e260a3a47c2b0db0156e07eef91.pdf
+#   Drying / plate / nozzle guidance: wiki.bambulab.com/en/filament/petcf_ppacf and /asacf_pahtcf
+# Values marked ASSUMPTION were not on the retrieved pages and need checking (weigh a coupon, read the TDS).
+#
+# Design allowables are built in frame_pipeline/materials.py:
+#   E_design     = min(E_tensile_xy, E_flex_xy) * k_E_process * k_E_env
+#   S_static     = sigma_xy * k_process * k_env                (compared with ultimate load)
+#   S_endurance  = fatigue_ratio * S_static                    (Goodman, ~1e8 cycles at rotor 1P)
+#   tau_interlam = interlaminar_shear_ratio * sigma_z * k_process * k_env
+#
+# k_process: coupon -> real part (voids, fibre orientation, wall/infill seams, X1C limits).
+# k_env:     60 C service near ESC/Jetson + humidity conditioning (polyamides absorb water).
+
+PPA-CF:
+  tds:
+    E_tensile_xy: 11800   # MPa  +/-670
+    E_tensile_z: 4300     # MPa  +/-340
+    E_flex_xy: 9860       # MPa  +/-480
+    sigma_xy: 168         # MPa  +/-4
+    sigma_z: 57           # MPa  +/-5
+    flex_strength_xy: 208 # MPa
+    elongation_xy: 3.2    # %
+    impact_unnotched: 41.7  # kJ/m^2
+  density: 1.17           # g/cm^3  ASSUMPTION - weigh a printed coupon
+  hdt_C: 227              # ASSUMPTION
+  poisson: 0.35           # ASSUMPTION
+  shear_modulus_factor: 0.75  # G = factor * E/(2(1+nu)); printed CF is weaker in shear than isotropic
+  k_E_process: 0.85
+  k_E_env: 0.90
+  k_process: 0.65         # lower than PAHT-CF: X1C hotend tops out at 300 C (bottom of PPA-CF window), passive chamber
+  k_env: 0.85
+  fatigue_ratio: 0.25
+  interlaminar_shear_ratio: 0.5
+  print:
+    nozzle: "0.6 mm hardened steel (wiki: hardened + 0.6 recommended; 0.4 high-flow not recommended)"
+    line_width: 0.62
+    layer_height: 0.24
+    nozzle_temp_C: 300     # X1C maximum; check the Bambu Studio system profile
+    bed_temp_C: 110        # preheat bed at max 15 min with door closed to warm the chamber (wiki)
+    plate: "Textured PEI or Engineering plate + Bambu glue stick (glue required)"
+    drying: "100-140 C convection oven 8-12 h, or heated bed 110-120 C 12 h, or AMS HT 80 C 12 h"
+    feed: "external spool from a heated dry box (not the standard AMS)"
+    brim: 5 mm
+    notes: "Enclosed printer required. Keep infill <= 50 % on non-structural parts (warping, wiki)."
+
+PAHT-CF:
+  tds:
+    E_tensile_xy: 3860    # MPa  +/-230 (dry)
+    E_tensile_z: 2100     # MPa  ASSUMPTION (not on the retrieved page)
+    E_flex_xy: 4230       # MPa  +/-210
+    sigma_xy: 92          # MPa  +/-7
+    sigma_z: 47           # MPa  +/-5
+    flex_strength_xy: 125 # MPa
+    elongation_xy: 8.4    # %
+    impact_unnotched: 57.5
+  density: 1.06           # ASSUMPTION
+  hdt_C: 194              # wiki, 0.45 MPa
+  poisson: 0.38
+  shear_modulus_factor: 0.80
+  k_E_process: 0.85
+  k_E_env: 0.80           # polyamide modulus drops when conditioned; PAHT claims ~50 % lower uptake than PA-CF
+  k_process: 0.75
+  k_env: 0.80
+  fatigue_ratio: 0.25
+  interlaminar_shear_ratio: 0.5
+  print:
+    nozzle: "0.6 mm hardened steel (0.4 hardened acceptable for small parts)"
+    line_width: 0.62
+    layer_height: 0.24
+    nozzle_temp_C: 280
+    bed_temp_C: 100
+    plate: "Textured PEI or Engineering plate + Bambu glue stick"
+    drying: "80 C 8-12 h (oven, heated bed or AMS HT)"
+    feed: "AMS (not AMS lite) from dried spool, or external spool"
+    brim: 3 mm on plates
+    notes: "Strong Z bonding vs plain PA-CF - preferred for the body where loads cross layers."
+
+PETG-HF:
+  tds:
+    E_tensile_xy: 1810    # MPa  +/-190
+    E_tensile_z: 1540     # MPa  +/-130
+    E_flex_xy: 2050       # MPa  (reseller-reported value)
+    sigma_xy: 34          # MPa  +/-4
+    sigma_z: 23           # MPa  +/-4
+    flex_strength_xy: 60  # ASSUMPTION
+    elongation_xy: 8.0    # ASSUMPTION
+    impact_unnotched: 31.5
+  density: 1.27           # ASSUMPTION
+  hdt_C: 69               # ASSUMPTION - keep away from Jetson exhaust/ESC
+  poisson: 0.38
+  shear_modulus_factor: 0.90
+  k_E_process: 0.90
+  k_E_env: 0.90           # stiffness falls fast above ~60 C
+  k_process: 0.80
+  k_env: 0.70
+  fatigue_ratio: 0.25
+  interlaminar_shear_ratio: 0.5
+  print:
+    nozzle: "0.4 mm (stainless or hardened)"
+    line_width: 0.42
+    layer_height: 0.20
+    nozzle_temp_C: 250
+    bed_temp_C: 70
+    plate: "Textured PEI (no glue) or Cool/Engineering plate with glue as release agent"
+    drying: "65 C 8 h"
+    feed: "AMS"
+    brim: none
+    notes: "Ductile - used for sacrificial / non-structural parts (canopy, camera cage, feet)."
