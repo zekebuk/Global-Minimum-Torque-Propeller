@@ -1,5 +1,6 @@
 numpy>=1.24
 pillow>=10      # title cards (fpvpipe/titles.py)
+zstandard>=0.22 # .drx node templates (scripts/make_node_template.py)
 pytest>=7  # tests only
 # optional, for youtube_publish.py --upload:
 # google-api-python-client
