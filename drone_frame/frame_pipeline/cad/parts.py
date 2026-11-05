@@ -11,7 +11,7 @@ import math
 
 import cadquery as cq
 
-from ..geometry import FrameGeometry, arm_axes, arm_height_at, arm_section_profile
+from ..geometry import FrameGeometry, arm_axes, arm_height_at, arm_section_profile, socket_r0, tenon_section
 
 COS30 = math.cos(math.radians(30))
 
@@ -23,10 +23,6 @@ def cyl(x: float, y: float, z0: float, h: float, d: float) -> cq.Workplane:
 
 def box(x0, x1, y0, y1, z0, z1) -> cq.Workplane:
     return cq.Workplane("XY").box(x1 - x0, y1 - y0, z1 - z0, centered=False).translate((x0, y0, z0))
-
-
-def hexagon(x: float, y: float, z0: float, h: float, af: float) -> cq.Workplane:
-    return cq.Workplane("XY").workplane(offset=z0).center(x, y).polygon(6, af / COS30).extrude(h)
 
 
 def place(wp: cq.Workplane, ang_deg: float, r: float, z: float = 0.0) -> cq.Workplane:
@@ -51,23 +47,18 @@ def motor_hole_points(g: FrameGeometry):
     return pts
 
 
-def tenon_plan(g: FrameGeometry, grow: float = 0.0, x_out: float | None = None):
-    """Arm root plan outline (arm-local XY). grow > 0 gives the matching socket pocket."""
-    Lt, bt, b, c = g.tenon_L, g.tenon_b / 2 + grow, g.arm_b / 2 + grow, g.tenon_chamfer
-    x_out = g.arm_L if x_out is None else x_out
-    return [(-Lt - grow, -bt), (-c, -bt), (0.0, -b), (x_out, -b), (x_out, b), (0.0, b), (-c, bt), (-Lt - grow, bt)]
-
-
 # ----------------------------------------------------------------------------- arm (PPA-CF)
 def make_arm(g: FrameGeometry) -> cq.Workplane:
     L, Lt, hr, ht = g.arm_L, g.tenon_L, g.arm_h_root, g.arm_h_tip
     r = g.pad_d / 2
     side = (cq.Workplane("XZ")
-            .polyline([(-Lt, 0), (L + r + 1, 0), (L + r + 1, -ht), (L, -ht), (0, -hr), (-Lt, -hr)]).close()
+            .polyline([(0, 0), (L + r + 1, 0), (L + r + 1, -ht), (L, -ht), (0, -hr)]).close()
             .extrude(g.tenon_b, both=True))
-    plan = cq.Workplane("XY").workplane(offset=-hr - 1).polyline(tenon_plan(g)).close().extrude(hr + 2)
+    plan = box(0.0, L, -g.arm_b / 2, g.arm_b / 2, -hr - 1, 1.0)
     pad = cq.Workplane("XY").workplane(offset=-ht).center(L, 0).circle(r).extrude(ht)
-    arm = side.intersect(plan).union(pad)
+    # tapered sliding-dovetail tenon: section shrinks by taper per side toward the inner end
+    tenon = loft_x(tenon_section(g, -Lt), -Lt, tenon_section(g, 0.0), 0.0)
+    arm = side.intersect(plan).union(tenon).union(pad)
 
     # wire channel: constant through the tenon, lofted (tapered) along the span, 45-deg self-supporting V
     x_end = g.wire_exit_x + 3.0
@@ -87,9 +78,9 @@ def make_arm(g: FrameGeometry) -> cq.Workplane:
     for dx, dy in motor_hole_points(g):
         cuts.append(cyl(L + dx, dy, -ht - 1, ht + 2, g.motor_hole_d))
         cuts.append(cyl(L + dx, dy, -hr - 1, hr + 1 - g.motor_clamp_t, 6.2))
-    # tenon clamp bolts
+    # retention: M3 brass heat-set inserts pressed into the dovetail foot from below
     for sy in (1, -1):
-        cuts.append(cyl(g.tenon_bolt_x, sy * g.tenon_bolt_y, -hr - 1, hr + 2, g.m3_clear))
+        cuts.append(cyl(g.tenon_bolt_x, sy * g.tenon_bolt_y, -hr - 1, 1 + g.dv_insert_depth, g.m3_insert))
     for c in cuts:
         arm = arm.cut(c)
     return arm
@@ -100,20 +91,27 @@ def place_arm(arm: cq.Workplane, g: FrameGeometry, ang: float) -> cq.Workplane:
 
 
 # ----------------------------------------------------------------------------- body (PAHT-CF)
+def loft_x(sec_a, xa: float, sec_b, xb: float) -> cq.Workplane:
+    """Ruled loft between two (y, z) sections on YZ planes at arm-local x = xa < xb."""
+    return (cq.Workplane("YZ").workplane(offset=xa).polyline(sec_a).close()
+            .workplane(offset=xb - xa).polyline(sec_b).close().loft(ruled=True))
+
+
 def _outline_solid(g: FrameGeometry, z0: float, h: float) -> cq.Workplane:
     hx, hy = g.body_hx, g.body_hy
     parts = [box(-hx, hx, -hy, hy, z0, z0 + h)]
-    r0 = g.root_radius - g.tenon_L - g.socket_wall_t - g.socket_clearance
+    r0 = socket_r0(g)
     for ang, _ in arm_axes(g):
         boss = box(r0 - g.root_radius, 0.0, -g.socket_half_w, g.socket_half_w, z0, z0 + h)
         parts.append(place(boss, ang, g.root_radius))
     return union_all(parts)
 
 
-def _socket_pocket(g: FrameGeometry, z0: float, z1: float) -> cq.Workplane:
-    """Arm-local pocket: tenon outline + clearance, open past the root face."""
-    pts = tenon_plan(g, grow=g.socket_clearance, x_out=8.0)
-    return cq.Workplane("XY").workplane(offset=z0).polyline(pts).close().extrude(z1 - z0)
+def socket_cavity(g: FrameGeometry) -> cq.Workplane:
+    """Arm-local dovetail socket: flanks + floor line-on-line with the seated tenon, straight sides
+    opened by dv_side_clear, open at the top, running from the back gap out past the mouth."""
+    xa, xb = -g.tenon_L - g.dv_home_gap, 8.0
+    return loft_x(tenon_section(g, xa, g.dv_side_clear, 1.0), xa, tenon_section(g, xb, g.dv_side_clear, 1.0), xb)
 
 
 RIB_H = 4.5        # battery-pad strap ribs (U-channels closed by the body floor)
@@ -133,7 +131,7 @@ def make_bottom_body(g: FrameGeometry) -> cq.Workplane:
     hx, hy, H, tb, w = g.body_hx, g.body_hy, g.H_int, g.t_bp, g.wall_t
     floor = _outline_solid(g, 0.0, tb)
     shell = box(-hx, hx, -hy, hy, tb, tb + H).cut(box(-hx + w, hx - w, -hy + w, hy - w, tb, tb + H + 1))
-    r0 = g.root_radius - g.tenon_L - g.socket_wall_t - g.socket_clearance
+    r0 = socket_r0(g)
     blocks = [place(box(r0 - g.root_radius, 0.0, -g.socket_half_w, g.socket_half_w, tb, tb + H), ang, g.root_radius)
               for ang, _ in arm_axes(g)]
     body = union_all([floor, shell] + blocks)
@@ -142,7 +140,7 @@ def make_bottom_body(g: FrameGeometry) -> cq.Workplane:
     p = g.stack_pattern / 2
     bosses = [cyl(sx * p, sy * p, tb, 5.0, g.boss_d) for sx in (1, -1) for sy in (1, -1)]
     bosses += [cyl(x, y, tb, H, g.boss_d) for x, y in g.top_bolt_pts]
-    cam_y = g.camera_w / 2 + 2.8 + 5.0
+    cam_y = camera_bolt_y(g)
     bosses += [cyl(hx - 4.0, sy * cam_y, tb, H, 8.0) for sy in (1, -1)]
     # battery-pad insert bosses (inserts pressed in from the underside)
     bosses += [cyl(x, y, tb, 5.0, g.boss_d) for x, y in pad_bolt_pts(g)]
@@ -150,16 +148,19 @@ def make_bottom_body(g: FrameGeometry) -> cq.Workplane:
 
     cuts = [cyl(x, y, -1.0, 7.0, g.m3_insert) for x, y in pad_bolt_pts(g)]
     for ang, _ in arm_axes(g):
-        cuts.append(place(_socket_pocket(g, tb + g.pedestal_h, tb + H + 1), ang, g.root_radius))
+        cuts.append(place(socket_cavity(g), ang, g.root_radius, g.z_arm_top))
         # back-wall window for the motor pigtail / MR30 connector
         chw = g.arm_b - 2 * g.arm_t_w + 4
-        win = box(-g.tenon_L - g.socket_wall_t - 2, -g.tenon_L + 0.5, -chw / 2, chw / 2,
-                  tb + g.pedestal_h + 1.5, tb + H + 1)
+        xb = -g.tenon_L - g.dv_home_gap
+        win = box(xb - g.socket_wall_t - 2, xb + 0.5, -chw / 2, chw / 2, tb + g.pedestal_h + 1.5, tb + H + 1)
         cuts.append(place(win, ang, g.root_radius))
         for sy in (1, -1):
-            hole = cyl(g.tenon_bolt_x, sy * g.tenon_bolt_y, -1, tb + H + 2, g.m3_clear)
-            nut = hexagon(g.tenon_bolt_x, sy * g.tenon_bolt_y, -1, 1 + g.m3_nut_depth, g.m3_nut_af)
-            cuts += [place(hole, ang, g.root_radius), place(nut, ang, g.root_radius)]
+            # steel tie bolts through the socket walls (top plate -> floor, washer + nyloc below)
+            cuts.append(place(cyl(g.tie_bolt_x, sy * g.tie_bolt_y, -1, tb + H + 2, g.m3_clear), ang, g.root_radius))
+            # radial slot for the retention screw (seat position floats by +/- home_gap)
+            slot = (cq.Workplane("XY").workplane(offset=-1).center(g.tenon_bolt_x, sy * g.tenon_bolt_y)
+                    .slot2D(2 * g.dv_home_gap + g.m3_clear, g.m3_clear, 0).extrude(tb + g.pedestal_h + 1.1))
+            cuts.append(place(slot, ang, g.root_radius))
     for sx in (1, -1):
         for sy in (1, -1):
             cuts.append(cyl(sx * p, sy * p, tb + 0.8, 6.0, g.m3_insert))
@@ -183,7 +184,11 @@ def make_top_plate(g: FrameGeometry) -> cq.Workplane:
     cuts = []
     for ang, _ in arm_axes(g):
         for sy in (1, -1):
-            cuts.append(place(cyl(g.tenon_bolt_x, sy * g.tenon_bolt_y, z0 - 1, g.t_tp + 2, g.m3_clear), ang, g.root_radius))
+            cuts.append(place(cyl(g.tie_bolt_x, sy * g.tie_bolt_y, z0 - 1, g.t_tp + 2, g.m3_clear), ang, g.root_radius))
+        # relief over the tenon: the top plate never touches the arm (seat = flanks + floor only)
+        hw = g.tenon_b / 2 + 0.5
+        relief = box(-g.tenon_L - g.dv_home_gap - 0.5, 1.0, -hw, hw, z0 - 0.01, z0 + g.dv_top_relief)
+        cuts.append(place(relief, ang, g.root_radius))
     for x, y in list(g.top_bolt_pts) + list(g.grommet_pts):
         cuts.append(cyl(x, y, z0 - 1, g.t_tp + 2, g.m3_clear))
     # FC <-> Jetson cable pass-through behind the stack
@@ -270,15 +275,21 @@ def make_canopy(g: FrameGeometry) -> cq.Workplane:
 
 
 # ----------------------------------------------------------------------------- camera cage (PETG-HF)
+def camera_bolt_y(g: FrameGeometry) -> float:
+    """Camera-cage bolts sit just outside the cage side plates; wings end 4 mm beyond (clear of the
+    front socket bosses, which reach in front of the front wall at |y| > ~21 mm)."""
+    return g.camera_w / 2 + 0.3 + 2.5 + 3.5
+
+
 def camera_center(g: FrameGeometry):
     return (g.body_hx + 3.0 + 12.0, 0.0, g.t_bp + g.H_int / 2 + 2.0)
 
 
 def make_camera_mount(g: FrameGeometry) -> cq.Workplane:
     hx, H, tb = g.body_hx, g.H_int, g.t_bp
-    cam_y = g.camera_w / 2 + 2.8 + 5.0
+    cam_y = camera_bolt_y(g)
     gap = g.camera_w / 2 + 0.3
-    back = box(hx, hx + 3.0, -cam_y - 5, cam_y + 5, tb, tb + H)
+    back = box(hx, hx + 3.0, -cam_y - 4, cam_y + 4, tb, tb + H)
     sides = [box(hx + 3.0, hx + 27.0, gap, gap + 2.5, tb, tb + H), box(hx + 3.0, hx + 27.0, -gap - 2.5, -gap, tb, tb + H)]
     cage = union_all([back] + sides)
     cx, _, cz = camera_center(g)

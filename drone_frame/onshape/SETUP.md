@@ -46,7 +46,9 @@ For each of the three `.fs` files:
    std version `2399`. If Onshape flags it, keep Onshape's two lines and paste the rest of the file below them.
 3. Paste the file contents and click **Commit**. Then open the **Feature Studio's toolbar menu → Add custom features to toolbar**.
 
-`PF10ModularArm.fs` and `PF10ArmSocket.fs` are independent. They do not import each other.
+`PF10ModularArm.fs` and `PF10ArmSocket.fs` are independent; they don't import each other. Both contain
+the same generated `tenonSection` function, so the dovetail tenon and its socket always match. The joint
+is described in `docs/dovetail_joint.md`.
 
 ## 2. Variables
 
@@ -65,8 +67,9 @@ Because the variables come from the pipeline, never edit them by hand. Edit `con
 1. `PF10 Frame Variables` (optional, for drawings).
 2. **PF10 Modular Arm**. The defaults are the optimized arm. To drive it from variables, type e.g.
    `#pf10_arm_L` in the length field.
-3. **Fillet**: 1.5 mm on the four long edges of the span and 0.8 mm on the pad rim. Do not fillet the
-   tenon faces, because they are bearing surfaces.
+3. **Fillet**: 1.5 mm on the four long edges of the span and 0.8 mm on the pad rim. **Never fillet the
+   dovetail flanks, the foot bottom, or the edges between them.** They are the seat. A 0.3 mm chamfer on
+   the tenon's inner end eases insertion.
 4. **Mate connector** at the origin (root-face top center, Z up, X along the arm). Name it `ARM_ROOT`.
 5. **Assign material**: create a custom material `PPA-CF (printed)` with density **1.17 g/cm³**
    (ASSUMPTION; weigh a coupon). The arm prints 100 % solid, so CAD mass ≈ printed mass.
@@ -86,13 +89,16 @@ Because the variables come from the pipeline, never edit them by hand. Edit `con
 3. Extrude the outline `#pf10_t_bp` to make the **floor**.
 4. Extrude the outer rectangle region up from the floor by `#pf10_H_int`. **Shell** it to `#pf10_wall_t` with
    the top face removed. Then extrude the four boss regions solid over the same height.
-5. **PF10 Arm Socket**: pick the body, keep "All four arms" on. The defaults match the arm. This cuts the
-   pockets, pigtail windows, clamp-bolt holes and nut traps.
+5. **PF10 Arm Socket** (body mode): pick the body, keep "All four arms" on. The defaults match the arm.
+   This cuts the tapered dovetail cavities, pigtail windows, tie-bolt holes and the radial retention-screw
+   slots. Make the socket blocks at least `2*#pf10_socket_half_w` wide so the tie bolts land in solid wall.
 6. Bosses (Ø7, sketch points at the coordinates listed in `outputs/frame_geometry.json` → `top_bolt_pts`,
    plus the 30.5 mm stack pattern and battery-pad points). Then **Hole** features: M3 heat-set insert pilot
    Ø4.0 × 6 mm.
-7. **New part** `Top plate`: same outline, extruded `#pf10_t_tp` starting at `#pf10_z_arm_top`. Add holes at
-   the clamp-bolt, top-bolt and grommet positions (`grommet_pts`) and the cable slot.
+7. **New part** `Top plate`: same outline, extruded `#pf10_t_tp` starting at `#pf10_z_arm_top`. Apply
+   **PF10 Arm Socket** again with *Top-plate mode* on. That cuts the tie-bolt holes and the 0.3 mm relief
+   pockets over the tenons. Then add holes at the top-bolt and grommet positions (`grommet_pts`) and the
+   cable slot.
 8. **Mate connectors** `SOCKET_0..3`: origin at (`#pf10_root_radius`·cos a, `#pf10_root_radius`·sin a,
    `#pf10_z_arm_top`), rotated by `a` about Z, for a = θ, −θ, 180+θ, 180−θ.
 9. Material `PAHT-CF (printed)`, density 1.06 g/cm³ (ASSUMPTION). Bottom body fill factor ≈ 0.78, so
@@ -115,8 +121,10 @@ rectangle is a placeholder.
 ## 6. Assembly `PF10 Assembly`
 
 1. Insert `Body` (both parts) and **Fix** the bottom body.
-2. Insert the arm 4 times. **Fastened mate** each `ARM_ROOT` to `SOCKET_i`. Because the arm is
-   mirror-symmetric about its own XZ plane, one part number serves all four positions.
+2. Insert the arm 4 times. **Fastened mate** each `ARM_ROOT` to `SOCKET_i` (the nominal seated position).
+   Because the arm is mirror-symmetric about its own XZ plane, one part number serves all four positions.
+   To show a swap, use a **Slider** mate along the arm axis instead. The arm slides out through the
+   cavity's widening taper with no clash.
 3. Insert the electronics envelopes and accessories. They are already in the flight frame, so fasten each
    one to the body origin.
 4. **Interference check**: right-click the assembly → *Show clashes*. The pipeline's own check

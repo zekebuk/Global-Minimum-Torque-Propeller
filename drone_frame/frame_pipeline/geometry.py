@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 from dataclasses import asdict, dataclass
 
-from .arm_model import body_interior_height, socket_half_width, tenon_width
+from .arm_model import body_interior_height, dovetail, socket_half_width, tenon_width, tie_bolt_y
 
 
 @dataclass
@@ -37,8 +37,20 @@ class FrameGeometry:
     shaft_d: float
     motor_base_d: float
     wire_exit_x: float
-    tenon_bolt_x: float
+    tenon_bolt_x: float          # retention insert position (arm-local)
     tenon_bolt_y: float
+    # tapered sliding dovetail
+    dv_depth: float
+    dv_flare: float
+    dv_beta_deg: float
+    dv_taper: float
+    dv_home_gap: float
+    dv_side_clear: float
+    dv_top_relief: float
+    dv_insert_depth: float
+    tie_bolt_x: float
+    tie_bolt_y: float
+    washer_od: float
     # body
     body_hx: float
     body_hy: float
@@ -86,6 +98,7 @@ def derive(cfg: dict, analysis: dict) -> FrameGeometry:
     a, b, e, p = cfg["arm"], cfg["body"], cfg["electronics"], cfg["propulsion"]
     hx, hy = lay["body_half_dims"]
     H_int = body_interior_height(d["h_root"], cfg)
+    dv = dovetail(cfg)
     bt = tenon_width(d, cfg)
     L = lay["arm_free_length"]
     tenon_L = a["tenon_length"]
@@ -103,6 +116,10 @@ def derive(cfg: dict, analysis: dict) -> FrameGeometry:
         shaft_d=p["motor_shaft_clearance_d"], motor_base_d=p["motor_base_diameter"],
         wire_exit_x=L - a["pad_diameter"] / 2 - 5.0,
         tenon_bolt_x=-tenon_L / 2, tenon_bolt_y=d["b"] / 2 + a["tenon_ear_width"] / 2,
+        dv_depth=dv["depth"], dv_flare=dv["flare"], dv_beta_deg=dv["flank_angle_deg"], dv_taper=dv["taper_per_side"],
+        dv_home_gap=dv["home_gap"], dv_side_clear=dv["side_clearance"], dv_top_relief=dv["top_relief"],
+        dv_insert_depth=dv["insert_depth"], tie_bolt_x=-tenon_L / 4, tie_bolt_y=tie_bolt_y(d["b"], cfg),
+        washer_od=dv["washer_od"],
         body_hx=hx, body_hy=hy, H_int=H_int, t_bp=b["bottom_plate_t"], t_tp=b["top_plate_t"], wall_t=b["wall_t"],
         socket_half_w=socket_half_width(d["b"], cfg), socket_clearance=b["socket_clearance"],
         socket_wall_t=b["socket_wall_t"], pedestal_h=H_int - d["h_root"],
@@ -138,3 +155,24 @@ def arm_axes(g: FrameGeometry):
     th = g.arm_angle_deg
     angles = [th, -th, 180 + th, 180 - th]
     return [(ang, (math.cos(math.radians(ang)), math.sin(math.radians(ang)))) for ang in angles]
+
+
+def tenon_section(g: FrameGeometry, x: float, side_grow: float = 0.0, top: float = 0.0) -> list[tuple[float, float]]:
+    """Dovetail tenon / socket cross-section (y, z) at arm-local x (CCW).
+
+    Upper sides are straight at half width hw(x) = tenon_b/2 + taper*x (narrower inward, x < 0);
+    the bottom `dv_depth` flares out at the flank angle to hw + flare. `side_grow` opens clearance on
+    the straight sides only (flanks and floor stay line-on-line = the seat); `top` raises the top edge.
+    """
+    hw = g.tenon_b / 2 + g.dv_taper * x
+    hf = hw + g.dv_flare
+    z0 = -g.arm_h_root
+    tanb = math.tan(math.radians(g.dv_beta_deg))
+    z_knee = z0 + (g.dv_flare - side_grow) / tanb
+    ys = hw + side_grow
+    return [(-hf, z0), (hf, z0), (ys, z_knee), (ys, top), (-ys, top), (-ys, z_knee)]
+
+
+def socket_r0(g: FrameGeometry) -> float:
+    """Radius of the socket block's inner (back) face."""
+    return g.root_radius - g.tenon_L - g.dv_home_gap - g.socket_wall_t

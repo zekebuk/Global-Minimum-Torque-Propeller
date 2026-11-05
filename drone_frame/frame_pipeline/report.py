@@ -94,6 +94,42 @@ def material_plot(an: dict, path: Path) -> None:
     plt.close(fig)
 
 
+def joint_section_plot(cfg: dict, an: dict, path: Path) -> None:
+    from .geometry import derive, socket_r0, tenon_section  # noqa: F401
+
+    g = derive(cfg, an)
+    fig, ax = plt.subplots(figsize=(7, 4.2), dpi=140)
+    x = -g.tenon_L / 2
+    sw = g.socket_half_w  # the socket block is a constant-width box; only the cavity tapers
+    ax.add_patch(plt.Rectangle((-sw, -g.arm_h_root - g.t_bp), 2 * sw, g.arm_h_root + g.t_bp, fc="#aeb6bf", ec="none", label="socket block / floor (PAHT-CF)"))
+    sock = tenon_section(g, x, g.dv_side_clear, 0.0)
+    ax.add_patch(plt.Polygon(sock, fc="white", ec="none"))
+    ten = tenon_section(g, x)
+    ax.add_patch(plt.Polygon(ten, fc="#2c2f36", ec="#2c2f36", label="arm tenon (PPA-CF)"))
+    w = g.arm_b - 2 * g.arm_t_w
+    zt, za = -g.arm_t_f, -g.arm_h_root + g.arm_t_f
+    ax.add_patch(plt.Polygon([(0, za), (w / 2, za + w / 2), (w / 2, zt), (-w / 2, zt), (-w / 2, za + w / 2)], fc="white", ec="none"))
+    ax.add_patch(plt.Rectangle((-sw, g.dv_top_relief), 2 * sw, g.t_tp, fc="#808b96", ec="none", label=f"top plate ({g.dv_top_relief} mm relief)"))
+    for sy in (1, -1):
+        ax.add_patch(plt.Rectangle((sy * g.tie_bolt_y - g.m3_clear / 2, -g.arm_h_root - g.t_bp - 1), g.m3_clear, g.arm_h_root + g.t_bp + g.t_tp + 2,
+                                   fc="#c0392b", ec="none", label="M3 tie bolt" if sy > 0 else None))
+        ax.add_patch(plt.Rectangle((sy * g.tenon_bolt_y - 2, -g.arm_h_root), 4, g.dv_insert_depth, fc="#d4ac0d", ec="none",
+                                   label="retention insert" if sy > 0 else None))
+        fl = [ten[0], ten[5]] if sy < 0 else [ten[1], ten[2]]
+        ax.plot([p[0] for p in fl], [p[1] for p in fl], color="#27ae60", lw=3, label="seat: flanks + floor" if sy > 0 else None)
+    ax.plot([ten[0][0], ten[1][0]], [ten[0][1], ten[1][1]], color="#27ae60", lw=3)
+    ax.set_aspect("equal")
+    ax.set_xlim(-sw - 4, sw + 4)
+    ax.set_ylim(-g.arm_h_root - g.t_bp - 3, g.t_tp + 3)
+    ax.set_xlabel("y [mm]")
+    ax.set_ylabel("z from arm top [mm]")
+    ax.set_title(f"Dovetail joint section at mid-tenon ({90 - g.dv_beta_deg:.0f} deg flanks, 1:{1 / g.dv_taper:.0f} taper)", fontsize=10)
+    ax.legend(fontsize=7, loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=3, frameon=False)
+    fig.tight_layout()
+    fig.savefig(path)
+    plt.close(fig)
+
+
 def _row(*cells):
     return "| " + " | ".join(str(c) for c in cells) + " |"
 
@@ -103,6 +139,7 @@ def write_report(cfg: dict, mats: dict, an: dict, cad: dict | None, out_dir: Pat
     campbell(cfg, an, fig_dir / "campbell.png")
     layout_plot(cfg, an, fig_dir / "layout.png")
     material_plot(an, fig_dir / "material_comparison.png")
+    joint_section_plot(cfg, an, fig_dir / "joint_section.png")
     op, lay, arm = an["operating_point"], an["layout"], an["arm"]
     r, d = arm["result"], arm["result"]["design"]
     rel = lambda p: Path(p).relative_to(out_dir).as_posix()
@@ -121,7 +158,9 @@ def write_report(cfg: dict, mats: dict, an: dict, cad: dict | None, out_dir: Pat
           _row("arm modes vert / lat / torsion", f"{r['f_vert_Hz']:.0f} / {r['f_lat_Hz']:.0f} / {r['f_tor_Hz']:.0f} Hz"),
           _row("allowed modal windows", ", ".join(f"{lo:.0f}-{hi:.0f}" if hi != float('inf') and hi != 'inf' else f">{lo:.0f}" for lo, hi in op["allowed_windows_Hz"]) + " Hz"),
           _row("tip deflection / slope at limit load", f"{r['tip_defl_mm']:.2f} mm / {r['tip_slope_deg']:.2f} deg"),
-          _row("fuse ratio (socket / arm root strength)", f"{r['fuse_ratio']:.2f}"),
+          _row("arm joint", "tapered sliding dovetail (60 deg, 1:25 taper), see section 3b"),
+          _row("joint crash capacity / crash moment", f"{r['joint_cap_Nm']:.0f} / {r['M_crash_Nm']:.0f} N m ({r['joint_governing']} governs)"),
+          _row("fuse ratio (joint / arm root strength, reported)", f"{r['fuse_ratio']:.2f}"),
           ""]
     L += ["## 1. Operating point and excitation", "",
           f"Static rotor model T = CT rho n^2 D^4 (CT {cfg['propulsion']['ct_static']}, CP {cfg['propulsion']['cp_static']}). "
@@ -151,6 +190,29 @@ def write_report(cfg: dict, mats: dict, an: dict, cad: dict | None, out_dir: Pat
     L += ["", f"Mass: span {r['mass']['span_g']:.1f} g + tenon {r['mass']['tenon_g']:.1f} g + pad {r['mass']['pad_g']:.1f} g; "
           f"prop download {r['download_N']:.3f} N (= {r['download_g']:.1f} g). Ultimate stress {r['sigma_ult_MPa']:.1f} MPa vs allowable "
           f"{mats[cfg['materials_assignment']['arm']].S_static:.1f} MPa; Goodman {r['goodman']:.3f}. Stiffness drives the design, not strength.", ""]
+    j = cfg["arm"]["joint"]
+    L += ["### 3b. Arm joint: tapered sliding dovetail", "",
+          f"60 deg dovetail foot ({j['depth']} mm deep, flanks {j['flank_angle_deg']} deg from vertical), plan taper {j['taper_per_side']} per side, "
+          f"{j['home_gap']} mm seat travel, flanks + floor line-on-line, straight sides +{j['side_clearance']} mm, top-plate relief {j['top_relief']} mm. "
+          "Design rationale and the swap procedure are in `docs/dovetail_joint.md`.", "",
+          f"![joint]({rel(fig_dir / 'joint_section.png')})", "",
+          _row("quantity", "value"), _row("---", "---"),
+          _row("joint rotational stiffness vert / lat / torsion", " / ".join(f"{r['joint'][k] / 1e3:.1f}" for k in ("vert", "lat", "tor")) + " kN m/rad"),
+          _row("self-locking ratio (mu / taper)", f"{r['self_locking_ratio']:.1f} (>1 self-locks)"),
+          _row("tolerance absorbed by seat travel", f"+/-{2 * j['taper_per_side'] * j['home_gap']:.2f} mm of width"),
+          ]
+    L += [_row(f"capacity: {k.replace('_', ' ')}", f"{v:.0f} N m") for k, v in r["joint_caps_Nm"].items()]
+    L += [_row("crash case (crash_factor x limit root moment)", f"{r['M_crash_Nm']:.0f} N m"),
+          _row("arm root static capacity", f"{r['M_arm_cap_Nm']:.0f} N m"),
+          _row("fuse ratio", f"{r['fuse_ratio']:.2f}")]
+    if cad and "joint" in cad:
+        jj = cad["joint"]
+        L += [_row("CAD: slide-out path (2-35 mm) clear", jj["slide_out_clear"]),
+              _row("CAD: arm pushed 0.5 mm deeper interferes (wedge seats)", f"{jj['wedges_when_pushed']} ({jj['seat_check_interference_0p5mm_deeper_mm3']:.1f} mm3)")]
+    L += ["", "The fuse ratio is below 1 on purpose, and it is reported rather than constrained. The stiffness-sized arm is about "
+          f"{r['M_arm_cap_Nm'] / (r['M_crash_Nm'] / cfg['loads']['crash_factor']):.0f}x stronger than the limit load in quasi-static bending, "
+          "and no printed socket with M3 hardware can be stronger than that. "
+          "The joint is instead sized for the crash case, and the load path keeps printed layers in compression.", ""]
     if an["material_comparison"]:
         L += ["### Material comparison (same layout and loads)", "",
               _row("material", "E_design MPa", "feasible", "arm g", "objective g", "f_vert", "f_lat", "f_tor"), _row(*["---"] * 8)]
@@ -161,7 +223,7 @@ def write_report(cfg: dict, mats: dict, an: dict, cad: dict | None, out_dir: Pat
         L += ["", f"![Materials]({rel(fig_dir / 'material_comparison.png')})", "",
               "PPA-CF's specific stiffness is about 3x PAHT-CF's and about 5x PETG-HF's, and arm mass follows it. PETG cannot reach the modal windows inside the bounds. "
               "The body is PAHT-CF rather than PPA-CF for its Z-bonding (loads cross layers in the sockets), 8 % elongation against 3 %, and easier printing on a passive-chamber X1C. "
-              "The brittle PPA-CF arm is the intended crash fuse.", ""]
+              "The arm is the cheapest part to replace; see 3b for what actually limits the joint.", ""]
     L += ["## 4. Mass budget and closure", "", _row("item", "g"), _row("---", "---")]
     L += [_row(k, f"{v:.0f}") for k, v in an["components_g"].items()]
     L += [_row("printed frame", f"{an['frame_mass_g']:.0f}"), _row("**AUW**", f"**{an['auw_g']:.0f}**"), "",
@@ -181,9 +243,9 @@ def write_report(cfg: dict, mats: dict, an: dict, cad: dict | None, out_dir: Pat
     L += ["## 6. Model limits (read before trusting the numbers)", "",
           "- Beam model: Euler-Bernoulli with a Bredt torsion constant (+/-15 %). No warping, no shear lag, no gyroscopic coupling. The spinning prop splits torsion and lateral modes into whirl pairs, so measure them.",
           "- Printed-material allowables are TDS coupon values x stated knock-downs. The torsion mode depends on the shear modulus, which is not on the TDS (factor assumed). **Tap-test the first printed arm** and recalibrate (docs/test_plan.md).",
-          "- Joint: Winkler contact model with an assumed 1 mm compliant layer and 30 % contact. Socket fit quality is the biggest unmodelled stiffness risk.",
+          "- Joint: Winkler contact on the dovetail flanks and floor (1 mm compliant layer, 60 % contact assumed for the wedge-seated taper). Flank accuracy is the biggest print risk, so print the socket coupon first.",
           "- Rotor: constant static CT/CP; replace with thrust-stand data for the real motor/prop.",
-          "- Crash loads are not designed for. The arm-root-first fuse hierarchy is enforced instead (fuse ratio).",
+          "- Crash: a quasi-static crash case (crash_factor x limit moment) sizes the joint. Impact dynamics and brittle notch failure are not modelled; test plan 1.4 checks them destructively.",
           ""]
     path = out_dir / "design_report.md"
     path.write_text("\n".join(L))

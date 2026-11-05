@@ -58,10 +58,16 @@ not a number to round.
 **The wire channel prints without support or bridges.** The arm prints top-face-down, and the channel's 45° V
 becomes a pointed roof. The channel doubles as the closed torsion cell.
 
-**Modular arms are the fuse.** Every arm is the same part: it is mirror-symmetric, so it fits all four
-positions. Swapping one means removing two M3 bolts, sliding the arm out radially, and unplugging the MR30
-pigtail, which passes through the socket's back-wall window. The optimizer requires the body socket to be
-≥ 1.3× stronger than the arm root, so a crash breaks a cheap, brittle PPA-CF arm and not the body.
+**Modular arms on a tapered sliding dovetail** ([docs/dovetail_joint.md](docs/dovetail_joint.md)). Every
+arm is the same mirror-symmetric part. A 60° dovetail foot captures the arm vertically. A 1:25 plan taper
+wedges it home with zero play and preload, turning print tolerance into axial travel; it also self-locks,
+since tan 2.3° ≪ μ. The seat is flanks + floor only: the straight sides and top plate have clearance, so the
+joint is not over-constrained. Upward flank load goes through the socket block **in compression** to the top
+plate and back to the floor in steel tie bolts, so printed layers never carry tension. To swap an arm:
+remove 2 screws from below, tap the arm out, unplug the MR30. The top plate stays on. The CAD check proves
+the slide-out path is clear and that the arm wedges when pushed. Honest caveat: the stiffness-sized arm is
+far stronger statically than any printed socket with M3 hardware. The joint is therefore sized for an 8×
+crash case, and the "arm breaks first" ratio is reported (< 1), not claimed.
 
 **Material assignment follows the physics.**
 
@@ -89,7 +95,8 @@ Search `ASSUMPTION` and `PLACEHOLDER` in `config/`. The most important ones:
    (test plan 3.1). These move the excitation bands.
 3. **Material knock-downs, densities, and the shear-modulus factor.** The torsion mode depends on G, which
    no TDS gives. Calibrate with coupons and the arm tap test (test plan 0.3, 1.3).
-4. **Socket joint compliance** (Winkler layer 1 mm, 30 % contact).
+4. **Dovetail joint compliance** (Winkler layer 1 mm, 60 % contact when wedge-seated) and the PA-on-PA
+   friction coefficient (0.25) behind the self-locking claim.
 
 Mechanical properties are Bambu Lab TDS values (sources in `config/materials.yaml`). Densities, HDT for
 PPA-CF and PETG-HF, and print temperatures were not on the pages retrieved and are flagged.
@@ -104,13 +111,15 @@ PPA-CF and PETG-HF, and print temperatures were not on the pages retrieved and a
 | `onshape/SETUP.md` | Document structure, Part Studios, assembly mates, simulation, release |
 | `onshape/onshape_bootstrap.py` | REST-API document creation (dry run by default) |
 | `outputs/` | `design_report.md`, `analysis.json`, `frame_geometry.json`, `print_plan.md/.csv`, `cad/step`, `cad/stl`, `cad/cad_report.json`, `figures/` |
-| `docs/test_plan.md` | Coupons → arm tap/proof tests → thermal soak → thrust stand → flight logging, with calibration formulas |
+| `docs/test_plan.md` | Coupons → dovetail seat → arm tap/proof tests → thermal soak → thrust stand → flight logging, with calibration formulas |
+| `docs/dovetail_joint.md` | Arm joint design: section sketch, rationale per feature, swap procedure, capacities, trade-offs |
 | `tests/` | Closed-form section/beam checks, rotor bands, layout constraints, CAD-vs-model arm volume |
 
 ## Status and limits
 
-* The geometry is checked by the pipeline: 0 clashes over 24 part pairs, every part fits the X1C bed, and
-  the arm CAD volume matches the beam model within 8 %. Nothing has been printed or flown.
+* The geometry is checked by the pipeline: interference over 24 part pairs, X1C bed fit, the dovetail
+  slide-out path and wedge seat, and the arm CAD volume against the beam model (within 8 %). Nothing has
+  been printed or flown.
 * The FeatureScript features and the Onshape API script were written without access to Onshape. Expect to
   fix small API/std-library mismatches on first paste. Onshape's error panel names the line.
 * The beam/FE model is a design tool (see report §6). Onshape Simulation and the tap test are the checks.

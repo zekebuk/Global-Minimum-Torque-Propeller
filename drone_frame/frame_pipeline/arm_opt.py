@@ -17,7 +17,7 @@ from .arm_model import ArmContext, evaluate
 
 MARGIN_KEYS = [
     "f_vert", "f_lat", "f_tor", "static_strength", "interlaminar", "fatigue_goodman",
-    "tip_slope", "fuse", "channel_w", "channel_h", "tip_height",
+    "tip_slope", "joint_crash", "dovetail_fits", "channel_w", "channel_h", "tip_height",
 ]
 
 

@@ -120,6 +120,23 @@ def build_assembly(g: FrameGeometry, cfg: dict, mats: dict, out_dir: Path, log=p
     report["clashes"] = clashes
     log(f"  interference: {len(checks)} pairs checked, {len(clashes)} clashes {clashes if clashes else ''}")
 
+    # dovetail joint checks on arm 0 (all four sockets are identical by construction)
+    ang0, (ux, uy) = arm_axes(g)[0]
+    slide = {}
+    for d in (2.0, 10.0, 20.0, g.tenon_L + 5.0):
+        moved = arms["arm_0"].translate((ux * d, uy * d, 0))
+        slide[f"{d:.0f} mm out"] = intersection_volume(moved, body) + intersection_volume(moved, top)
+    deeper = arms["arm_0"].translate((-ux * 0.5, -uy * 0.5, 0))
+    seat = intersection_volume(deeper, body)
+    report["joint"] = {
+        "slide_out_clash_mm3": slide,
+        "slide_out_clear": all(v < 1e-3 for v in slide.values()),
+        "seat_check_interference_0p5mm_deeper_mm3": seat,
+        "wedges_when_pushed": seat > 1.0,
+    }
+    log(f"  dovetail: slide-out path clear={report['joint']['slide_out_clear']}  "
+        f"pushed 0.5 mm deeper -> {seat:.1f} mm3 interference (wedge seat {'OK' if seat > 1.0 else 'MISSING'})")
+
     # assembly STEP (flight position, colour-coded)
     asm = cq.Assembly(name="PF10")
     colours = {"PPA-CF": (0.15, 0.15, 0.17), "PAHT-CF": (0.30, 0.30, 0.33), "PETG-HF": (0.95, 0.45, 0.10)}

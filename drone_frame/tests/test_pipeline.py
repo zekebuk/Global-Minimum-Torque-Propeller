@@ -127,3 +127,48 @@ def test_cad_arm_matches_model_mass(cfg, mats):
     model = arm_mass_breakdown(unpack(x, mats["PPA-CF"]), ctx)["total_g"] / mats["PPA-CF"].rho
     # CAD has the exit slot, motor holes and the tenon chamfer that the beam model ignores
     assert vol == pytest.approx(model, rel=0.08)
+
+
+def test_dovetail_self_locks_and_is_printable(cfg):
+    from frame_pipeline.arm_model import dovetail
+
+    dv = dovetail(cfg)
+    # wedge self-locks when tan(taper half-angle) < friction coefficient
+    assert dv["taper_per_side"] < dv["friction_coefficient"]
+    # flank overhang must print without support on both parts (<= 45 deg from vertical)
+    assert dv["flank_angle_deg"] <= 45
+    # tolerance absorbed by home_gap travel: +/- width error = 2 * taper * home_gap
+    assert 2 * dv["taper_per_side"] * dv["home_gap"] >= 0.2
+
+
+def test_dovetail_joint_stiffer_than_arm_and_survives_crash_case(cfg, mats):
+    from frame_pipeline.arm_model import joint_springs, unpack
+
+    ctx, _ = _ctx(cfg, mats)
+    x = [22.0, 30.0, 0.5, 4, 7]
+    d = unpack(x, mats["PPA-CF"])
+    js = joint_springs(d, ctx)
+    sec = __import__("frame_pipeline.sections", fromlist=["ArmSection"]).ArmSection(22.0, 30.0, d["t_w"], d["t_f"]).props()
+    arm_rot = mats["PPA-CF"].E * sec["Iyy"] / ctx.L * 1e-3      # N*m/rad, cantilever EI/L
+    assert js["vert"] > 10 * arm_rot
+    r = evaluate(x, ctx)
+    assert r["margins"]["joint_crash"] > 0
+    assert r["self_locking_ratio"] > 2
+
+
+def test_dovetail_cad_seats_and_slides_out(cfg, mats):
+    pytest.importorskip("cadquery")
+    from frame_pipeline.cad import parts as P
+    from frame_pipeline.cad.assembly import intersection_volume
+    from frame_pipeline.geometry import arm_axes, derive
+
+    ctx, lay = _ctx(cfg, mats)
+    res = evaluate([22.0, 30.0, 0.5, 4, 7], ctx)
+    g = derive(cfg, {"layout": lay, "arm": {"result": res}})
+    body = P.make_bottom_body(g)
+    ang, (ux, uy) = arm_axes(g)[0]
+    arm = P.place_arm(P.make_arm(g), g, ang)
+    assert intersection_volume(arm, body) < 1e-3                       # seated: line-on-line, no clash
+    assert intersection_volume(arm.translate((-0.5 * ux, -0.5 * uy, 0)), body) > 1.0   # deeper -> wedges
+    for dist in (5.0, 20.0):
+        assert intersection_volume(arm.translate((dist * ux, dist * uy, 0)), body) < 1e-3  # slides out freely

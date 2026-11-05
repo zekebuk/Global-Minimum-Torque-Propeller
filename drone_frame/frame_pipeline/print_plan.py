@@ -17,20 +17,20 @@ def plan(g: FrameGeometry, cfg: dict, mats: dict, cad: dict | None) -> list[dict
             "walls": f"{g.arm_n_walls} wall loops (= optimised web {g.arm_t_w:.2f} mm)",
             "shells": f"{g.arm_n_layers} top / {g.arm_n_layers} bottom layers (= flange {g.arm_t_f:.2f} mm)",
             "infill": "100 % rectilinear, sparse+solid infill direction 0 deg (fibres along the arm)",
-            "supports": "none (channel has a 45 deg pointed roof as printed; counterbores open upward)",
-            "notes": "Weakest link by design (fuse). Print 2 spares. Optional anneal 90 C / 2 h, then re-measure the bolt holes.",
+            "supports": "none (channel: 45 deg pointed roof as printed; dovetail flanks overhang 30 deg)",
+            "notes": "Press 2 M3x5.7 inserts into the dovetail foot (245 C). Keep the flanks seam-free: in Bambu Studio set seam to 'back' or paint it on the tenon top. Print 2 spares. Optional anneal 90 C / 2 h before the inserts.",
         },
         {
             "part": "bottom_body", "qty": 1, "material": a["bottom_body"],
             "orientation": "as modelled: flat floor on the plate, open top up",
             "walls": "4 wall loops", "shells": "5 top / 5 bottom",
             "infill": "40 % gyroid", "supports": "none",
-            "notes": "Install M3x5.7 brass inserts at 245 C (soldering iron). Check socket fit with a spare arm before use.",
+            "notes": "Dovetail flanks overhang 30 deg (no support). Paint the seam away from the flanks. Install M3x5.7 brass inserts at 245 C. Seat-test a spare arm: it must wedge with 0-3 mm left behind the tenon (test plan 0.5).",
         },
         {
             "part": "top_plate", "qty": 1, "material": a["top_plate"],
-            "orientation": "flat", "walls": "4 wall loops", "shells": "all solid (3 mm)",
-            "infill": "100 % (thin plate)", "supports": "none", "notes": "Clamp face for all arms: textured side up.",
+            "orientation": "flat, relief pockets UP (underside in flight faces up on the plate)", "walls": "4 wall loops", "shells": "all solid (3 mm)",
+            "infill": "100 % (thin plate)", "supports": "none", "notes": "Ties the socket tops to the floor through 8 M3 tie bolts. The 0.3 mm reliefs keep it off the arms.",
         },
         {
             "part": "jetson_tray", "qty": 1, "material": a["jetson_tray"],
@@ -95,7 +95,7 @@ def write(rows: list[dict], out_dir: Path) -> None:
              "- **PPA-CF on an X1C:** enclosed printer required. The X1C hotend tops out at 300 C, the bottom of the PPA-CF window, and the chamber is passive. Preheat the bed at max for 15 min with the door and lid closed. The model already de-rates PPA-CF strength for this (k_process = 0.65).",
              "- **Drying is mandatory** for both CF polyamides (see table). Feed PPA-CF from a heated dry box through the external spool; PAHT-CF can use the AMS (not the AMS lite) from a dried spool.",
              "- **Plate:** Textured PEI or Engineering plate + Bambu glue stick for the PA parts (glue required for PPA-CF).",
-             "- Hardware: M3x5.7 brass heat-set inserts, M3 nyloc nuts, M3 SHCS (arm clamp ~M3x40, motor M3x8), M2.5 standoffs for the carrier, 4 M3 silicone grommets for the Jetson tray.",
+             "- Hardware: M3x5.7 brass heat-set inserts (8 in the arm feet, body bosses), 8 M3 tie bolts (~M3x40 SHCS) + 16 M3 washers + 8 M3 nyloc nuts, 8 M3x8 retention screws, motor M3x8, M2.5 standoffs for the carrier, 4 M3 silicone grommets for the Jetson tray.",
              "", "## Parts", ""]
     for r in rows:
         lines += [f"### {r['part']} x{r['qty']} - {r['material']}", ""]

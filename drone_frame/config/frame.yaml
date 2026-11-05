@@ -77,8 +77,8 @@ body:
   jetson_margin: 3.0                # canopy/body footprint margin around Jetson envelope
   canopy_wall_t: 1.26                # 3 loops x 0.42 mm (PETG-HF, 0.4 nozzle)
   grommet_height: 6.0               # Jetson tray standoff above top plate
-  socket_wall_t: 3.0                # material each side of the arm tenon
-  socket_clearance: 0.15            # per side, sliding fit for printed PA parts
+  socket_wall_t: 6.0                # socket wall outboard of the dovetail; carries the M3 tie bolt (3.3 hole + 2 x 1.35)
+  socket_clearance: 0.15            # plan-view clearance at the tenon end / back wall
   stiffness_knockdown: 0.6          # ASSUMPTION - plate cut-outs/lightening reduce box EI to 60 %
   insert_boss_d: 7.0
   m3_insert_hole_d: 4.0             # M3 x 5.7 brass heat-set insert pilot
@@ -97,7 +97,29 @@ arm:
   channel_min_width: 8.0            # wire channel width (3 x 18 AWG + slack)
   channel_min_height: 6.0           # channel height at the tip, incl. 45 deg self-supporting roof
   tenon_length: 30.0                # length of arm root inside the body socket
-  tenon_ear_width: 8.0              # extra tenon width per side for the clamp bolts (M3, >= 2.3 mm wall each side)
+  tenon_ear_width: 6.5              # extra tenon width per side: room for the M3 retention insert beside the channel
+  # Arm-to-body joint: TAPERED SLIDING DOVETAIL (see docs/dovetail_joint.md)
+  #   - 60 deg dovetail foot at the bottom of the tenon: captures the arm vertically, flanks + floor
+  #     define the seat (the straight upper sides have clearance), so the joint is not over-constrained.
+  #   - 1:25 plan taper per side: pushing the arm home wedges the flanks -> zero play and preload,
+  #     absorbing print tolerance as axial travel instead of slop. tan(2.3 deg) << mu, so it self-locks.
+  #   - Upward flank load goes up through the socket block IN COMPRESSION to the top plate, then down
+  #     two steel tie bolts per socket to the floor: no tension across printed layers.
+  #   - Swap: remove 2 retention screws from below, tap the arm out, unplug MR30. Top plate stays on.
+  joint:
+    type: tapered_sliding_dovetail
+    flank_angle_deg: 30.0           # flank from vertical (60 deg dovetail); 30 deg overhang prints unsupported
+    depth: 6.0                      # dovetail foot height
+    taper_per_side: 0.04            # 1:25 -> 2.29 deg per side
+    home_gap: 3.0                   # free travel behind the seated tenon (absorbs +/-0.24 mm width error)
+    side_clearance: 0.3             # straight upper sides: deliberately not in contact
+    top_relief: 0.3                 # relief pocket in the top-plate underside over the tenon
+    friction_coefficient: 0.25      # ASSUMPTION - PA-CF on PA-CF, dry
+    tie_bolts_per_socket: 2         # M3 through top plate + socket walls + floor, nyloc + washer
+    tie_bolt_proof_N: 2900.0        # M3 class 8.8 proof load (5.03 mm^2 x 580 MPa)
+    washer_od: 7.0                  # M3 washer bearing on printed PAHT-CF
+    retention_screws: 2             # M3 from below into brass inserts in the tenon foot (radial slots in the floor)
+    insert_depth: 6.0
   pad_diameter: 36.0                # motor pad (19x19 pattern needs >= 2*13.4 + 2*(1.65 + 1.3 wall))
   motor_clamp_t: 4.0                # material under motor bolts (counterbored from below)
   edge_fillet: 1.5
@@ -120,9 +142,13 @@ loads:
   harmonics: [1, 2, 4, 6]
   band_margin: 1.15
   min_modal_frequency_Hz: 100.0     # absolute floor
-  fuse_ratio_min: 1.3               # body socket strength / arm root strength (arm must break first)
+  # Joint crash case: the socket (dovetail flanks, tie bolts, body box) must carry crash_factor x the
+  # limit-load root moment. The stiffness-sized arm is ~25x stronger than the limit load statically, so
+  # an "arm always breaks first" hierarchy is NOT achievable with printed body + M3 hardware; the
+  # fuse ratio (joint / arm root capacity) is reported, not constrained. See design_report section 3.
+  crash_factor: 8.0
   joint_contact_layer: 1.0          # ASSUMPTION - effective compliant layer at socket contact (mm)
-  joint_contact_fraction: 0.3       # ASSUMPTION - fraction of socket faces actually in contact
+  joint_contact_fraction: 0.6       # ASSUMPTION - wedge-seated (preloaded) dovetail; was 0.3 for a slip fit
 
 optimization:
   nonarm_frame_mass_initial_g: 160.0   # printed parts except arms; replaced by CAD mass after the first CAD pass

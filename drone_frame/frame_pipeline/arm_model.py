@@ -61,8 +61,20 @@ def tenon_width(d: dict, cfg: dict) -> float:
     return d["b"] + 2 * cfg["arm"]["tenon_ear_width"]
 
 
+def dovetail(cfg: dict) -> dict:
+    j = cfg["arm"]["joint"]
+    beta = math.radians(j["flank_angle_deg"])
+    return {**j, "beta": beta, "flare": j["depth"] * math.tan(beta)}
+
+
 def socket_half_width(b: float, cfg: dict) -> float:
-    return (b + 2 * cfg["arm"]["tenon_ear_width"]) / 2 + cfg["body"]["socket_clearance"] + cfg["body"]["socket_wall_t"]
+    """Half width of the socket boss: tenon + dovetail flare (widest at the mouth) + socket wall."""
+    return (b + 2 * cfg["arm"]["tenon_ear_width"]) / 2 + dovetail(cfg)["flare"] + cfg["body"]["socket_wall_t"]
+
+
+def tie_bolt_y(b: float, cfg: dict) -> float:
+    """Tie bolts run through the middle of the socket walls, outboard of the dovetail foot."""
+    return (b + 2 * cfg["arm"]["tenon_ear_width"]) / 2 + dovetail(cfg)["flare"] + cfg["body"]["socket_wall_t"] / 2
 
 
 def body_interior_height(h_root: float, cfg: dict) -> float:
@@ -79,8 +91,11 @@ def arm_mass_breakdown(d: dict, ctx: ArmContext) -> dict:
     span = 0.5 * (root["A"] + tip["A"]) * L * rho
     Lt = cfg["arm"]["tenon_length"]
     bt = tenon_width(d, cfg)
-    bolt = math.pi * (cfg["body"]["m3_clearance_d"] / 2) ** 2 * d["h_root"] * 2
-    tenon = ((bt * d["h_root"] - root["A_channel"]) * Lt - bolt) * rho
+    dv = dovetail(cfg)
+    inserts = dv["retention_screws"] * math.pi * (cfg["body"]["m3_insert_hole_d"] / 2) ** 2 * dv["insert_depth"]
+    section = bt * d["h_root"] + dv["depth"] * dv["flare"] - root["A_channel"]   # + two foot triangles
+    taper_loss = dv["taper_per_side"] * Lt**2 * d["h_root"]                      # plan taper, both sides
+    tenon = (section * Lt - taper_loss - inserts) * rho
     r = cfg["arm"]["pad_diameter"] / 2
     shaft = math.pi * (cfg["propulsion"]["motor_shaft_clearance_d"] / 2) ** 2
     pad = (math.pi * r * r - d["b"] * r - shaft) * d["h_tip"] * rho
@@ -88,15 +103,52 @@ def arm_mass_breakdown(d: dict, ctx: ArmContext) -> dict:
 
 
 def joint_springs(d: dict, ctx: ArmContext) -> dict:
-    """Winkler-foundation rotational stiffness of the socket contact (N*m/rad)."""
+    """Winkler-foundation rotational stiffness of the seated dovetail (N*m/rad).
+
+    Contact is on the two 60-deg flanks and the floor only (upper sides have clearance, top plate has
+    relief). A Winkler layer of modulus k_w on a face inclined phi from horizontal gives, per unit
+    *projected* area, vertical stiffness k_w*cos(phi) and horizontal stiffness k_w*sin(phi).
+      vertical rotation : upward reaction on the flanks (projected width 2*flare*cos(phi)),
+                          downward on the floor (foot width); the two act in series.
+      lateral rotation  : flanks only, projected height = depth on each side.
+      torsion           : floor + flanks across the foot width.
+    """
     ld = ctx.cfg["loads"]
+    dv = dovetail(ctx.cfg)
     k_w = ctx.body_mat.E / ld["joint_contact_layer"] * ld["joint_contact_fraction"]  # N/mm^3
     Lt = ctx.cfg["arm"]["tenon_length"]
     bt = tenon_width(d, ctx.cfg)
-    k_vert = k_w * bt * Lt**3 / 12 * MM          # N*mm/rad -> N*m/rad
-    k_lat = k_w * d["h_root"] * Lt**3 / 12 * MM
-    k_tor = k_w * Lt * bt**3 / 12 * MM
-    return {"vert": k_vert, "lat": k_lat, "tor": k_tor}
+    phi = math.pi / 2 - dv["beta"]                    # flank angle from horizontal
+    w_up = 2 * dv["flare"] * math.cos(phi)
+    w_down = bt + 2 * dv["flare"]
+    w_v = 2 * w_up * w_down / (w_up + w_down)
+    k_vert = k_w * w_v * Lt**3 / 12 * MM          # N*mm/rad -> N*m/rad
+    k_lat = k_w * 2 * dv["depth"] * math.sin(phi) * Lt**3 / 12 * MM
+    k_tor = k_w * Lt * w_down**3 / 12 * MM
+    return {"vert": k_vert, "lat": k_lat, "tor": k_tor, "w_up": w_up, "w_down": w_down}
+
+
+def joint_capacity(d: dict, ctx: ArmContext, H_box: float) -> dict:
+    """Static moment capacity (N*mm) of each link in the socket load path, rigid-plastic.
+
+    Thrust bends the arm tip up: the tenon pushes UP on the flanks near the mouth and DOWN on the
+    floor near the back. Flank load goes up through the socket block in compression to the top plate,
+    and back to the floor through the steel tie bolts at x = -Lt/4 (lever Lt/2 to the floor reaction).
+    """
+    cfg, bm = ctx.cfg, ctx.body_mat
+    body = cfg["body"]
+    dv = dovetail(cfg)
+    Lt = cfg["arm"]["tenon_length"]
+    js = joint_springs(d, ctx)
+    flank = bm.S_static * js["w_up"] / math.cos(math.pi / 2 - dv["beta"]) * Lt**2 / 4  # bearing on the true flank area
+    washer = math.pi / 4 * (dv["washer_od"] ** 2 - body["m3_clearance_d"] ** 2) * bm.S_static
+    F_bolt = min(dv["tie_bolt_proof_N"], washer)
+    tie = dv["tie_bolts_per_socket"] * F_bolt * Lt / 2
+    box = box_props(ctx.body_width, H_box, body["top_plate_t"], body["bottom_plate_t"], body["wall_t"])
+    box_cap = bm.S_static * box["Iyy"] * body["stiffness_knockdown"] / (H_box / 2)
+    caps = {"flank_bearing": flank, "tie_bolts": tie, "body_box": box_cap}
+    gov = min(caps, key=caps.get)
+    return {"caps_Nmm": caps, "governing": gov, "M_cap": caps[gov], "F_tie_bolt_N": F_bolt}
 
 
 def build_models(d: dict, ctx: ArmContext) -> dict:
@@ -225,16 +277,13 @@ def evaluate(xvec, ctx: ArmContext) -> dict:
     sig_a = ld["fatigue_alt_fraction"] * sig_m
     goodman = sig_a / mat.S_endurance + sig_m / mat.S_static
 
-    # fuse hierarchy: arm root capacity vs body socket capacity
+    # joint crash case + fuse ratio (reported). M_limit_root = limit thrust x free length.
     M_arm_cap = mat.S_static * root["Iyy"] / root["c_max"]                 # N*mm
-    body = cfg["body"]
-    box = box_props(ctx.body_width, mdl["H_box"], body["top_plate_t"], body["bottom_plate_t"], body["wall_t"])
-    M_box_cap = ctx.body_mat.S_static * box["Iyy"] * body["stiffness_knockdown"] / (mdl["H_box"] / 2)
-    Lt = cfg["arm"]["tenon_length"]
-    bt = tenon_width(d, cfg)
-    # triangular Winkler bearing: peak pressure p = 6 M / (bt Lt^2) at both socket ends
-    M_bear_cap = ctx.body_mat.S_static * bt * Lt**2 / 6
-    fuse_ratio = min(M_box_cap, M_bear_cap) / M_arm_cap
+    jc = joint_capacity(d, ctx, mdl["H_box"])
+    M_crash = ld["crash_factor"] * F_lim * L
+    fuse_ratio = jc["M_cap"] / M_arm_cap
+    dv = dovetail(cfg)
+    self_lock = dv["friction_coefficient"] / dv["taper_per_side"]
 
     # prop download on the arm in the slipstream -> equivalent mass penalty
     prop = cfg["propulsion"]
@@ -250,8 +299,9 @@ def evaluate(xvec, ctx: ArmContext) -> dict:
         "sigma_ult_MPa": SF * sig_max, "sigma_crit_station": s_crit,
         "tau_ult_MPa": SF * tau_max, "goodman": goodman,
         "sigma_mean_MPa": sig_m, "sigma_alt_MPa": sig_a,
-        "fuse_ratio": fuse_ratio, "M_arm_cap_Nm": M_arm_cap / 1e3,
-        "M_box_cap_Nm": M_box_cap / 1e3, "M_bear_cap_Nm": M_bear_cap / 1e3,
+        "fuse_ratio": fuse_ratio, "M_arm_cap_Nm": M_arm_cap / 1e3, "M_crash_Nm": M_crash / 1e3,
+        "joint_caps_Nm": {k: v / 1e3 for k, v in jc["caps_Nmm"].items()}, "joint_governing": jc["governing"],
+        "joint_cap_Nm": jc["M_cap"] / 1e3, "self_locking_ratio": self_lock,
         "mass": mdl["mass"], "download_N": download_N, "download_g": download_g,
         "objective_g": mdl["mass"]["total_g"] + download_g,
         "joint": mdl["joint"], "H_box": mdl["H_box"],
@@ -265,7 +315,8 @@ def evaluate(xvec, ctx: ArmContext) -> dict:
         "interlaminar": mat.tau_interlaminar / res["tau_ult_MPa"] - 1,
         "fatigue_goodman": (1 / SF) / goodman - 1,
         "tip_slope": ld["tip_slope_limit_deg"] / max(tip_slope_deg, 1e-9) - 1,
-        "fuse": fuse_ratio / ld["fuse_ratio_min"] - 1,
+        "joint_crash": jc["M_cap"] / M_crash - 1,
+        "dovetail_fits": (d["h_root"] - 2 * d["t_f"] - dv["depth"]) / d["h_root"],
         "channel_w": tip.channel_w / arm["channel_min_width"] - 1,
         "channel_h": tip.channel_h / arm["channel_min_height"] - 1,
         "tip_height": d["h_tip"] / arm["min_tip_height"] - 1,

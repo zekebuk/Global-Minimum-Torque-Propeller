@@ -9,6 +9,8 @@ import(path : "onshape/std/common.fs", version : "$FS_VERSION.0");
 // Arm-local frame (same as the CadQuery reference): +X from the root face (x = 0) to the motor
 // centre (x = L); top face (motor seat) at z = 0, material below. Print flight-top face down.
 // Wire channel: pentagon with a 45 deg V at the flight-bottom -> a self-supporting roof as printed.
+// Root: TAPERED SLIDING DOVETAIL tenon (60 deg foot at the bottom, 1:25 plan taper per side) that
+// matches the PF10 Arm Socket feature; M3 heat-set insert pilots in the foot for the retention screws.
 
 export enum PF10MotorPattern
 {
@@ -31,12 +33,16 @@ const TENON_B_BOUNDS = { (millimeter) : [10, $TENON_B, 70] } as LengthBoundSpec;
 const PAD_D_BOUNDS = { (millimeter) : [20, $PAD_D, 50] } as LengthBoundSpec;
 const CLAMP_BOUNDS = { (millimeter) : [2, $CLAMP_T, 10] } as LengthBoundSpec;
 const BOLT_Y_BOUNDS = { (millimeter) : [3, $BOLT_Y, 40] } as LengthBoundSpec;
+const DV_DEPTH_BOUNDS = { (millimeter) : [2, $DV_DEPTH, 20] } as LengthBoundSpec;
+const DV_ANGLE_BOUNDS = { (degree) : [5, $DV_ANGLE, 45] } as AngleBoundSpec;
+const DV_TAPER_BOUNDS = { (unitless) : [0, $DV_TAPER, 0.2] } as RealBoundSpec;
+const INSERT_DEPTH_BOUNDS = { (millimeter) : [2, $INSERT_DEPTH, 12] } as LengthBoundSpec;
 
 const SHAFT_D = $SHAFT_D * millimeter;
 const HOLE_D = $HOLE_D * millimeter;
 const CBORE_D = 6.2 * millimeter;
 const M3_CLEAR = $M3_CLEAR * millimeter;
-const CHAMFER = $TENON_CHAMFER * millimeter;
+const INSERT_D = $INSERT_D * millimeter;
 const P16 = $P16 * millimeter;
 const P19 = $P19 * millimeter;
 
@@ -61,8 +67,16 @@ export const pf10ModularArm = defineFeature(function(context is Context, id is I
         isLength(definition.tenonLength, TENON_L_BOUNDS);
         annotation { "Name" : "Tenon width (incl. bolt ears)" }
         isLength(definition.tenonWidth, TENON_B_BOUNDS);
-        annotation { "Name" : "Tenon bolt lateral offset" }
+        annotation { "Name" : "Retention insert lateral offset" }
         isLength(definition.boltOffset, BOLT_Y_BOUNDS);
+        annotation { "Name" : "Dovetail foot depth" }
+        isLength(definition.dovetailDepth, DV_DEPTH_BOUNDS);
+        annotation { "Name" : "Dovetail flank angle (from vertical)" }
+        isAngle(definition.flankAngle, DV_ANGLE_BOUNDS);
+        annotation { "Name" : "Dovetail plan taper per side (1:25 = 0.04)" }
+        isReal(definition.taper, DV_TAPER_BOUNDS);
+        annotation { "Name" : "Insert pilot depth" }
+        isLength(definition.insertDepth, INSERT_DEPTH_BOUNDS);
         annotation { "Name" : "Motor pad diameter" }
         isLength(definition.padDiameter, PAD_D_BOUNDS);
         annotation { "Name" : "Material under motor bolt heads" }
@@ -89,12 +103,12 @@ export const pf10ModularArm = defineFeature(function(context is Context, id is I
         if (bt <= b)
             throw regenError("Tenon width must exceed arm width (bolt ears)", ["tenonWidth"]);
 
-        // 1. side profile (XZ), extruded symmetric about y = 0
+        // 1. side profile of the span (XZ), extruded symmetric about y = 0
         const sidePlane = plane(vector(zero, bt / 2 + 1 * millimeter, zero), vector(0, -1, 0), vector(1, 0, 0));
         const side = newSketchOnPlane(context, id + "sideSketch", { "sketchPlane" : sidePlane });
         skPolyline(side, "side", { "points" : [
-                    vector(-Lt, zero), vector(L + r + 1 * millimeter, zero), vector(L + r + 1 * millimeter, -ht),
-                    vector(L, -ht), vector(zero, -hr), vector(-Lt, -hr), vector(-Lt, zero)] });
+                    vector(zero, zero), vector(L + r + 1 * millimeter, zero), vector(L + r + 1 * millimeter, -ht),
+                    vector(L, -ht), vector(zero, -hr), vector(zero, zero)] });
         skSolve(side);
         opExtrude(context, id + "sideExtrude", {
                     "entities" : qSketchRegion(id + "sideSketch"),
@@ -102,13 +116,11 @@ export const pf10ModularArm = defineFeature(function(context is Context, id is I
                     "endBound" : BoundingType.BLIND,
                     "endDepth" : bt + 2 * millimeter });
 
-        // 2. plan profile (XY): tenon with bolt ears, 45 deg chamfer down to the arm width
+        // 2. plan profile of the span (XY)
         const planPlane = plane(vector(zero, zero, -hr - 1 * millimeter), vector(0, 0, 1), vector(1, 0, 0));
         const planSk = newSketchOnPlane(context, id + "planSketch", { "sketchPlane" : planPlane });
         skPolyline(planSk, "plan", { "points" : [
-                    vector(-Lt, -bt / 2), vector(-CHAMFER, -bt / 2), vector(zero, -b / 2), vector(L, -b / 2),
-                    vector(L, b / 2), vector(zero, b / 2), vector(-CHAMFER, bt / 2), vector(-Lt, bt / 2),
-                    vector(-Lt, -bt / 2)] });
+                    vector(zero, -b / 2), vector(L, -b / 2), vector(L, b / 2), vector(zero, b / 2), vector(zero, -b / 2)] });
         skSolve(planSk);
         opExtrude(context, id + "planExtrude", {
                     "entities" : qSketchRegion(id + "planSketch"),
@@ -119,6 +131,18 @@ export const pf10ModularArm = defineFeature(function(context is Context, id is I
         opBoolean(context, id + "intersect", {
                     "tools" : qUnion([qCreatedBy(id + "sideExtrude", EntityType.BODY), qCreatedBy(id + "planExtrude", EntityType.BODY)]),
                     "operationType" : BooleanOperationType.INTERSECTION });
+
+        // 2b. dovetail tenon: ruled loft between the sections at x = -Lt (narrow) and x = 0
+        const flare = definition.dovetailDepth * tan(definition.flankAngle);
+        const t0 = newSketchOnPlane(context, id + "tenonSk0", { "sketchPlane" : plane(vector(-Lt, zero, zero), vector(1, 0, 0), vector(0, 1, 0)) });
+        skPolyline(t0, "p", { "points" : tenonSection(bt / 2, -Lt, definition.taper, flare, definition.dovetailDepth, hr, zero, zero) });
+        skSolve(t0);
+        const t1 = newSketchOnPlane(context, id + "tenonSk1", { "sketchPlane" : plane(vector(zero, zero, zero), vector(1, 0, 0), vector(0, 1, 0)) });
+        skPolyline(t1, "p", { "points" : tenonSection(bt / 2, zero, definition.taper, flare, definition.dovetailDepth, hr, zero, zero) });
+        skSolve(t1);
+        opLoft(context, id + "tenon", {
+                    "profileSubqueries" : [qSketchRegion(id + "tenonSk0"), qSketchRegion(id + "tenonSk1")],
+                    "bodyType" : ToolBodyType.SOLID });
 
         // 3. motor pad
         fCylinder(context, id + "pad", {
@@ -195,10 +219,11 @@ export const pf10ModularArm = defineFeature(function(context is Context, id is I
         }
         for (var sy in [-1, 1])
         {
-            fCylinder(context, tools + ("tenonBolt" ~ n), {
+            // M3 heat-set insert pilot, pressed in from below (retention screw through the floor slot)
+            fCylinder(context, tools + ("insert" ~ n), {
                         "bottomCenter" : vector(-Lt / 2, sy * definition.boltOffset, -hr - 1 * millimeter),
-                        "topCenter" : vector(-Lt / 2, sy * definition.boltOffset, 1 * millimeter),
-                        "radius" : M3_CLEAR / 2 });
+                        "topCenter" : vector(-Lt / 2, sy * definition.boltOffset, -hr + definition.insertDepth),
+                        "radius" : INSERT_D / 2 });
             n += 1;
         }
 
@@ -222,11 +247,28 @@ export const pf10ModularArm = defineFeature(function(context is Context, id is I
         "tenonLength" : $TENON_L * millimeter,
         "tenonWidth" : $TENON_B * millimeter,
         "boltOffset" : $BOLT_Y * millimeter,
+        "dovetailDepth" : $DV_DEPTH * millimeter,
+        "flankAngle" : $DV_ANGLE * degree,
+        "taper" : $DV_TAPER,
+        "insertDepth" : $INSERT_DEPTH * millimeter,
         "padDiameter" : $PAD_D * millimeter,
         "clampThickness" : $CLAMP_T * millimeter,
         "motorPattern" : PF10MotorPattern.BOTH,
         "channel" : true
     });
+
+// Dovetail section in (y, z) of a YZ plane at arm-local x: straight upper sides at hw(x) = hw0 + taper*x,
+// bottom `depth` flaring out by `flare`. sideGrow opens the straight sides only; top raises the top edge.
+// Shared verbatim with PF10ArmSocket.fs so arm and socket can never drift apart.
+function tenonSection(hw0 is ValueWithUnits, x is ValueWithUnits, taper is number, flare is ValueWithUnits,
+                      depth is ValueWithUnits, hr is ValueWithUnits, sideGrow is ValueWithUnits, top is ValueWithUnits) returns array
+{
+    const hw = hw0 + taper * x;
+    const hf = hw + flare;
+    const zKnee = -hr + (flare - sideGrow) * depth / flare;
+    const ys = hw + sideGrow;
+    return [vector(-hf, -hr), vector(hf, -hr), vector(ys, zKnee), vector(ys, top), vector(-ys, top), vector(-ys, zKnee), vector(-hf, -hr)];
+}
 
 // Channel pentagon in (y, z) sketch coordinates of a YZ plane: flat top under the top flange,
 // vertical sides, 45 deg V to the apex at the flight-bottom.
