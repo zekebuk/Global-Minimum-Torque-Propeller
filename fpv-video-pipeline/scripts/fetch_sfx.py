@@ -83,7 +83,7 @@ def main() -> int:
     root.mkdir(parents=True, exist_ok=True)
     index_path.write_text(json.dumps(index, indent=2))
     print(f"\n{ok} downloaded, {skipped} already there, {failed} failed -> {root}")
-    print("Next: build_resolve_project.py imports this folder into the 03_SFX bin (one sub-bin per category).")
+    print("Next: build_resolve_project.py / build_reel_project.py import this folder into the SFX bin (one sub-bin per category).")
     return 0 if failed == 0 else 1
 
 

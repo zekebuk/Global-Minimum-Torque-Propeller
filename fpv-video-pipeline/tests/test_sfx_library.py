@@ -1,5 +1,6 @@
 """SFX library: manifest is link-free and complete; fetch files sounds by label; Resolve bin import is idempotent."""
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -32,7 +33,7 @@ def test_fetch_downloads_checks_and_indexes(tmp_path):
         links[t["file"]] = f.as_uri()
     (tmp_path / "m.json").write_text(json.dumps({"generated": "x", "sounds": one}))
     (tmp_path / "links.json").write_text(json.dumps({"expires_utc": "2099-01-01T00:00:00Z", "links": links}))
-    cfg = (ROOT / "config.toml").read_text().replace('sfx = "~/FPV/SFX"', f'sfx = "{(tmp_path / "SFX").as_posix()}"')
+    cfg = re.sub(r'(?m)^sfx = ".*"$', f'sfx = "{(tmp_path / "SFX").as_posix()}"', (ROOT / "config.toml").read_text())
     (tmp_path / "cfg.toml").write_text(cfg)
     r = subprocess.run([sys.executable, str(ROOT / "scripts" / "fetch_sfx.py"), "--links", str(tmp_path / "links.json"),
                         "--manifest", str(tmp_path / "m.json"), "--config", str(tmp_path / "cfg.toml")],

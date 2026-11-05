@@ -14,10 +14,10 @@ dive wind, and 30 s seamless beds (quarry, forest, mountain wind, beach, city, d
 `assets/sfx_manifest.json` lists them (prompt, length, loop, generation ids). Download on the desktop with the private links
 file Claude sends you (it is never committed - the repo is public, and the links expire):
 ```powershell
-python scripts\fetch_sfx.py --links $HOME\Downloads\sfx_links.json   # -> D:\FPV\SFX\<category>\<name>_<n>.mp3 + library.json
+python scripts\fetch_sfx.py --links $HOME\Downloads\sfx_links.json   # -> E:\ASSETS\SFX\<category>\<name>_<n>.mp3 + library.json
 ```
 Each file is length-checked; existing files are skipped. If the links have expired, ask Claude for fresh ones.
-`build_resolve_project.py` then imports the folder automatically into `03_SFX`, one sub-bin per category
+`build_resolve_project.py` (bin `03_SFX`) and `build_reel_project.py` (bin `04_SFX`) then import the folder automatically, one sub-bin per category
 (ambience, bed, drone, impact, riser, transition, whoosh); re-running only adds new files.
 
 To generate more with your own API key instead:
@@ -25,7 +25,7 @@ To generate more with your own API key instead:
 python scripts\make_sfx_library.py --dry-run                 # 14 sounds: whooshes, sub-hits, risers, drone, wind
 python scripts\make_sfx_library.py --bpm 128 --variants 3    # 3 takes each; risers sized to 1 and 2 bars at 128 BPM
 ```
-This writes `D:\FPV\SFX\<category>\*.mp3` plus `library.json`, a record of the prompt, model and date for each file. Re-running
+This writes `E:\ASSETS\SFX\<category>\*.mp3` plus `library.json`, a record of the prompt, model and date for each file. Re-running
 only fills gaps. Run it again with `--only riser --bpm 140` to get risers for a different tempo. The next
 `build_resolve_project.py` run picks the new files up in `03_SFX`.
 

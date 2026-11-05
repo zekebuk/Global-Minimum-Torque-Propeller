@@ -59,7 +59,7 @@ This gives median shot length, time to first cut, cuts on the beat, pace change,
 for the reels you like. Later, add `--compare <your reel>` to see how close you are.
 
 ## 7. Sound + publishing (optional, 20 min)
-- [ ] `python scripts\fetch_sfx.py --links <Downloads>\sfx_links.json` (the pre-generated library; `build_resolve_project.py` imports `D:\FPV\SFX` into `03_SFX` by itself). Optional: `setx ELEVENLABS_API_KEY "..."` for `make_sfx_library.py` / `make_music.py`
+- [ ] `python scripts\fetch_sfx.py --links <Downloads>\sfx_links.json` (the pre-generated library; `build_resolve_project.py` and `build_reel_project.py` import `E:\ASSETS\SFX` into the SFX bin by themselves). Optional: `setx ELEVENLABS_API_KEY "..."` for `make_sfx_library.py` / `make_music.py`
 - [ ] `python scripts\make_music.py reel --bpm 128 --seconds 24 --mood "<your vibe>"`, then use it as `--music` in the test session
 - [ ] Put a few **Cream** markers on `YT_selects`, then run `python scripts\youtube_publish.py <export> --title "..." --chapters-from-resolve YT_selects --thumb-at 10`
 - [ ] Optional: Google Cloud OAuth client → `secrets\youtube_client.json` (see [AUDIO_AND_PUBLISHING.md](AUDIO_AND_PUBLISHING.md))

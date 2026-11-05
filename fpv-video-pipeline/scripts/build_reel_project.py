@@ -6,7 +6,8 @@
 What it does:
   1. Project <name> (created or opened): 1080x1920 @ the cut list's fps, DaVinci YRGB, mismatched sources
      scaled to fit (so the 8:7 GoPro frame letterboxes exactly like the fast preview).
-  2. Bins 01_Footage / 02_Music / 03_Graphics; the shots' sources, the song and the title PNG imported.
+  2. Bins 01_Footage / 02_Music / 03_Graphics / 04_SFX; the shots' sources, the song and the title PNG imported,
+     and the SFX library (paths.sfx) mirrored into 04_SFX, one sub-bin per category (whoosh, impact, riser ...).
   3. Timeline <name>_vN: every shot with its in/out and speed, the song at the cut list's offset on A1,
      the title PNG on V2 over the opener with fades, picture + music fade-out at the end.
   4. Grades: each shot's solved chain (fast preview cache) copied into Resolve's LUT folder as one cube per
@@ -401,8 +402,14 @@ def main() -> int:
     mp = p.GetMediaPool()
     root = mp.GetRootFolder()
     bins = {}
-    for b in ("01_Footage", "02_Music", "03_Graphics"):
+    for b in ("01_Footage", "02_Music", "03_Graphics", "04_SFX"):
         bins[b] = next((f for f in root.GetSubFolderList() or [] if f.GetName() == b), None) or mp.AddSubFolder(root, b)
+    sfx_root = Path(cfg["paths"].get("sfx") or Path(cfg["paths"]["music"]).parent / "SFX")
+    sfx_got = rlib.import_sfx_library(mp, bins["04_SFX"], sfx_root)
+    if sfx_got:
+        print("SFX bin: " + ", ".join(f"{k} +{v}" for k, v in sfx_got.items()))
+    elif not sfx_root.is_dir():
+        log.append(f"no SFX library at {sfx_root}: run fetch_sfx.py to fill 04_SFX")
     clips = {src: find_or_import(mp, bins["01_Footage"], src) for src in dict.fromkeys(s.src for s in c.shots)}
     music = find_or_import(mp, bins["02_Music"], c.music) if c.music else None
     title, title_seq = None, False
