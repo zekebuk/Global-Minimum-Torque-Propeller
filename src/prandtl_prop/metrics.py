@@ -123,7 +123,7 @@ def write_locked_result_table(output_path: Path) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = ["case", "thrust_N", "torque_Nm", "power_W", "notes"]
     with output_path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, lineterminator="\n")
         writer.writeheader()
         for case in locked_performance_cases():
             writer.writerow(

@@ -1,0 +1,114 @@
+# COTS brushless motors for a 6S 10 in multirotor, as the SITL motor study reads them (prandtl sitl-motors).
+#
+# Values are manufacturer or reseller datasheet figures gathered 2026-10 (sources per entry). Sellers disagree
+# on several figures; "confidence" says how well each entry is supported:
+#   datasheet  - consistent across the manufacturer test sheet and resellers
+#   mixed      - main figures consistent, one figure conflicting between sources (noted)
+#   estimated  - a figure is not published for this KV and is scaled from a sibling KV (noted)
+# Resistance scales as 1/KV^2 within one stator (same copper volume, turns ~ 1/KV); no-load current at a fixed
+# test voltage scales roughly with KV (spin speed). Replace with thrust-stand data once the motor is bought.
+#
+# mass_kg is the flying mass: bare motor plus ~5 g of trimmed leads where only the bare weight or a 600 mm
+# lead weight is given; FPV motors are listed with short leads already.
+# continuous_A: the published continuous (180 s) rating where given, else peak_A / 2 (flagged).
+# peak_A: the published short-time peak; null where none is published (no peak check).
+motors:
+  - name: T-Motor MN3110 KV700
+    stator_diameter_mm: 31
+    kv: 700
+    resistance_ohm: 0.092
+    no_load_A: 0.3
+    no_load_test_V: 10
+    mass_kg: 0.085
+    continuous_A: 21
+    peak_A: null
+    cells: "3-6S"
+    confidence: mixed
+    note: "one reseller lists 71 mOhm (the KV780 value); the T-Motor test report gives 92 mOhm; 80 g bare; no peak rating published"
+    sources:
+      - https://www.ligpower.com/product/mn3110-kv700-motor-navigator-type.html
+      - https://st.robu.in/product/t-motor-navigator-mn3110-700kv
+      - https://www.getfpv.com/tiger-motor-mn3110-17-700kv.html
+  - name: T-Motor MN3110 KV780
+    stator_diameter_mm: 31
+    kv: 780
+    resistance_ohm: 0.071
+    no_load_A: 0.4
+    no_load_test_V: 10
+    mass_kg: 0.085
+    continuous_A: 26
+    peak_A: null
+    cells: "3-6S"
+    confidence: datasheet
+    note: "80 g bare, 100 g with 600 mm leads; no peak rating published"
+    sources:
+      - https://www.ligpower.com/product/mn3110-motor-navigator-type.html
+      - https://st.robu.in/?p=1402981
+      - https://www.getfpv.com/tiger-motor-mn3110-15-780kv.html
+  - name: T-Motor Velox V3115 KV640
+    stator_diameter_mm: 31
+    kv: 640
+    resistance_ohm: 0.0671
+    no_load_A: 1.10
+    no_load_test_V: 10
+    mass_kg: 0.1133
+    continuous_A: 31
+    peak_A: 62
+    cells: "3-12S"
+    confidence: datasheet
+    note: "continuous = peak/2 (only a 10 s peak is published)"
+    sources:
+      - https://www.racedayquads.com/products/t-motor-v3115-3115-640kv-motor
+      - https://store.tmotor.com/product/V3115-fpv-motor.html
+  - name: T-Motor Velox V3115 KV900
+    stator_diameter_mm: 31
+    kv: 900
+    resistance_ohm: 0.0381
+    no_load_A: 1.57
+    no_load_test_V: 10
+    mass_kg: 0.1131
+    continuous_A: 41
+    peak_A: 83
+    cells: "3-8S"
+    confidence: mixed
+    note: "RotorVillage lists 45 mOhm and 116 g; continuous = peak/2"
+    sources:
+      - https://www.racedayquads.com/products/t-motor-v3115-3115-900kv-motor
+      - https://rotorvillage.ca/t-motor-velox-v3115-900kv-cinematic-motor-1pc/
+  - name: iFlight XING2 2809 KV800
+    stator_diameter_mm: 28
+    kv: 800
+    resistance_ohm: 0.127
+    no_load_A: 0.9
+    no_load_test_V: 10
+    mass_kg: 0.0614
+    continuous_A: 13
+    peak_A: 25.6
+    cells: "4-6S"
+    confidence: estimated
+    note: "no-load current not published: 0.9 A @ 10 V assumed (typical 28xx FPV motor); continuous = peak/2"
+    sources:
+      - https://uk.robotshop.com/products/iflight-xing2-2809-fpv-motor-unibell-800kv
+  - name: BrotherHobby Avenger V3 2812 KV900
+    stator_diameter_mm: 28
+    kv: 900
+    resistance_ohm: 0.081
+    no_load_A: 1.07
+    no_load_test_V: 10
+    mass_kg: 0.0765
+    continuous_A: 25
+    peak_A: 50
+    cells: "5-8S"
+    confidence: estimated
+    note: "R and I0 scaled from the published 1115 KV test (53 mOhm, 1.33 A @ 10 V); current ratings estimated"
+    sources:
+      - https://www.getfpv.com/brotherhobby-avenger-v3-2812-900kv-1115kv-motor-cw.html
+      - https://rcdrone.top/products/brotherhobby-avenger-2812-v3-motor
+# Not 6S-rated, listed for reference only (excluded unless allow_overvoltage):
+excluded:
+  - name: T-Motor MN3508 KV700
+    reason: "rated 3-4S (72 mOhm, 0.5 A @ 10 V, 82 g bare)"
+    source: https://store.tmotor.com/goods-354-MN3508.html
+  - name: T-Motor MN2806 KV650
+    reason: "rated 4S, 12.3 A peak (below the 14 A full-throttle need)"
+    source: https://robu.in/product/t-motor-antigravity-bldc-motor-mn2806-650kv

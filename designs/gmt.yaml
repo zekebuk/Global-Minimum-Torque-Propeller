@@ -1,0 +1,27 @@
+# GMT design case. Paths are relative to the repository root; see docs/iterative_workflow.md.
+name: gmt
+description: Locked GMT twist distribution, 22 in two-blade rotor at the 35 N hover point.
+operating_point:
+  diameter_in: 22.0
+  blade_count: 2
+  rpm: 4000.0
+  target_thrust_N: 35.0
+  rho_kg_m3: 1.225
+  mu_air_kg_m_s: 1.81e-5
+geometry:
+  stations_csv: data/geometry/final_gmt_geometry.csv
+  pitch_axis_chord_fraction: 0.25
+aero:
+  polar: {type: table, directory: data/xfoil_polars}
+  tip_loss: true
+  trim_to_target_thrust: true
+airfoils:
+  directory: data/airfoils
+  points_per_side: 80
+  substitutes: {}
+structure:
+  material: {name: aluminum, E_Pa: 70.0e9, nu: 0.33, density_kg_m3: 2700.0, allowable_stress_Pa: 250.0e6}
+cad:
+  apply_trim_offset: true
+  export_rotor: true
+  export_stl: true

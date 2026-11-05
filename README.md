@@ -8,10 +8,11 @@ The repository is a research workflow, not a general propeller design package. T
 
 | Path | Purpose |
 | --- | --- |
-| `scripts/` | Final thesis workflow entry points. |
-| `scripts/helpers/` | Helper functions used by the final workflow scripts. |
+| `src/prandtl_prop/` | The single implementation: BEMT (`aero/`), CAD (`cad/`), structures (`structures/`), external tools (`external/`), design files, run cache, pipeline, and CLI. |
+| `designs/` | Design files (`mil.yaml`, `gmt.yaml`) for the iterative pipeline, plus smoke-test overrides. |
+| `scripts/` | Thin entry points for the locked thesis workflow. |
 | `scripts/gui/` | Interactive launchers for the Streamlit aero UI and MATLAB FEA viewer. |
-| `src/prandtl_prop/` | Retained importable package and tested source modules from the cleaned thesis workflow. |
+| `runs/` | Pipeline run folders, created on demand and git-ignored. |
 | `data/geometry/` | Locked MIL/GMT station-based geometry CSVs used by the workflow. |
 | `data/processed/` | Locked BEMT station data and summary files. |
 | `outputs/geometry_exports/` | Regenerated geometry exports. |
@@ -31,8 +32,7 @@ Use Python 3.10 or newer.
 ```bash
 python -m venv .venv
 python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-python -m pip install -e .
+python -m pip install -e .[cad,dev]     # or: python -m pip install -r requirements.txt (adds the GUI extras)
 ```
 
 The core locked-result workflow runs from CSV/JSON data in this repository. Historical regeneration attempts, UI experiments, and external-solver scripts are preserved under `archive/` and may require local XFOIL, XROTOR, MATLAB, Abaqus, OpenVSP, or PSU-WOPWOP installations.
@@ -48,9 +48,55 @@ python scripts/make_thesis_figures.py
 pytest
 ```
 
-The XROTOR and MATLAB commands are report-only by default. Add `--execute` only when the required external software and inputs are available. Archived scripts are deliberately excluded from the quick start.
+The XROTOR and MATLAB commands are report-only by default. Add `--execute` only when the required external software and inputs are available. A requested `--execute` that cannot run exits with status 2 and says why. Archived scripts are deliberately excluded from the quick start.
 
-## Reproducibility Workflow
+## Iterative Design Pipeline (BEMT -> CAD -> FEA/CFD)
+
+```bash
+prandtl run designs/gmt.yaml                                  # fast stages: aero, sections, cad (STEP in mm), beam
+prandtl run designs/gmt.yaml --stages fea                     # CalculiX solid FEA with centrifugal stiffening
+prandtl run designs/gmt.yaml --stages modal                   # Campbell diagram (prestressed modes vs rpm)
+prandtl run designs/gmt.yaml --stages cfd                     # OpenFOAM MRF hover CFD
+prandtl run designs/gmt.yaml --stages acoustics               # FW-H tonal + BPM broadband noise, twist comparison
+prandtl run designs/gmt_fpv10_tri.yaml --stages sitl          # rotor tables, C++ header, PX4 params for a simulator
+prandtl sitl-optimize designs/gmt_fpv10_tri.yaml --log a.ulg  # rank GMT twists by mission energy on flown missions
+prandtl run designs/gmt_pa6_cf30_folding.yaml --stages envelope,mission   # 0-20 m/s map, CFD at mission points, CFD loads -> CalculiX
+prandtl design-gmt designs/fpv10_tri_spec.yaml --output designs/gmt_fpv10_tri.yaml   # 10 in tri-blade FPV: GMT twist, vehicle sizing
+prandtl run designs/gmt_fpv10_tri.yaml --stages aero,sections,dfm,cad,beam,multirotor   # ... and the pipeline on it
+prandtl cost designs/gmt_fpv10_tri.yaml designs/gmt_pa6_cf30_fixed.yaml --set-file designs/smoke_overrides.txt   # cost per prop vs volume by route
+prandtl loop designs/gmt.yaml                                 # BEMT -> CAD -> CFD -> calibrate -> re-trim
+prandtl optimize-molding designs/gmt.yaml --material peek-cf30   # thickness schedule for injection-molded CFRP
+prandtl run designs/gmt_peek_cf30.yaml --stages cad,mold      # full blade (root tab, bolt holes) + core/cavity mold STEP
+prandtl run designs/gmt_pa6_cf30_folding.yaml --stages hub,mold   # folding prop: one hinge pin per blade, center hub
+prandtl run designs/gmt_pa6_cf30_fixed.yaml --stages hub,mold     # fixed one-piece prop (blades + boss), clamp cap
+prandtl compare designs/mil.yaml designs/gmt.yaml --stages aero,beam
+prandtl run designs/gmt.yaml --set operating_point.rpm=4200   # iterate on any design value
+prandtl run designs/gmt.yaml --set-file designs/smoke_overrides.txt   # smoke test without thesis data
+```
+
+The pipeline re-solves BEMT with a bracketed per-station solve and thrust trim. It then lofts the
+trimmed blade with CadQuery (STEP in mm for SolidWorks, plus section curves), runs a beam screen
+and a CalculiX solid FEA with centrifugal stiffening, and runs OpenFOAM hover CFD. A loop
+calibrates BEMT against the CFD station loads and re-trims until CFD meets the target thrust. Each
+stage is cached in a content-addressed run folder. Real runs need the XFOIL polars and airfoil
+coordinates in `data/` (see `data/xfoil_polars/README.md`). See `docs/iterative_workflow.md` for the
+conventions, the verification evidence, and the planned CalculiX and OpenFOAM stages. See
+`docs/cfrp_injection_molding.md` for the molded blade and its mold, and `docs/hub.md` for the hub.
+See `docs/production.md` for the production hardware stack and cost per prop by route.
+See `docs/efficiency.md` for the energy audit (where the battery energy goes, what to work on next) and the chord + twist GMT redesign.
+See `docs/sitl.md` for the SITL bridge (custom simulator + PX4): rotor tables, motor/battery model, PX4 parameters, log replay, and mission-weighted prop selection.
+See `docs/acoustics.md` for the aeroacoustic stage (FW-H tonal + BPM broadband) and what GMT twist does to rotor noise.
+See `docs/cfd_fea_acoustics_methods.md` for the higher-fidelity methods: XFOIL / gamma-Re_theta transition polars of the molded sections, the free-vortex-wake solver, static aeroelasticity with 1/rev fatigue, and unsteady (free-wake) loading noise.
+See `docs/fpv10_tri.md` for the 10 in tri-blade FPV variant (global-minimum-torque twist with the
+multirotor sized around it). See `docs/mission.md` for off-design performance from static to 20 m/s, flow plots, and FEA driven
+by the CFD wall loads.
+
+**Locked result caveat:** the archived solver left the tip station unconverged in both locked
+cases, and the GMT tip violates the momentum balance by 84%. A first-order estimate puts the
+corrected torque reduction near 0.9%, not 1.50%. The figures below are the historical locked values
+until they are re-locked with the new solver and the real polars.
+
+## Locked-Result Reproducibility Workflow
 
 1. `python scripts/run_geometry_generation.py`
    Exports the locked MIL/GMT geometry to `outputs/geometry_exports/` and writes `outputs/reports/geometry_audit.md`.

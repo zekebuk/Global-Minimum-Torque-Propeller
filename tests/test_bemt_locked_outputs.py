@@ -4,17 +4,17 @@ from __future__ import annotations
 
 import pytest
 
-from prandtl_prop import bemt, config, metrics
+from prandtl_prop import config, locked_stations, metrics
 
 
 def test_locked_bemt_station_data_are_positive() -> None:
     """The locked final case should not contain undocumented negative thrust stations."""
 
     for case in ("MIL", "GMT"):
-        rows = bemt.load_station_data(case)
-        bemt.assert_station_data_sane(rows)
-        assert bemt.total_station_load(rows, "dT_N") > 0.0
-        assert bemt.total_station_load(rows, "dQ_Nm") > 0.0
+        rows = locked_stations.load_station_data(case)
+        locked_stations.assert_station_data_sane(rows)
+        assert locked_stations.total_station_load(rows, "dT_N") > 0.0
+        assert locked_stations.total_station_load(rows, "dQ_Nm") > 0.0
 
 
 def test_locked_cases_are_thrust_matched() -> None:

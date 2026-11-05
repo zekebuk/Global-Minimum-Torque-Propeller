@@ -1,0 +1,9 @@
+# Coarse CFD mesh for checking the BEMT -> CAD -> CFD loop runs end to end (minutes, not hours).
+# The blade is only 1-2 cells thick at this resolution: use for plumbing, never for results.
+# Usage: --set-file designs/smoke_overrides.txt --set-file designs/cfd_smoke_overrides.txt
+cfd.surface_refinement_min=3
+cfd.surface_refinement_max=4
+cfd.feature_refinement_level=4
+cfd.mrf_refinement_level=1
+cfd.iterations=1500
+cfd.snapshots=5

@@ -6,19 +6,19 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+if str(ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(ROOT / "src"))
 
-from scripts.helpers import paths, thesis_plotting
+from prandtl_prop import config, plotting
 
 
 def main() -> int:
     """Create the final clean figure set."""
 
-    outputs = thesis_plotting.make_all_thesis_figures()
+    outputs = plotting.make_all_thesis_figures()
     print("Thesis figure generation complete")
     print(f"  figures written: {len(outputs)}")
-    print(f"  output folder: {paths.relative(paths.OUTPUT_FIGURES_DIR)}")
+    print(f"  output folder: {config.relative(config.OUTPUT_FIGURES_DIR)}")
     return 0
 
 

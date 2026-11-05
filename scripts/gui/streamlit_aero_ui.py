@@ -7,7 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 LEGACY_SCRIPTS = ROOT / "archive" / "legacy_scripts"
-for candidate in (LEGACY_SCRIPTS, ROOT):
+for candidate in (LEGACY_SCRIPTS, ROOT / "src"):
     if str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))
 
@@ -29,6 +29,6 @@ if __name__ == "__main__":
     if running_under_streamlit():
         main()
     else:
-        from scripts.helpers import gui_launchers
+        from prandtl_prop.external import gui as gui_launchers
 
         raise SystemExit(gui_launchers.run_streamlit_aero_ui())

@@ -1,0 +1,100 @@
+# Spec for a 10 in tri-blade FPV GMT prop. Run `prandtl design-gmt designs/fpv10_tri_spec.yaml
+# --output designs/gmt_fpv10_tri.yaml`; it picks the hover rpm and chord, writes the stations CSV
+# below, and writes the design file for `prandtl run`. See docs/fpv10_tri.md.
+#
+# Assumptions are stated where they enter. Aero inputs are NOT thesis data: a NACA 4410 section with
+# the analytic polar that reproduced this repository's own MRF CFD of a NACA 4410 blade at
+# Re ~ 1e5-2e5 (docs/mission.md, effective_polar.csv), the same Reynolds band as a 10 in FPV prop.
+name: gmt_fpv10_tri
+description: 10 in tri-blade FPV prop, global-minimum-torque twist, one-piece molded PA6-CF30, M5 shaft.
+operating_point:
+  diameter_in: 10.0
+  blade_count: 3
+  rpm: 6500.0            # replaced by the design scan
+  target_thrust_N: 3.92266  # hover thrust per rotor = 1.6 kg x g / 4 (replaced by the designer)
+  rho_kg_m3: 1.225
+  mu_air_kg_m_s: 1.81e-5
+geometry:
+  stations_csv: data/geometry/gmt_fpv10_tri_geometry.csv
+  pitch_axis_chord_fraction: 0.25
+aero:
+  polar: {type: analytic, cl_alpha_per_rad: 4.22, alpha0_deg: -5.19, cd0: 0.0178, k: 0.029, cl_max: 1.2, cl_min: -1.0}
+  tip_loss: true
+  trim_to_target_thrust: true
+airfoils:
+  directory: data/airfoils
+  points_per_side: 80
+  trailing_edge_thickness_m: 0.0004   # molded FPV props run ~0.3-0.5 mm blunt trailing edges
+structure:
+  material: {name: PA6-CF30 (conditioned), E_Pa: 12.75e+9, nu: 0.35, density_kg_m3: 1280.0, allowable_stress_Pa: 60.0e+6}
+molding:
+  min_trailing_edge_thickness_m: 0.0004
+  max_section_thickness_m: 0.006
+  operating_rpm_fractions: [0.95, 1.05]  # hover dwell band; throttle sweeps transiently to 2x hover (docs/fpv10_tri.md)
+  pull_angle_deg: 0.0
+root:
+  enabled: true
+  bolt_radii_m: []
+  tab_inner_radius_m: 0.005   # inside the 16 mm boss, clear of the 5 mm bore
+  tab_outer_radius_m: 0.012
+  tab_width_m: 0.010          # three tabs fit outside the boss: 10 mm < 2 x 8 mm x sin 60 deg
+  tab_thickness_m: 0.006      # thinner than the 8 mm boss: no coincident faces
+  transition_sections: 8
+  corner_exponent: 8
+  tab_centre_s_m: 0.0
+hub:
+  variant: one_piece
+  boss_diameter_m: 0.016      # typical 10 in FPV hub
+  boss_thickness_m: 0.008
+  center_bore_m: 0.005        # M5 motor shaft; clamped by the prop nut and washer
+  motor_screw_count: 0
+fea:
+  mesh_size_m: 0.0012
+  campbell_rpm_fractions: [0.0, 0.5, 1.0, 1.5, 2.0, 2.2]
+cfd:
+  iterations: 1500
+mission:
+  v_inf_m_s: [0.0, 0.0]
+  thrust_N: [3.92266, 15.69064]   # hover and full throttle (T/W 4), static
+  map_v_inf_m_s: [0.0, 2.5, 5.0, 7.5, 10.0]
+  map_rpm: [3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 11000, 12000, 13000, 14000]
+  max_rpm: 18000
+  cfd_points: [0, 1]
+  fea_points: [0, 1]
+multirotor:
+  rotor_count: 4
+  mass_kg: 1.6                # starting guess; closed by the sizing loop
+  payload_mass_kg: 1.22       # frame, 6S 4000 mAh, ESC, FC, VTX, HD camera: a 1.6 kg 10 in quad less 4 x (80 g motor + 15 g prop)
+  motor_base_mass_kg: 0.015   # bearings, shaft, bell structure
+  motor_mass_per_peak_torque_kg_per_Nm: 0.186   # 2810-class outrunner: ~80 g at ~0.35 N m peak
+  body_cda_m2: 0.020          # body drag area (frame, battery, camera); multirotor drag areas run 0.01-0.03 m^2
+  arm_length_m: 0.21
+  ixx_kg_m2: 0.011
+  izz_kg_m2: 0.018
+  thrust_to_weight: 4.0
+  battery_voltage_V: 22.2
+  battery_energy_Wh: 88.8
+  battery_usable_fraction: 0.8
+  battery_resistance_ohm: 0.012
+  motor_resistance_ohm: 0.040
+  esc_resistance_ohm: 0.005
+  motor_no_load_current_A: 1.0
+  motor_max_current_A: 50.0
+  motor_rotor_inertia_kg_m2: 8.0e-6
+  max_tip_mach: 0.70
+  max_speed_m_s: 25.0         # trimmed level flight without retreating-blade stall
+  forward_cl_limit: 1.15
+gmt:
+  planform_csv: data/geometry/final_gmt_geometry.csv   # chord shape of the thesis GMT blade, rescaled
+  airfoil: NACA4410
+  station_count: 40
+  root_r_R: 0.2
+  hover_rpm_grid: [4000, 4250, 4500, 4750, 5000, 5250, 5500, 5750, 6000, 6250, 6500, 6750, 7000, 7250, 7500, 7750, 8000, 8250, 8500, 8750, 9000, 9500, 10000]
+  chord_max_over_R_grid: [0.08, 0.09, 0.10, 0.11, 0.12, 0.13, 0.14, 0.15, 0.16, 0.17, 0.18, 0.19, 0.20]   # 0.20 R = 25 mm: widest practical 10 in blade
+  cl_limit: 1.0
+  bending_weight: 0.0
+  objective: torque          # global minimum motor torque (motor size and current); the energy optimum is reported too
+cad:
+  apply_trim_offset: true
+  export_rotor: true
+  export_stl: true

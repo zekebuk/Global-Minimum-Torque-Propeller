@@ -11,14 +11,20 @@ requires-python = ">=3.10"
 authors = [{ name = "Zeke Bukovansky" }]
 license = { file = "LICENSE" }
 dependencies = [
-    "numpy",
-    "pandas",
-    "scipy",
-    "matplotlib",
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "matplotlib>=3.8",
+    "PyYAML>=6.0",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "black", "ruff"]
+cad = ["cadquery>=2.4"]
+fea = ["gmsh>=4.11"]
+gui = ["streamlit", "pandas", "openpyxl"]
+dev = ["pytest>=8", "ruff>=0.5"]
+
+[project.scripts]
+prandtl = "prandtl_prop.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -27,13 +33,15 @@ where = ["src"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 
-[tool.black]
-line-length = 120
-
 [tool.ruff]
-line-length = 120
+line-length = 140
 target-version = "py310"
+extend-exclude = ["archive"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# Scripts put src/ on sys.path before importing the package so they run without installation.
+"scripts/**" = ["E402"]

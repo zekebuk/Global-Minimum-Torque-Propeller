@@ -23,6 +23,9 @@ pytest_tmp*/
 Thumbs.db
 .DS_Store
 
+# Pipeline run folders (content-addressed, regenerable)
+runs/
+
 # Generated thesis outputs that can be regenerated
 outputs/tmp/
 outputs/scratch/
@@ -51,3 +54,4 @@ external/**/bin/
 external/**/obj/
 
 # Keep small locked CSV/JSON data and thesis-ready output manifests tracked.
+*.egg-info/

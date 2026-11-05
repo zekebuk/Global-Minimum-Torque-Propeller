@@ -1,0 +1,8 @@
+# Pipeline smoke test without XFOIL polars or airfoil coordinates. NOT thesis results:
+# analytic polar plus a NACA 4410 stand-in for every airfoil. Usage: --set-file designs/smoke_overrides.txt
+aero.polar.type=analytic
+aero.polar.cl_alpha_per_rad=5.8
+aero.polar.alpha0_deg=-2.5
+aero.polar.cd0=0.011
+aero.polar.k=0.006
+airfoils.substitutes={"*": NACA4410}

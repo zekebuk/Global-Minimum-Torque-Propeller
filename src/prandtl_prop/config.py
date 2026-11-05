@@ -16,10 +16,13 @@ DESIGN_BLADE_COUNT = 2
 DESIGN_RPM = 4000.0
 TARGET_THRUST_N = 35.0
 AIR_DENSITY_KG_M3 = 1.225
+AIR_VISCOSITY_KG_M_S = 1.81e-5
 
 DESIGN_OMEGA_RAD_S = DESIGN_RPM * 2.0 * math.pi / 60.0
 DISK_AREA_M2 = math.pi * DESIGN_RADIUS_M**2
 
+# Locked results produced by the archived aero solver. See docs/iterative_workflow.md: the GMT tip
+# station in these data did not converge, so they are a historical baseline, not a verified answer.
 LOCKED_MIL_THRUST_N = 35.00000016969875
 LOCKED_GMT_THRUST_N = 34.999994345585726
 LOCKED_MIL_TORQUE_NM = 0.859265776418447
@@ -31,12 +34,23 @@ LOCKED_CENTER_OF_THRUST_SHIFT_RR = 0.018959311812037583
 DATA_DIR = PROJECT_ROOT / "data"
 GEOMETRY_DATA_DIR = DATA_DIR / "geometry"
 PROCESSED_DATA_DIR = DATA_DIR / "processed"
+AIRFOIL_DATA_DIR = DATA_DIR / "airfoils"
+POLAR_DATA_DIR = DATA_DIR / "xfoil_polars"
+DESIGNS_DIR = PROJECT_ROOT / "designs"
+RUNS_DIR = PROJECT_ROOT / "runs"
+SCRIPTS_DIR = PROJECT_ROOT / "scripts"
+GUI_SCRIPTS_DIR = SCRIPTS_DIR / "gui"
 OUTPUTS_DIR = PROJECT_ROOT / "outputs"
 OUTPUT_FIGURES_DIR = OUTPUTS_DIR / "figures"
 OUTPUT_TABLES_DIR = OUTPUTS_DIR / "tables"
 OUTPUT_GEOMETRY_DIR = OUTPUTS_DIR / "geometry_exports"
 OUTPUT_REPORTS_DIR = OUTPUTS_DIR / "reports"
 
+ARCHIVE_DIR = PROJECT_ROOT / "archive"
+LEGACY_SCRIPTS_DIR = ARCHIVE_DIR / "legacy_scripts"
+LEGACY_FEA_DIR = LEGACY_SCRIPTS_DIR / "Propeller_3D_Beam_6DOF_FEA"
+
+# External thesis-results tree from the original working repository (not committed here).
 RESULTS_DIR = PROJECT_ROOT / "results"
 FINAL_THESIS_DIR = RESULTS_DIR / "FINAL_THESIS_USE_THESE"
 FINAL_GEOMETRY_DIR = FINAL_THESIS_DIR / "01_geometry"
@@ -51,3 +65,12 @@ LOCKED_DESIGN_SUMMARY_JSON = PROCESSED_DATA_DIR / "design_summary_LOCKED.json"
 MIL_STATION_CSV = PROCESSED_DATA_DIR / "mil_bemt_validation_LOCKED.csv"
 GMT_STATION_CSV = PROCESSED_DATA_DIR / "gmt_bemt_validation_LOCKED.csv"
 LOCKED_COMPARISON_CSV = PROCESSED_DATA_DIR / "locked_aero_comparison.csv"
+
+
+def relative(path: Path) -> str:
+    """Return a display path relative to the repo root when possible."""
+
+    try:
+        return Path(path).resolve().relative_to(PROJECT_ROOT.resolve()).as_posix()
+    except ValueError:
+        return str(path)
