@@ -1,0 +1,123 @@
+{
+  "arm_angle_deg": 49.89999999999915,
+  "motor_radius": 212.72013245675475,
+  "root_radius": 68.03017261684624,
+  "arm_L": 144.6899598399085,
+  "arm_b": 21.862250788914746,
+  "arm_h_root": 33.994021191058025,
+  "arm_h_tip": 13.626105001976818,
+  "arm_t_w": 1.8599999999999999,
+  "arm_t_f": 1.44,
+  "arm_n_walls": 3,
+  "arm_n_layers": 6,
+  "tenon_L": 30.0,
+  "tenon_b": 34.86225078891475,
+  "tenon_chamfer": 4.0,
+  "pad_d": 36.0,
+  "motor_clamp_t": 4.0,
+  "motor_patterns": [
+    16.0,
+    19.0
+  ],
+  "motor_hole_d": 3.3,
+  "shaft_d": 9.0,
+  "motor_base_d": 34.0,
+  "wire_exit_x": 121.68995983990851,
+  "tenon_bolt_x": -15.0,
+  "tenon_bolt_y": 14.181125394457373,
+  "dv_depth": 6.0,
+  "dv_flare": 3.4641016151377544,
+  "dv_beta_deg": 30.0,
+  "dv_taper": 0.04,
+  "dv_home_gap": 3.0,
+  "dv_side_clear": 0.3,
+  "dv_top_relief": 0.3,
+  "dv_insert_depth": 6.0,
+  "tie_bolt_x": -7.5,
+  "tie_bolt_y": 23.89522700959513,
+  "washer_od": 7.0,
+  "body_hx": 53.0,
+  "body_hy": 43.0,
+  "H_int": 33.994021191058025,
+  "t_bp": 3.2,
+  "t_tp": 3.0,
+  "wall_t": 2.0,
+  "socket_half_w": 26.89522700959513,
+  "socket_clearance": 0.15,
+  "socket_wall_t": 6.0,
+  "pedestal_h": 0.0,
+  "z_arm_top": 37.19402119105803,
+  "stack_pattern": 30.5,
+  "stack_board": 37.0,
+  "stack_h": 22.0,
+  "jetson_env": [
+    100.0,
+    80.0,
+    36.0
+  ],
+  "jetson_mount_rect": [
+    86.0,
+    58.0
+  ],
+  "jetson_hole_d": 2.7,
+  "jetson_slot_travel": 4.0,
+  "fan_d": 40.0,
+  "grommet_h": 6.0,
+  "grommet_pts": [
+    [
+      31.799999999999997,
+      0.0
+    ],
+    [
+      -31.799999999999997,
+      0.0
+    ],
+    [
+      0.0,
+      25.8
+    ],
+    [
+      0.0,
+      -25.8
+    ]
+  ],
+  "top_bolt_pts": [
+    [
+      48.5,
+      0.0
+    ],
+    [
+      -48.5,
+      0.0
+    ],
+    [
+      0.0,
+      38.5
+    ],
+    [
+      0.0,
+      -38.5
+    ]
+  ],
+  "canopy_wall_t": 1.26,
+  "canopy_rect": [
+    -54.26,
+    72.25999999999999,
+    -44.26,
+    44.26
+  ],
+  "battery_env": [
+    140.0,
+    72.0,
+    44.0
+  ],
+  "strap_w": 20.0,
+  "camera_w": 20.0,
+  "prop_d": 254.0,
+  "motor_h": 28.0,
+  "m3_clear": 3.3,
+  "m3_insert": 4.0,
+  "m3_nut_af": 5.6,
+  "m3_nut_depth": 2.6,
+  "boss_d": 7.0
+}

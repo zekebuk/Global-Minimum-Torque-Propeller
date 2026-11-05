@@ -1,0 +1,174 @@
+{
+  "parts": {
+    "arm": {
+      "material": "PPA-CF",
+      "qty": 4,
+      "solid_volume_cm3": 60.56933532004994,
+      "fill_factor": 1.0,
+      "mass_each_g": 70.86612232445843,
+      "mass_total_g": 283.4644892978337,
+      "print_bbox_mm": [
+        192.7,
+        41.8,
+        34.0
+      ]
+    },
+    "bottom_body": {
+      "material": "PAHT-CF",
+      "qty": 1,
+      "solid_volume_cm3": 158.03067209989086,
+      "fill_factor": 0.78,
+      "mass_each_g": 130.65975969218977,
+      "mass_total_g": 130.65975969218977,
+      "print_bbox_mm": [
+        138.7,
+        128.8,
+        37.2
+      ]
+    },
+    "top_plate": {
+      "material": "PAHT-CF",
+      "qty": 1,
+      "solid_volume_cm3": 34.83078290831059,
+      "fill_factor": 0.85,
+      "mass_each_g": 31.382535400387845,
+      "mass_total_g": 31.382535400387845,
+      "print_bbox_mm": [
+        138.7,
+        128.8,
+        3.0
+      ]
+    },
+    "jetson_tray": {
+      "material": "PAHT-CF",
+      "qty": 1,
+      "solid_volume_cm3": 14.48017753667321,
+      "fill_factor": 0.85,
+      "mass_each_g": 13.046639960542565,
+      "mass_total_g": 13.046639960542565,
+      "print_bbox_mm": [
+        100.0,
+        72.0,
+        3.0
+      ]
+    },
+    "canopy": {
+      "material": "PETG-HF",
+      "qty": 1,
+      "solid_volume_cm3": 32.60368486694845,
+      "fill_factor": 1.0,
+      "mass_each_g": 41.40667978102453,
+      "mass_total_g": 41.40667978102453,
+      "print_bbox_mm": [
+        108.5,
+        88.5,
+        48.0
+      ]
+    },
+    "camera_mount": {
+      "material": "PETG-HF",
+      "qty": 1,
+      "solid_volume_cm3": 8.061735742621465,
+      "fill_factor": 0.9,
+      "mass_each_g": 9.214563953816336,
+      "mass_total_g": 9.214563953816336,
+      "print_bbox_mm": [
+        40.6,
+        34.0,
+        27.0
+      ]
+    },
+    "battery_pad": {
+      "material": "PETG-HF",
+      "qty": 1,
+      "solid_volume_cm3": 29.19075394183918,
+      "fill_factor": 0.7,
+      "mass_each_g": 25.950580254295026,
+      "mass_total_g": 25.950580254295026,
+      "print_bbox_mm": [
+        140.0,
+        72.0,
+        6.5
+      ]
+    },
+    "gps_mast": {
+      "material": "PETG-HF",
+      "qty": 1,
+      "solid_volume_cm3": 4.247082084003612,
+      "fill_factor": 0.6,
+      "mass_each_g": 3.236276548010753,
+      "mass_total_g": 3.236276548010753,
+      "print_bbox_mm": [
+        28.0,
+        28.0,
+        45.0
+      ]
+    },
+    "landing_leg": {
+      "material": "PETG-HF",
+      "qty": 4,
+      "solid_volume_cm3": 9.447263480857055,
+      "fill_factor": 0.7,
+      "mass_each_g": 8.398617234481922,
+      "mass_total_g": 33.59446893792769,
+      "print_bbox_mm": [
+        32.0,
+        32.0,
+        88.1
+      ]
+    }
+  },
+  "interference": {
+    "arm_0 x bottom_body": 0,
+    "arm_0 x top_plate": 0,
+    "arm_0 x fc_stack": 0,
+    "arm_1 x bottom_body": 0,
+    "arm_1 x top_plate": 0,
+    "arm_1 x fc_stack": 0,
+    "arm_2 x bottom_body": 0,
+    "arm_2 x top_plate": 0,
+    "arm_2 x fc_stack": 0,
+    "arm_3 x bottom_body": 0,
+    "arm_3 x top_plate": 0,
+    "arm_3 x fc_stack": 0,
+    "arm_0 x arm_1": 0,
+    "fc_stack x bottom_body": 0,
+    "jetson x canopy": 0,
+    "jetson x jetson_tray": 0,
+    "jetson_tray x canopy": 0,
+    "props x canopy": 0,
+    "props x gps_mast": 0,
+    "camera x camera_mount": 0,
+    "camera_mount x bottom_body": 0,
+    "battery x battery_pad": 0,
+    "battery_pad x bottom_body": 0,
+    "leg_0 x battery": 0
+  },
+  "bed_fit": {
+    "arm": true,
+    "bottom_body": true,
+    "top_plate": true,
+    "jetson_tray": true,
+    "canopy": true,
+    "camera_mount": true,
+    "battery_pad": true,
+    "gps_mast": true,
+    "landing_leg": true
+  },
+  "clashes": {},
+  "joint": {
+    "slide_out_clash_mm3": {
+      "2 mm out": 0,
+      "10 mm out": 0,
+      "20 mm out": 0,
+      "35 mm out": 0
+    },
+    "slide_out_clear": true,
+    "seat_check_interference_0p5mm_deeper_mm3": 6.597246326363498,
+    "wedges_when_pushed": true
+  },
+  "frame_mass_g_without_legs": 538.3615248881006,
+  "arms_mass_g": 283.4644892978337,
+  "nonarm_mass_g_without_legs": 254.89703559026685,
+  "legs_mass_g": 33.59446893792769
+}
