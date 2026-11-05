@@ -56,7 +56,8 @@ def operating_points(auw_g: float, cfg: dict) -> dict:
         "f1P_max_Hz": n_max,
         "fBP_hover_Hz": bp * n_hover,
         "fBP_max_Hz": bp * n_max,
-        "Q_max_Nm": torque_for_thrust(T_max, prop),
+        # BEMT torque at max thrust when the prandtl multirotor stage supplied it, else constant-CP estimate
+        "Q_max_Nm": prop.get("max_thrust_torque_Nm") or torque_for_thrust(T_max, prop),
         "v_induced_hover": induced_velocity(T_hover, prop),
         "f1P_cruise_Hz": n_cruise,
         "forbidden_bands_Hz": merged,

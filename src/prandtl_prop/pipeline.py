@@ -41,6 +41,7 @@ STAGES = (
     "multirotor",
     "acoustics",
     "sitl",
+    "frame",
 )
 DEFAULT_STAGES = ("aero", "sections", "dfm", "cad", "beam")  # seconds; fea, modal, and cfd take minutes to hours
 STAGE_UPSTREAM = {
@@ -59,8 +60,31 @@ STAGE_UPSTREAM = {
     "multirotor": ("aero", "cad"),
     "acoustics": ("aero",),
     "sitl": ("aero", "cad", "multirotor"),
+    "frame": ("aero", "cad", "multirotor"),
 }
 STAGE_MODULES = {
+    "frame": (
+        "prandtl_prop.frame.config",
+        "prandtl_prop.frame.materials",
+        "prandtl_prop.frame.rotor",
+        "prandtl_prop.frame.sections",
+        "prandtl_prop.frame.beam_fe",
+        "prandtl_prop.frame.layout",
+        "prandtl_prop.frame.arm_model",
+        "prandtl_prop.frame.arm_opt",
+        "prandtl_prop.frame.analysis",
+        "prandtl_prop.frame.geometry",
+        "prandtl_prop.frame.vehicle",
+        "prandtl_prop.frame.workflow",
+        "prandtl_prop.frame.onshape_export",
+        "prandtl_prop.frame.print_plan",
+        "prandtl_prop.frame.report",
+        "prandtl_prop.frame.cad.parts",
+        "prandtl_prop.frame.cad.assembly",
+        "prandtl_prop.frame.cad.render",
+        "prandtl_prop.multirotor",
+        "prandtl_prop.pipeline",
+    ),
     "aero": (
         "prandtl_prop.aero.bemt",
         "prandtl_prop.aero.polars",
@@ -984,6 +1008,94 @@ def _stage_sitl(design: DesignCase, run: StageRun, upstream: dict[str, StageRun]
     return metrics, warnings
 
 
+def _stage_frame(design: DesignCase, run: StageRun, upstream: dict[str, StageRun]) -> tuple[dict[str, Any], list[str]]:
+    """Printed airframe sized around this prop and motor (prandtl_prop.frame, drone_frame/).
+
+    The frame's own requirements file sets the payload, materials, joint and print limits; its
+    propulsion placeholders are replaced with this design's BEMT + vehicle results (blade count,
+    hover CT/CP, max thrust and torque, torque-sized motor mass, CAD prop mass, blade-pass orders).
+    Writes the full frame run (report, CAD, print plan, Onshape FeatureScript) into the run folder.
+    """
+
+    from prandtl_prop.frame import vehicle as frame_vehicle
+    from prandtl_prop.frame.config import load_frame_config, load_materials_config
+    from prandtl_prop.frame.materials import load_materials
+    from prandtl_prop.frame.workflow import run_frame
+
+    spec = design.frame
+    cfg = load_frame_config(resolve_path(spec.config))
+    mats = load_materials(load_materials_config(resolve_path(spec.materials)))
+    cfg["optimization"]["de_maxiter"] = spec.optimizer_generations
+    vin = frame_vehicle.vehicle_inputs(design, upstream["cad"].metrics, upstream["multirotor"].metrics)
+    cfg = frame_vehicle.apply_vehicle_inputs(cfg, vin)
+    lines: list[str] = []
+    res = run_frame(
+        cfg,
+        mats,
+        run.path("frame"),
+        build_cad=spec.build_cad,
+        compare_materials=spec.compare_materials,
+        onshape_dir=run.path("onshape") if spec.export_onshape else None,
+        export_onshape=spec.export_onshape,
+        cad_mass_passes=spec.cad_mass_passes,
+        log=lines.append,
+    )
+    run.path("frame.log").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    an, cad = res["analysis"], res["cad"]
+    arm = an["arm"]["result"]
+    lay = an["layout"]
+    opp = an["operating_point"]
+    rpm_const_ct, rpm_bemt = frame_vehicle.rpm_check(an)
+    metrics: dict[str, Any] = {
+        "auw_kg": an["auw_g"] / 1e3,
+        "frame_mass_kg": (cad["frame_mass_g_without_legs"] if cad else an["frame_mass_g"]) / 1e3,
+        "arm_mass_kg": arm["mass"]["total_g"] / 1e3,
+        "arm_feasible": bool(an["arm"]["feasible"]),
+        "arm_width_m": arm["design"]["b"] / 1e3,
+        "arm_root_height_m": arm["design"]["h_root"] / 1e3,
+        "arm_tip_height_m": arm["design"]["h_tip"] / 1e3,
+        "arm_wall_loops": arm["design"]["n_walls"],
+        "arm_skin_layers": arm["design"]["n_layers"],
+        "arm_angle_deg": float(lay["arm_angle_deg"]),
+        "motor_radius_m": lay["motor_radius"] / 1e3,
+        "wheelbase_m": lay["wheelbase_diag"] / 1e3,
+        "arm_free_length_m": lay["arm_free_length"] / 1e3,
+        "arm_mode_vertical_Hz": arm["f_vert_Hz"],
+        "arm_mode_lateral_Hz": arm["f_lat_Hz"],
+        "arm_mode_torsion_Hz": arm["f_tor_Hz"],
+        "allowed_modal_windows_Hz": [[lo, hi] for lo, hi in opp["allowed_windows_Hz"]],
+        "excitation_orders": list(cfg["loads"]["harmonics"]),
+        "hover_rpm_frame": opp["rpm_hover"],
+        "max_thrust_rpm_constant_ct": rpm_const_ct,
+        "max_thrust_rpm_bemt": rpm_bemt,
+        "joint_capacity_Nm": arm["joint_cap_Nm"],
+        "joint_crash_moment_Nm": arm["M_crash_Nm"],
+        "joint_fuse_ratio": arm["fuse_ratio"],
+        "min_margin": min(arm["margins"].values()),
+        "min_margin_name": min(arm["margins"], key=arm["margins"].get),
+        "inputs_from_vehicle": vin["sources"],
+    }
+    check_metrics, warnings = frame_vehicle.consistency(design, an, spec)
+    metrics.update(check_metrics)
+    if not an["arm"]["feasible"]:
+        warnings.append(f"No feasible arm: tightest constraint {metrics['min_margin_name']} ({metrics['min_margin']:+.3f}); see frame/design_report.md")
+    if cad:
+        metrics["cad_clashes"] = len(cad["clashes"])
+        metrics["dovetail_slide_out_clear"] = cad["joint"]["slide_out_clear"]
+        metrics["dovetail_wedges"] = cad["joint"]["wedges_when_pushed"]
+        if cad["clashes"]:
+            warnings.append(f"CAD interference: {', '.join(cad['clashes'])}")
+        if not all(cad["bed_fit"].values()):
+            warnings.append(f"Parts exceed the printer bed: {[k for k, v in cad['bed_fit'].items() if not v]}")
+        if not (cad["joint"]["slide_out_clear"] and cad["joint"]["wedges_when_pushed"]):
+            warnings.append("Dovetail joint check failed (slide-out path or wedge seat)")
+    if math.isfinite(rpm_bemt) and abs(rpm_const_ct / rpm_bemt - 1.0) > 0.05:
+        warnings.append(
+            f"Constant-CT max-thrust rpm {rpm_const_ct:.0f} vs BEMT {rpm_bemt:.0f}: the frame's upper excitation bands are approximate"
+        )
+    return metrics, warnings
+
+
 def _reference_bands(noise: dict[str, Any]) -> list[dict[str, float]]:
     import numpy as np
 
@@ -1118,6 +1230,7 @@ STAGE_FUNCTIONS: dict[str, Callable[[DesignCase, StageRun, dict[str, StageRun]],
     "multirotor": _stage_multirotor,
     "acoustics": _stage_acoustics,
     "sitl": _stage_sitl,
+    "frame": _stage_frame,
 }
 
 STAGE_DESIGN_INPUTS = {
@@ -1136,6 +1249,7 @@ STAGE_DESIGN_INPUTS = {
     "multirotor": ("operating_point", "geometry", "aero", "airfoils.thickness_scale", "airfoils.trailing_edge_thickness_m", "multirotor"),
     "acoustics": ("operating_point", "geometry", "aero", "airfoils", "gmt.cl_limit", "acoustics"),
     "sitl": ("operating_point", "geometry", "aero", "airfoils.thickness_scale", "airfoils.trailing_edge_thickness_m", "multirotor", "sitl"),
+    "frame": ("operating_point", "multirotor", "frame"),
 }
 
 
@@ -1250,6 +1364,10 @@ def _input_files(stage: str, design: DesignCase) -> list[Path]:
         directory = resolve_path(design.airfoils.directory)
         names = {row["airfoil"].strip() for row in _read_csv(geometry_csv)} | set(design.airfoils.substitutes.values())
         return [geometry_csv] + [path for path in (find_airfoil_file(name, directory) for name in sorted(names)) if path]
+    if stage == "frame":
+        frame_root = resolve_path("drone_frame")
+        templates = sorted((frame_root / "onshape" / "templates").glob("*.tmpl"))
+        return [resolve_path(design.frame.config), resolve_path(design.frame.materials), *templates]
     return []
 
 

@@ -1,21 +1,17 @@
 """Checks against closed-form solutions + consistency between the analysis model and the CAD."""
 
 import math
-import sys
-from pathlib import Path
 
 import numpy as np
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from frame_pipeline import beam_fe  # noqa: E402
-from frame_pipeline.arm_model import ArmContext, arm_mass_breakdown, evaluate, socket_half_width, unpack  # noqa: E402
-from frame_pipeline.config import load_frame_config, load_materials_config  # noqa: E402
-from frame_pipeline.layout import body_half_dims, canopy_rect, dist_point_rect, root_radius, solve_layout  # noqa: E402
-from frame_pipeline.materials import load_materials  # noqa: E402
-from frame_pipeline.rotor import modal_margin, operating_points, rev_per_s_for_thrust  # noqa: E402
-from frame_pipeline.sections import ArmSection, poly_props  # noqa: E402
+from prandtl_prop.frame import beam_fe
+from prandtl_prop.frame.arm_model import ArmContext, arm_mass_breakdown, evaluate, socket_half_width, unpack
+from prandtl_prop.frame.config import load_frame_config, load_materials_config
+from prandtl_prop.frame.layout import body_half_dims, canopy_rect, dist_point_rect, root_radius, solve_layout
+from prandtl_prop.frame.materials import load_materials
+from prandtl_prop.frame.rotor import modal_margin, operating_points, rev_per_s_for_thrust
+from prandtl_prop.frame.sections import ArmSection, poly_props
 
 
 @pytest.fixture(scope="module")
@@ -49,17 +45,18 @@ def test_arm_section_channel_reduces_inertia():
 
 
 def test_cantilever_static_and_modal():
-    E, I, L, m_tip = 7e9, 2e-8, 0.15, 0.08
+    E, Iyy, L, m_tip = 7e9, 2e-8, 0.15, 0.08
     x = np.linspace(0, L, 21)
-    EI = np.full(20, E * I)
+    EI = np.full(20, E * Iyy)
     mpl = np.full(20, 0.02)  # 3 g beam
     K, M = beam_fe.assemble_bending(x, EI, mpl, m_tip, 0.0)
-    F = np.zeros(K.shape[0]); F[-2] = 10.0
+    F = np.zeros(K.shape[0])
+    F[-2] = 10.0
     u = beam_fe.static_solve(K, F)
-    assert u[-2] == pytest.approx(10 * L**3 / (3 * E * I), rel=1e-6)
+    assert u[-2] == pytest.approx(10 * L**3 / (3 * E * Iyy), rel=1e-6)
     f, _ = beam_fe.natural_frequencies(K, M, 1)
     m_eff = m_tip + 0.236 * 0.02 * L  # Rayleigh
-    assert f[0] == pytest.approx(math.sqrt(3 * E * I / L**3 / m_eff) / (2 * math.pi), rel=2e-3)
+    assert f[0] == pytest.approx(math.sqrt(3 * E * Iyy / L**3 / m_eff) / (2 * math.pi), rel=2e-3)
 
 
 def test_rotor_bands_and_margin(cfg):
@@ -114,8 +111,8 @@ def test_stiffer_material_raises_frequency(cfg, mats):
 
 def test_cad_arm_matches_model_mass(cfg, mats):
     cq = pytest.importorskip("cadquery")  # noqa: F841
-    from frame_pipeline.cad.parts import make_arm
-    from frame_pipeline.geometry import derive
+    from prandtl_prop.frame.cad.parts import make_arm
+    from prandtl_prop.frame.geometry import derive
 
     ctx, lay = _ctx(cfg, mats)
     x = [22.0, 30.0, 0.5, 4, 7]
@@ -130,7 +127,7 @@ def test_cad_arm_matches_model_mass(cfg, mats):
 
 
 def test_dovetail_self_locks_and_is_printable(cfg):
-    from frame_pipeline.arm_model import dovetail
+    from prandtl_prop.frame.arm_model import dovetail
 
     dv = dovetail(cfg)
     # wedge self-locks when tan(taper half-angle) < friction coefficient
@@ -142,13 +139,13 @@ def test_dovetail_self_locks_and_is_printable(cfg):
 
 
 def test_dovetail_joint_stiffer_than_arm_and_survives_crash_case(cfg, mats):
-    from frame_pipeline.arm_model import joint_springs, unpack
+    from prandtl_prop.frame.arm_model import joint_springs, unpack
 
     ctx, _ = _ctx(cfg, mats)
     x = [22.0, 30.0, 0.5, 4, 7]
     d = unpack(x, mats["PPA-CF"])
     js = joint_springs(d, ctx)
-    sec = __import__("frame_pipeline.sections", fromlist=["ArmSection"]).ArmSection(22.0, 30.0, d["t_w"], d["t_f"]).props()
+    sec = __import__("prandtl_prop.frame.sections", fromlist=["ArmSection"]).ArmSection(22.0, 30.0, d["t_w"], d["t_f"]).props()
     arm_rot = mats["PPA-CF"].E * sec["Iyy"] / ctx.L * 1e-3      # N*m/rad, cantilever EI/L
     assert js["vert"] > 10 * arm_rot
     r = evaluate(x, ctx)
@@ -158,9 +155,9 @@ def test_dovetail_joint_stiffer_than_arm_and_survives_crash_case(cfg, mats):
 
 def test_dovetail_cad_seats_and_slides_out(cfg, mats):
     pytest.importorskip("cadquery")
-    from frame_pipeline.cad import parts as P
-    from frame_pipeline.cad.assembly import intersection_volume
-    from frame_pipeline.geometry import arm_axes, derive
+    from prandtl_prop.frame.cad import parts as P
+    from prandtl_prop.frame.cad.assembly import intersection_volume
+    from prandtl_prop.frame.geometry import arm_axes, derive
 
     ctx, lay = _ctx(cfg, mats)
     res = evaluate([22.0, 30.0, 0.5, 4, 7], ctx)
@@ -172,3 +169,78 @@ def test_dovetail_cad_seats_and_slides_out(cfg, mats):
     assert intersection_volume(arm.translate((-0.5 * ux, -0.5 * uy, 0)), body) > 1.0   # deeper -> wedges
     for dist in (5.0, 20.0):
         assert intersection_volume(arm.translate((dist * ux, dist * uy, 0)), body) < 1e-3  # slides out freely
+
+
+# ------------------------------------------------------------------ prandtl pipeline integration
+
+
+def _fpv_design(overrides=None):
+    from prandtl_prop.design import load_design, resolve_path
+
+    return load_design(resolve_path("designs/gmt_fpv10_tri.yaml"), overrides or [])
+
+
+def _fake_upstream(design):
+    """Upstream metrics consistent with a constant-CT rotor, so the mapping can be checked exactly."""
+    op, spec = design.operating_point, design.multirotor
+    D = op.diameter_in * 0.0254
+    ct, cp = 0.045, 0.014
+    n = math.sqrt(spec.hover_thrust_N / (ct * op.rho_kg_m3 * D**4))
+    vehicle = {
+        "hover_rpm": 60 * n,
+        "hover_shaft_power_W": cp * op.rho_kg_m3 * n**3 * D**5,
+        "max_thrust_torque_Nm": 0.25,
+        "max_thrust_rpm": 15000.0,
+    }
+    return {"prop_mass_kg": 0.013, "blade_mass_kg": 0.0043}, vehicle
+
+
+def test_frame_stage_is_registered():
+    from prandtl_prop import pipeline
+
+    assert "frame" in pipeline.STAGES
+    assert pipeline.STAGE_UPSTREAM["frame"] == ("aero", "cad", "multirotor")
+    assert "frame" in pipeline.STAGE_FUNCTIONS and "frame" in pipeline.STAGE_DESIGN_INPUTS
+    assert "frame" not in pipeline.DEFAULT_STAGES          # minutes, like fea/cfd
+    names = [p.name for p in pipeline._input_files("frame", _fpv_design())]
+    assert {"frame.yaml", "materials.yaml"} <= set(names)  # config edits invalidate the cache
+
+
+def test_frame_section_in_design_schema():
+    d = _fpv_design(["frame.build_cad=false", "frame.optimizer_generations=20"])
+    assert d.frame.build_cad is False and d.frame.optimizer_generations == 20
+    with pytest.raises(ValueError):
+        _fpv_design(["frame.not_a_key=1"])
+
+
+def test_vehicle_inputs_recover_rotor_coefficients_and_orders(cfg):
+    from prandtl_prop.frame.vehicle import apply_vehicle_inputs, vehicle_inputs
+
+    d = _fpv_design()
+    cad, veh = _fake_upstream(d)
+    vin = vehicle_inputs(d, cad, veh)
+    assert vin["ct_static"] == pytest.approx(0.045, rel=1e-9)
+    assert vin["cp_static"] == pytest.approx(0.014, rel=1e-9)
+    assert vin["prop_blades"] == 3 and vin["harmonics"] == [1, 3, 6, 9]
+    assert vin["prop_mass_g"] == pytest.approx(13.0)
+    assert vin["motor_max_thrust_N"] == pytest.approx(d.multirotor.max_thrust_N)
+    new = apply_vehicle_inputs(cfg, vin)
+    assert new["propulsion"]["prop_diameter"] == pytest.approx(254.0)
+    assert new["loads"]["harmonics"] == [1, 3, 6, 9]
+    assert cfg["propulsion"]["prop_blades"] == 2       # the standalone config is not mutated
+    op = operating_points(1500, new)
+    assert op["Q_max_Nm"] == pytest.approx(0.25)       # BEMT torque wins over the constant-CP estimate
+
+
+def test_consistency_reports_payload_to_close_the_loop():
+    from prandtl_prop.frame.vehicle import consistency
+
+    d = _fpv_design()
+    an = {"auw_g": 2000.0, "layout": {"motor_radius": 213.0},
+          "_cfg_propulsion": {"motor_mass_g": 50.0, "prop_mass_g": 13.0}}
+    metrics, warnings = consistency(d, an, d.frame)
+    assert metrics["suggested_payload_mass_kg"] == pytest.approx(2.0 - 4 * 0.063)
+    assert any("payload_mass_kg" in w for w in warnings)          # 2.0 kg vs 1.446 kg spec
+    an["auw_g"] = 1e3 * d.multirotor.mass_kg
+    _, warnings = consistency(d, an, d.frame)
+    assert not any("payload_mass_kg" in w for w in warnings)

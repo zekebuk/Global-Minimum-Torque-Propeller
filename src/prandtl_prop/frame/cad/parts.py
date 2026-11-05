@@ -382,7 +382,7 @@ def envelopes(g: FrameGeometry) -> dict[str, cq.Workplane]:
     cx, cy, cz = camera_center(g)
     env["camera"] = box(cx - 10, cx + 10, cy - g.camera_w / 2, cy + g.camera_w / 2, cz - 10, cz + 10)
     motors, props = [], []
-    for ang, (ux, uy) in arm_axes(g):
+    for _ang, (ux, uy) in arm_axes(g):
         R = g.motor_radius
         motors.append(cyl(R * ux, R * uy, g.z_arm_top, g.motor_h, g.motor_base_d))
         props.append(cyl(R * ux, R * uy, g.z_arm_top + g.motor_h, 3.0, g.prop_d))

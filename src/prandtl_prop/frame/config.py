@@ -7,7 +7,9 @@ from pathlib import Path
 
 import yaml
 
-ROOT = Path(__file__).resolve().parents[1]
+# Frame data (config, Onshape templates, docs, generated outputs) lives in <repo>/drone_frame;
+# the code lives here in prandtl_prop.frame.
+ROOT = Path(__file__).resolve().parents[3] / "drone_frame"
 CONFIG_DIR = ROOT / "config"
 OUTPUT_DIR = ROOT / "outputs"
 INCH = 25.4

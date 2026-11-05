@@ -25,6 +25,7 @@ import yaml
 from prandtl_prop import config
 from prandtl_prop.acoustics.rotor import AcousticsSpec
 from prandtl_prop.cad.hub import HubDesign
+from prandtl_prop.frame.spec import FrameSpec
 from prandtl_prop.manufacturing.mold import MoldDesign
 from prandtl_prop.multirotor import MultirotorSpec
 from prandtl_prop.sitl.spec import SitlSpec
@@ -254,6 +255,7 @@ class DesignCase:
     gmt: GmtSpec = field(default_factory=GmtSpec)
     acoustics: AcousticsSpec = field(default_factory=AcousticsSpec)
     sitl: SitlSpec = field(default_factory=SitlSpec)
+    frame: FrameSpec = field(default_factory=FrameSpec)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -383,6 +385,7 @@ _NESTED: dict[tuple[type, str], type] = {
     (DesignCase, "gmt"): GmtSpec,
     (DesignCase, "acoustics"): AcousticsSpec,
     (DesignCase, "sitl"): SitlSpec,
+    (DesignCase, "frame"): FrameSpec,
     (AeroSpec, "polar"): PolarSpec,
     (StructureSpec, "material"): MaterialSpec,
 }

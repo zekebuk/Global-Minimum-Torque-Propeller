@@ -16,9 +16,10 @@ import shutil
 from pathlib import Path
 from string import Template
 
+from .config import ROOT
 from .geometry import FrameGeometry
 
-ONSHAPE_DIR = Path(__file__).resolve().parents[1] / "onshape"
+ONSHAPE_DIR = ROOT / "onshape"
 # Any published std version works; Onshape keeps every version. If Onshape complains, keep the two header
 # lines it writes into a new Feature Studio and paste everything below them.
 FS_VERSION = "2399"
@@ -101,7 +102,7 @@ def _variables_fs(g: FrameGeometry) -> str:
         f"FeatureScript {FS_VERSION};",
         f'import(path : "onshape/std/common.fs", version : "{FS_VERSION}.0");',
         "",
-        f"// PF10 Frame Variables - GENERATED {dt.date.today().isoformat()} by frame_pipeline/onshape_export.py.",
+        f"// PF10 Frame Variables - GENERATED {dt.date.today().isoformat()} by prandtl_prop/frame/onshape_export.py.",
         "// Insert this feature first in a Part Studio; every #pf10_* variable is then available to later features.",
         "",
         'annotation { "Feature Type Name" : "PF10 Frame Variables" }',
@@ -118,8 +119,8 @@ def _variables_fs(g: FrameGeometry) -> str:
     return "\n".join(lines)
 
 
-def export_onshape(g: FrameGeometry, analysis: dict, step_dir: Path | None = None) -> dict:
-    out = ONSHAPE_DIR / "generated"
+def export_onshape(g: FrameGeometry, analysis: dict, step_dir: Path | None = None, out_dir: Path | None = None) -> dict:
+    out = Path(out_dir) if out_dir is not None else ONSHAPE_DIR / "generated"
     out.mkdir(parents=True, exist_ok=True)
     subs = _subs(g, analysis)
     written = []

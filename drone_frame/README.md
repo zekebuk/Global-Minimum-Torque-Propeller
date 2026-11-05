@@ -21,14 +21,21 @@ config/frame.yaml + config/materials.yaml
 
 ## Quick start
 
+The code is the `prandtl_prop.frame` package (`src/prandtl_prop/frame/`). This folder holds the frame's
+requirements, Onshape templates, docs and the standalone run's outputs.
+
 ```bash
-cd drone_frame
-python -m pip install -r requirements.txt
-python run_pipeline.py            # full run, ~5-8 min on 4 cores
-python run_pipeline.py --fast     # ~2 min, no material comparison
-python -m pytest tests -q         # closed-form checks + CAD/model consistency
-python onshape/onshape_bootstrap.py   # dry run of the Onshape document creation
+python -m pip install -e ".[cad,dev]"                       # from the repository root
+prandtl run designs/gmt_fpv10_tri.yaml --stages frame       # as a pipeline stage: rotor/motor/prop from BEMT + vehicle
+python drone_frame/run_pipeline.py                          # standalone: propulsion placeholders from config/frame.yaml
+python drone_frame/run_pipeline.py --fast                   # ~2 min, no material comparison
+python -m pytest tests/test_frame.py -q                     # closed-form checks, CAD/model consistency, stage wiring
+python drone_frame/onshape/onshape_bootstrap.py --check     # Onshape keys + network (see onshape/SETUP.md)
 ```
+
+As a stage, the frame's propulsion placeholders are replaced by the design's own results, and the run
+folder gets the full frame report, CAD, print plan and Onshape files (`runs/<design>/frame/<key>/`). See
+`docs/frame.md` at the repository root.
 
 Then read `outputs/design_report.md`, follow `onshape/SETUP.md` to build the Onshape document, and
 print from `outputs/print_plan.md`.
@@ -106,14 +113,14 @@ PPA-CF and PETG-HF, and print temperatures were not on the pages retrieved and a
 | Path | Contents |
 | --- | --- |
 | `config/` | `frame.yaml` (requirements, components, bounds, loads), `materials.yaml` (TDS + knock-downs + X1C settings) |
-| `frame_pipeline/` | `rotor`, `sections`, `beam_fe`, `layout`, `arm_model`, `arm_opt`, `analysis`, `geometry`, `cad/`, `onshape_export`, `print_plan`, `report` |
+| `src/prandtl_prop/frame/` | `rotor`, `sections`, `beam_fe`, `layout`, `arm_model`, `arm_opt`, `analysis`, `geometry`, `vehicle` (prandtl adapter), `spec`, `workflow`, `cad/`, `onshape_export`, `print_plan`, `report` |
 | `onshape/templates/` | FeatureScript templates; `onshape/generated/` is written by the pipeline |
 | `onshape/SETUP.md` | Document structure, Part Studios, assembly mates, simulation, release |
 | `onshape/onshape_bootstrap.py` | REST-API document creation (dry run by default) |
 | `outputs/` | `design_report.md`, `analysis.json`, `frame_geometry.json`, `print_plan.md/.csv`, `cad/step`, `cad/stl`, `cad/cad_report.json`, `figures/` |
 | `docs/test_plan.md` | Coupons → dovetail seat → arm tap/proof tests → thermal soak → thrust stand → flight logging, with calibration formulas |
 | `docs/dovetail_joint.md` | Arm joint design: section sketch, rationale per feature, swap procedure, capacities, trade-offs |
-| `tests/` | Closed-form section/beam checks, rotor bands, layout constraints, CAD-vs-model arm volume |
+| `tests/test_frame.py` (repo root) | Closed-form section/beam checks, rotor bands, layout constraints, CAD-vs-model arm volume, dovetail, stage wiring |
 
 ## Status and limits
 

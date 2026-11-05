@@ -21,6 +21,7 @@ dependencies = [
 cad = ["cadquery>=2.4"]
 fea = ["gmsh>=4.11"]
 gui = ["streamlit", "pandas", "openpyxl"]
+onshape = ["requests>=2.31"]   # drone_frame/onshape/onshape_bootstrap.py --execute
 dev = ["pytest>=8", "ruff>=0.5"]
 
 [project.scripts]

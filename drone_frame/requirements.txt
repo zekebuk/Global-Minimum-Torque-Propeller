@@ -1,7 +1,0 @@
-numpy>=1.26
-scipy>=1.11        # differential_evolution with integrality + constraints
-matplotlib>=3.8
-PyYAML>=6
-cadquery>=2.4      # reference CAD, STEP/STL export, interference checks
-pytest>=7
-requests>=2.31     # only for onshape/onshape_bootstrap.py --execute

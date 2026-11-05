@@ -70,9 +70,9 @@ def root_radius(theta: float, socket_half_width: float, hx: float, hy: float, ma
 def _r_min_canopy(theta: float, D: float, c: float, rect) -> float:
     need = D / 2 + c
     lo, hi = 0.0, 2000.0
-    ok = lambda R: all(
-        dist_point_rect(sx * R * math.cos(theta), R * math.sin(theta), rect) >= need for sx in (+1, -1)
-    )
+    def ok(R: float) -> bool:
+        return all(dist_point_rect(sx * R * math.cos(theta), R * math.sin(theta), rect) >= need for sx in (+1, -1))
+
     for _ in range(60):
         mid = 0.5 * (lo + hi)
         if ok(mid):

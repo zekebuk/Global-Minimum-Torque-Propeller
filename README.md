@@ -10,6 +10,8 @@ The repository is a research workflow, not a general propeller design package. T
 | --- | --- |
 | `src/prandtl_prop/` | The single implementation: BEMT (`aero/`), CAD (`cad/`), structures (`structures/`), external tools (`external/`), design files, run cache, pipeline, and CLI. |
 | `designs/` | Design files (`mil.yaml`, `gmt.yaml`) for the iterative pipeline, plus smoke-test overrides. |
+| `src/prandtl_prop/frame/` | Printed 10 in airframe (PF10): layout + arm optimisation, dovetail joint, CadQuery parts, Onshape FeatureScript, X1C print plan. Runs as the `frame` stage. |
+| `drone_frame/` | Frame requirements and material allowables (`config/`), Onshape templates and setup, joint/test docs, standalone runner and its outputs. |
 | `scripts/` | Thin entry points for the locked thesis workflow. |
 | `scripts/gui/` | Interactive launchers for the Streamlit aero UI and MATLAB FEA viewer. |
 | `runs/` | Pipeline run folders, created on demand and git-ignored. |
@@ -70,6 +72,8 @@ prandtl run designs/gmt_peek_cf30.yaml --stages cad,mold      # full blade (root
 prandtl run designs/gmt_pa6_cf30_folding.yaml --stages hub,mold   # folding prop: one hinge pin per blade, center hub
 prandtl run designs/gmt_pa6_cf30_fixed.yaml --stages hub,mold     # fixed one-piece prop (blades + boss), clamp cap
 prandtl compare designs/mil.yaml designs/gmt.yaml --stages aero,beam
+prandtl run designs/gmt_fpv10_tri.yaml --stages frame         # printed PF10 airframe sized around this prop + motor
+prandtl design-gmt designs/pf10_tri_spec.yaml --output designs/gmt_pf10_tri.yaml   # prop re-sized for the PF10 vehicle (frame loop)
 prandtl run designs/gmt.yaml --set operating_point.rpm=4200   # iterate on any design value
 prandtl run designs/gmt.yaml --set-file designs/smoke_overrides.txt   # smoke test without thesis data
 ```
@@ -87,6 +91,8 @@ See `docs/efficiency.md` for the energy audit (where the battery energy goes, wh
 See `docs/sitl.md` for the SITL bridge (custom simulator + PX4): rotor tables, motor/battery model, PX4 parameters, log replay, and mission-weighted prop selection.
 See `docs/acoustics.md` for the aeroacoustic stage (FW-H tonal + BPM broadband) and what GMT twist does to rotor noise.
 See `docs/cfd_fea_acoustics_methods.md` for the higher-fidelity methods: XFOIL / gamma-Re_theta transition polars of the molded sections, the free-vortex-wake solver, static aeroelasticity with 1/rev fatigue, and unsteady (free-wake) loading noise.
+See `docs/frame.md` for the `frame` stage: how the printed airframe takes its rotor, motor and prop from the BEMT, CAD and
+multirotor stages, and the frame <-> prop loop it closes (`drone_frame/README.md` for the frame itself).
 See `docs/fpv10_tri.md` for the 10 in tri-blade FPV variant (global-minimum-torque twist with the
 multirotor sized around it). See `docs/mission.md` for off-design performance from static to 20 m/s, flow plots, and FEA driven
 by the CFD wall loads.

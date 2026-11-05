@@ -181,7 +181,11 @@ def build_models(d: dict, ctx: ArmContext) -> dict:
     def add(n, length, eiv, eil, gj, m, ip):
         for _ in range(n):
             x_nodes.append(x_nodes[-1] + length / n)
-            EIv.append(eiv); EIl.append(eil); GJ.append(gj); mpl.append(m); ipl.append(ip)
+            EIv.append(eiv)
+            EIl.append(eil)
+            GJ.append(gj)
+            mpl.append(m)
+            ipl.append(ip)
 
     add(4, (ctx.r_root - Lt) * MM, EI_body_v, EI_body_l, GJ_body, m_body, ip_body)
     add(3, Lt * MM,
@@ -250,7 +254,8 @@ def evaluate(xvec, ctx: ArmContext) -> dict:
 
     # static: limit thrust at the tip
     F_lim = op["T_limit_N"]
-    Fv = np.zeros(Kv.shape[0]); Fv[-2] = F_lim
+    Fv = np.zeros(Kv.shape[0])
+    Fv[-2] = F_lim
     u = beam_fe.static_solve(Kv, Fv)
     tip_defl_mm = u[-2] * 1e3
     tip_slope_deg = math.degrees(u[-1])
