@@ -56,3 +56,10 @@ The `bldc_motor` package and `bldc-motor` CLI are a separate FPV motor-developme
 python scripts/run_motor_development_demo.py
 pytest tests/test_bldc_*.py
 ```
+
+RL-driven motor design (geometry -> hardware package), see `docs/motor_design_pipeline.md`:
+
+```bash
+bldc-motor design run --mission 5in_freestyle_6s
+pytest tests/test_bldc_design_*.py
+```

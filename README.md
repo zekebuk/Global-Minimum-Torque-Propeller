@@ -96,6 +96,18 @@ bldc-motor match --dry-mass-g 250 --batteries lipo_6s_1300 lipo_4s_1500
 python scripts/run_motor_development_demo.py   # synthetic end-to-end pipeline -> outputs/motor/demo/
 ```
 
+### RL-driven motor design pipeline
+
+`src/bldc_motor/design/` designs a buildable outrunner for a mission. A 17-parameter geometry, winding and materials space feeds an analytical electromagnetic, loss and thermal model, which is evaluated in the aircraft and scored on efficiency, manufacturability (DFM rules, unit cost) and constraints. A Gymnasium environment exposes this to a PPO design agent (NumPy). Differential evolution and random search run on the same budget, and the robust winner is exported as a hardware package: lamination DXF, cross-section, winding table, BOM, spec sheet with acceptance limits, and a predicted stand curve. A calibration loop feeds prototype measurements back into the model.
+
+```bash
+python -m pip install -e ".[rl]"
+bldc-motor design run --mission 5in_freestyle_6s --rl-steps 150000
+bldc-motor design benchmark        # mission-conditioned policy vs per-mission optimisers
+```
+
+See `docs/motor_design_pipeline.md` for the physics, DFM rules, RL formulation, results and limitations.
+
 The bundled component library is **illustrative**: generic size-class placeholders, not manufacturer or measured data. Model equations, assumptions, the bench-test protocol and the CSV schema are in `docs/motor_development.md`.
 
 ## Locked Modeled Result

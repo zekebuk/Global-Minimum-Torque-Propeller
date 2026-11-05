@@ -200,6 +200,10 @@ measurements.
 | `plotting.py` | efficiency map + prop line, model-vs-stand, thermal trace |
 | `cli.py` | `bldc-motor` command line |
 
+## Designing new motors
+
+To *design* a motor instead of characterising an existing one, see `docs/motor_design_pipeline.md` (`bldc-motor design run`). Prototypes built from it are bench-tested with the protocol above and fed back through `bldc-motor design calibrate`.
+
 ## Known limitations / next steps
 
 * No inductance or commutation model, so high-eRPM, high-load "Kv sag" is not predicted.

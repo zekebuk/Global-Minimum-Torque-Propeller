@@ -469,6 +469,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--name")
     p.add_argument("--save", type=Path, help="append the rewound motor to a library JSON")
     p.set_defaults(func=cmd_rewind)
+    from bldc_motor.design.cli import add_design_commands
+
+    add_design_commands(sub)
     return parser
 
 

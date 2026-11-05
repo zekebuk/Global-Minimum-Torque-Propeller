@@ -313,6 +313,80 @@ class Powertrain:
         throttle = brentq(residual, 0.0, 1.0, xtol=1.0e-7, maxiter=200)
         return self.solve_at_throttle(throttle, soc, v_inf_m_s, winding_temp_c, magnet_temp_c)
 
+    def solve_at_speed(
+        self,
+        omega_rad_s: float,
+        soc: float = 1.0,
+        v_inf_m_s: float = 0.0,
+        winding_temp_c: float | None = None,
+        magnet_temp_c: float | None = None,
+    ) -> PowertrainPoint | None:
+        """Inverse solve: the throttle that spins the prop at ``omega``; ``None`` if duty > max.
+
+        Closed form. The motor needs ``V_src = V_m + I*R_esc`` at current ``I``. With ``d*V_bus = V_src``
+        and ``V_bus = V_oc - R_s*n*(d*I + I_q)``:
+        ``V_bus^2 - (V_oc - R_s*n*I_q)*V_bus + R_s*n*V_src*I = 0`` (take the larger, stable root).
+        """
+
+        torque = self.propeller.torque(omega_rad_s, v_inf_m_s, self.rho)
+        point = self.motor.evaluate_at_torque(torque, omega_rad_s, winding_temp_c, magnet_temp_c)
+        v_src = point.voltage_v + point.current_a * self.esc.r_series_ohm
+        v_oc = self.battery.ocv(soc)
+        r_source = self.battery.resistance_ohm + self.esc.r_leads_ohm
+        n = self.n_motors
+        b = v_oc - r_source * n * self.esc.i_quiescent_a
+        disc = b * b - 4.0 * r_source * n * v_src * point.current_a
+        if disc < 0.0:
+            return None
+        v_bus = 0.5 * (b + math.sqrt(disc))
+        duty = v_src / v_bus
+        if duty > self.esc.max_duty + 1e-12:
+            return None
+        i_bus = duty * point.current_a + self.esc.i_quiescent_a
+        p_bus = v_bus * i_bus
+        return PowertrainPoint(
+            throttle=duty / self.esc.max_duty,
+            duty=duty,
+            v_oc=v_oc,
+            v_bus=v_bus,
+            i_bus_per_motor_a=i_bus,
+            i_bus_total_a=n * i_bus,
+            motor=point,
+            thrust_n=self.propeller.thrust(omega_rad_s, v_inf_m_s, self.rho),
+            prop_torque_nm=torque,
+            p_bus_per_motor_w=p_bus,
+            p_esc_loss_w=p_bus - point.p_elec_w,
+            p_battery_loss_w=(n * i_bus) ** 2 * r_source,
+            n_motors=n,
+        )
+
+    def solve_for_thrust_direct(
+        self,
+        thrust_n: float,
+        soc: float = 1.0,
+        v_inf_m_s: float = 0.0,
+        winding_temp_c: float | None = None,
+        magnet_temp_c: float | None = None,
+    ) -> PowertrainPoint | None:
+        """Fast equivalent of ``solve_for_thrust``: invert the prop for speed, then ``solve_at_speed``."""
+
+        if thrust_n <= 0.0:
+            return self.solve_at_throttle(0.0, soc, v_inf_m_s, winding_temp_c, magnet_temp_c)
+        prop = self.propeller
+        if v_inf_m_s == 0.0:
+            ct = prop.ct(0.0)
+            if ct <= 0.0:
+                return None
+            omega = units.TWO_PI * math.sqrt(thrust_n / (ct * self.rho * prop.diameter_m**4))
+        else:
+            hi = units.rpm_to_rad_s(1000.0)
+            while prop.thrust(hi, v_inf_m_s, self.rho) < thrust_n:
+                hi *= 2.0
+                if hi > 1.0e6:
+                    return None
+            omega = brentq(lambda w: prop.thrust(w, v_inf_m_s, self.rho) - thrust_n, 1e-3, hi, xtol=1e-9)
+        return self.solve_at_speed(omega, soc, v_inf_m_s, winding_temp_c, magnet_temp_c)
+
     def throttle_sweep(self, throttles=None, soc: float = 1.0, **kwargs) -> list[PowertrainPoint]:
         values = np.linspace(0.05, 1.0, 20) if throttles is None else throttles
         return [self.solve_at_throttle(float(t), soc, **kwargs) for t in values]
