@@ -3,6 +3,7 @@
 
     export ONSHAPE_ACCESS_KEY=...  ONSHAPE_SECRET_KEY=...      # dev portal -> API keys
     python onshape/onshape_bootstrap.py                         # dry run: prints the plan only
+    python onshape/onshape_bootstrap.py --check                 # verify keys + network only (no changes)
     python onshape/onshape_bootstrap.py --execute               # creates the document
 
 What it does (see SETUP.md for the manual equivalent):
@@ -43,19 +44,29 @@ class Client:
     def post(self, path: str, **kw):
         r = self.s.post(self.base + path, timeout=120, **kw)
         if r.status_code >= 400:
-            raise RuntimeError(f"POST {path} -> {r.status_code}: {r.text[:400]}")
+            raise RuntimeError(f"POST {path} -> {r.status_code}: {r.text[:400]}{_hint(r.status_code)}")
         return r.json() if r.text else {}
 
     def get(self, path: str):
         r = self.s.get(self.base + path, timeout=60)
         if r.status_code >= 400:
-            raise RuntimeError(f"GET {path} -> {r.status_code}: {r.text[:400]}")
+            raise RuntimeError(f"GET {path} -> {r.status_code}: {r.text[:400]}{_hint(r.status_code)}")
         return r.json()
+
+
+def _hint(code: int) -> str:
+    if code == 401:
+        return ("\n  hint: keys rejected. Keys only work on the stack they were made on (cad.onshape.com vs a "
+                "company domain: set ONSHAPE_BASE_URL), and the secret is shown only once at creation.")
+    if code == 403:
+        return "\n  hint: key lacks a scope. Create it with read + write scopes."
+    return ""
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--execute", action="store_true", help="actually call the API (default: dry run)")
+    ap.add_argument("--check", action="store_true", help="only verify keys and network access, change nothing")
     ap.add_argument("--base-url", default=os.environ.get("ONSHAPE_BASE_URL", "https://cad.onshape.com"))
     ap.add_argument("--name", default=f"PF10 Frame {dt.date.today().isoformat()}")
     ap.add_argument("--no-step", action="store_true", help="skip STEP imports")
@@ -72,8 +83,8 @@ def main() -> int:
         print(f"  Feature Studio  {n:20s} <- {p.relative_to(ROOT)} ({p.stat().st_size} B)")
     for p in steps:
         print(f"  STEP import     {p.name:20s} ({p.stat().st_size / 1e3:.0f} kB)")
-    if not args.execute:
-        print("\nDry run only. Re-run with --execute (needs ONSHAPE_ACCESS_KEY / ONSHAPE_SECRET_KEY).")
+    if not (args.execute or args.check):
+        print("\nDry run only. Re-run with --check, then --execute (needs ONSHAPE_ACCESS_KEY / ONSHAPE_SECRET_KEY).")
         return 0
 
     try:
@@ -81,6 +92,14 @@ def main() -> int:
     except KeyError:
         print("Set ONSHAPE_ACCESS_KEY and ONSHAPE_SECRET_KEY (Onshape developer portal -> API keys).")
         return 1
+    try:
+        me = c.get("/users/sessioninfo")
+    except Exception as exc:  # network policy, DNS, TLS or auth
+        print(f"Cannot reach Onshape at {args.base_url}: {exc}")
+        return 1
+    print(f"Connected to {args.base_url} as {me.get('name') or me.get('email') or me.get('id')}")
+    if args.check:
+        return 0
     doc = c.post("/documents", json={"name": args.name, "isPublic": False})
     did, wid = doc["id"], doc["defaultWorkspace"]["id"]
     print(f"created document {did} (workspace {wid})")
