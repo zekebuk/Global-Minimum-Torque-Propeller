@@ -186,6 +186,41 @@ def cmd_winder(args) -> int:
     return 0 if ok else 1
 
 
+def cmd_factory(args) -> int:
+    from bldc_motor.production import sim_report
+
+    if args.train:
+        from bldc_motor.design import ppo
+        from bldc_motor.production.sim import SimConfig
+        from bldc_motor.production.sim_env import FactoryEnv, ResidualFactoryEnv
+
+        env = FactoryEnv(SimConfig(days=args.days))
+        if args.train == "residual":
+            env = ResidualFactoryEnv(env)
+        cfg = ppo.PPOConfig(total_steps=args.steps, rollout_steps=4200, minibatch=210, seed=args.seed, gamma=0.99,
+                            log_std_init=-1.5 if args.train == "residual" else -0.5)  # fmt: skip
+        result = ppo.train_ppo(
+            env,
+            cfg,
+            callback=lambda e: print(
+                f"  steps {e['steps']:>7}  mean profit (last 50) ${e['mean_final_score_last50'] * 1000:,.0f}"
+            ),
+        )
+        target = Path(args.out) / f"factory_{args.train}_policy.npz"
+        result.policy.save(target)
+        print(f"saved {target}")
+        if args.train == "residual":
+            args.residual = str(target)
+        else:
+            args.ppo = str(target)
+    out = sim_report.run(args.out, args.episodes, args.days, args.ppo, args.residual)
+    for name, k in out["results"].items():
+        print(f"{name:34s} profit ${k['profit_with_salvage']:>9,.0f} ±{k['profit_std']:>6,.0f}  shipped {k['shipped']:5.0f}  fill {k['fill_rate']:.2f}  "
+              f"escapes {k['escape_rate']:.4f}  WIP {k['avg_wip']:5.1f}")  # fmt: skip
+    print(f"wrote {out['report']} and {out['trace']}")
+    return 0
+
+
 def add_design_commands(sub) -> None:
     design = sub.add_parser("design", help="RL-driven motor design pipeline (geometry -> hardware package)")
     dsub = design.add_subparsers(dest="design_command", required=True)
@@ -231,6 +266,17 @@ def add_design_commands(sub) -> None:
     p.add_argument("--name", default="RL2407")
     p.add_argument("--out", default="docs/manufacturing/cnc_winder")
     p.set_defaults(func=cmd_winder)
+
+    p = dsub.add_parser("factory", help="factory simulation: compare operations policies (optionally train PPO)")
+    p.add_argument("--episodes", type=int, default=10)
+    p.add_argument("--days", type=int, default=20)
+    p.add_argument("--train", choices=["scratch", "residual"], help="train a PPO policy first")
+    p.add_argument("--steps", type=int, default=400_000)
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--ppo", help="saved from-scratch policy (.npz)")
+    p.add_argument("--residual", help="saved residual policy (.npz)")
+    p.add_argument("--out", default="docs/manufacturing/factory_sim")
+    p.set_defaults(func=cmd_factory)
 
     p = dsub.add_parser("evaluate", help="evaluate a design JSON against a mission")
     p.add_argument("design")

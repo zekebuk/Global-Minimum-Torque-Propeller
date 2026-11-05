@@ -19,6 +19,7 @@ Everything needed to quote, build and test the RL-optimised 5" freestyle motor
 | Mass audit | `rl2407/mass_audit.csv` | CAD mass vs analytical model, by part group |
 | Suppliers and RFQs | `suppliers.md` | Candidate suppliers per part with indicative prices and verification status |
 | CNC needle winder | `cnc_winder/README.md`, `rl2407_winding.gcode`, `fluidnc_config.yaml`, `winder_bom.csv`, `cad/` | Phase-2 winder: kinematics, verified G-code, mandrel drawing and STEP, layout STEP, BOM (~$693) |
+| Factory simulation + Gym env | `factory_simulation.md`, `factory_sim/` | Discrete-event simulation of the full line with per-unit physics and real test specs; Gymnasium env for operations decisions; validated (capacity, Little's law, conservation); baselines vs PPO |
 | Assembly line plan | `assembly_line_plan.md`, `equipment_budget.csv`, `line_layout.svg` | 11 stations, $14.4k capital (< $15k incl. 15 % contingency), capacity, unit cost, ramp, quality and safety plan |
 
 Regenerate everything with:
@@ -28,6 +29,7 @@ python -m pip install -e ".[rl,cad]"
 bldc-motor design package --design data/motor_designs/rl_5in_freestyle_6s_v1/design.json --out docs/manufacturing/rl2407
 bldc-motor design winder --out docs/manufacturing/cnc_winder
 bldc-motor design production --out docs/manufacturing
+bldc-motor design factory --episodes 20
 ```
 
 ## Findings from building the package

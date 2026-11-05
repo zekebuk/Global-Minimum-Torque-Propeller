@@ -39,7 +39,7 @@ flowchart LR
 | **S7** Base subassembly | 3.0 | Grizzly T26414 2-ton arbor press + turned/printed anvils; 983A pneumatic dispenser + small compressor | Bearing press anvil (outer race); Stator-on-tube alignment jig (window W1) | Bearings seated (feeler 0.02); Stator height + lead exit in W1 | 0.5 h batch |
 | **S8** Rotor subassembly | 8.5 | Grizzly T26414 2-ton arbor press + turned/printed anvils; 983A pneumatic dispenser + small compressor; Gaussmeter / pole checker for magnet incoming + pole order | 14-pole magnet indexing fixture; Ring-into-bell press anvil; Shaft press anvil + grub torque driver | Pole order N/S alternating (gauss check); Magnet axial position; Shaft runout <= 0.02 at prop thread | 0.5 h batch |
 | **S9** Rotor balancing | 4.0 | Vibromera Balanset-1A 2-plane balancer + in-house spindle fixture; American Weigh AMW-SC-501 500 g x 0.01 g; Mitutoyo 64PKA079B dial indicator + magnetic base | Balancing spindle with Ø5 collet | Residual unbalance <= 11 mg·mm (G2.5 @ 36k rpm) | - |
-| **S10** Final assembly + end-of-line test | 5.3 | Grizzly T26414 2-ton arbor press + turned/printed anvils; Tonghui TH2512B+ 4-wire milliohm meter; GW Instek GPT-9801 AC 5 kV hipot; Korad KWR103 60 V / 15 A programmable supply; UNI-T UT372 optical tachometer; DER EE DE-5000 LCR meter; Tyto Robotics Series 1585 thrust stand bundle; 6S packs; Desco 16310 ESD mat kit | E-clip tool; EOL test nest with tach window | Axial play 0.02-0.08 mm; R + hipot repeat; No-load Kv at 12 V within ±3 % of 1687 rpm/V; I0 within limit; Vibration/noise vs golden sample; 1 in 50: loaded sweep on Tyto stand vs predicted_stand_curve.csv | - |
+| **S10** Final assembly + end-of-line test | 5.3 | Grizzly T26414 2-ton arbor press + turned/printed anvils; Tonghui TH2512B+ 4-wire milliohm meter; GW Instek GPT-9801 AC 5 kV hipot; Korad KWR103 60 V / 15 A programmable supply; UNI-T UT372 optical tachometer; DER EE DE-5000 LCR meter; Tyto Robotics Series 1585 thrust stand bundle; 6S packs; Desco 16310 ESD mat kit | E-clip tool; EOL test nest with tach window | Axial play 0.02-0.08 mm; R + hipot repeat; No-load Kv at 12 V within ±3σ (≈ ±5.5 %) of 1687 rpm/V per spec_sheet.md; I0 within limit; Vibration/noise vs golden sample; 1 in 50: loaded sweep on Tyto stand vs predicted_stand_curve.csv | - |
 | **S11** Label + pack | 1.0 | - | Serial label template | Serial, Kv, R recorded in traveller | - |
 
 **Total labour: 40.8 min per motor.** Bottleneck: S3 Winding (hand, jig-indexed) (10.0 min).
@@ -147,7 +147,7 @@ At volume, labour ($17.00 at $25/h) is the largest cost line, so the CNC winder 
 | Pole order | Alternating N/S | S8 | Gaussmeter / compass | 100 % |
 | Residual unbalance | <= 11 mg·mm | S9 | Balanset | 100 % |
 | Axial play | 0.02-0.08 mm | S10 | Dial indicator | 100 % |
-| Kv (no-load, 12 V) | 1687 rpm/V ±3 % | S10 | PSU + tach | 100 % |
+| Kv (no-load, 12 V) | 1687 rpm/V ±3σ ≈ ±5.5 % (a ±3 % gate would reject ~10 % of good motors; see factory_simulation.md) | S10 | PSU + tach | 100 % |
 | Loaded performance | Within ±5 % of predicted curve | S10 | Tyto 1585 sweep | 1 in 50 |
 
 ## Safety

@@ -391,7 +391,7 @@ STATIONS: tuple[Station, ...] = (
         (
             "Axial play 0.02-0.08 mm",
             "R + hipot repeat",
-            "No-load Kv at 12 V within ±3 % of 1687 rpm/V; I0 within limit",
+            "No-load Kv at 12 V within ±3σ (≈ ±5.5 %) of 1687 rpm/V per spec_sheet.md; I0 within limit",
             "Vibration/noise vs golden sample",
             "1 in 50: loaded sweep on Tyto stand vs predicted_stand_curve.csv",
         ),

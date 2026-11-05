@@ -220,7 +220,7 @@ def plan_markdown(volume: float = 5000.0) -> str:
         "| Pole order | Alternating N/S | S8 | Gaussmeter / compass | 100 % |",
         "| Residual unbalance | <= 11 mg·mm | S9 | Balanset | 100 % |",
         "| Axial play | 0.02-0.08 mm | S10 | Dial indicator | 100 % |",
-        "| Kv (no-load, 12 V) | 1687 rpm/V ±3 % | S10 | PSU + tach | 100 % |",
+        "| Kv (no-load, 12 V) | 1687 rpm/V ±3σ ≈ ±5.5 % (a ±3 % gate would reject ~10 % of good motors; see factory_simulation.md) | S10 | PSU + tach | 100 % |",
         "| Loaded performance | Within ±5 % of predicted curve | S10 | Tyto 1585 sweep | 1 in 50 |",
         "",
         "## Safety",
