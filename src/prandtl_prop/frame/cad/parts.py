@@ -140,8 +140,7 @@ def make_bottom_body(g: FrameGeometry) -> cq.Workplane:
     p = g.stack_pattern / 2
     bosses = [cyl(sx * p, sy * p, tb, 5.0, g.boss_d) for sx in (1, -1) for sy in (1, -1)]
     bosses += [cyl(x, y, tb, H, g.boss_d) for x, y in g.top_bolt_pts]
-    cam_y = camera_bolt_y(g)
-    bosses += [cyl(hx - 4.0, sy * cam_y, tb, H, 8.0) for sy in (1, -1)]
+    bosses += camera_bosses(g)
     # battery-pad insert bosses (inserts pressed in from the underside)
     bosses += [cyl(x, y, tb, 5.0, g.boss_d) for x, y in pad_bolt_pts(g)]
     body = union_all([body] + bosses)
@@ -166,13 +165,12 @@ def make_bottom_body(g: FrameGeometry) -> cq.Workplane:
             cuts.append(cyl(sx * p, sy * p, tb + 0.8, 6.0, g.m3_insert))
     for x, y in g.top_bolt_pts:
         cuts.append(cyl(x, y, tb + H - 7.0, 8.0, g.m3_insert))
-    # camera cage inserts (horizontal, into the front pillars)
-    for sy in (1, -1):
-        cuts.append(cq.Workplane("YZ").workplane(offset=hx - 8.0).center(sy * cam_y, tb + H / 2)
-                    .circle(g.m3_insert / 2).extrude(9.0))
-    # cable windows: XT60 lead out the rear, camera/VTX cable at the front
+    # camera cage inserts (horizontal, through the front wall into the bosses)
+    for y, z in camera_bolt_pts(g):
+        cuts.append(cq.Workplane("YZ").workplane(offset=hx - w - 6.5).center(y, z).circle(g.m3_insert / 2).extrude(w + 7.5))
+    # cable windows: XT60 lead out the rear, camera/VTX cable at the front (between the upper cage bolts)
     cuts.append(box(-hx - 1, -hx + w + 1, -8, 8, tb + 3, tb + 13))
-    cuts.append(box(hx - w - 1, hx + 1, -6, 6, tb + H - 8, tb + H + 1))
+    cuts.append(box(hx - w - 1, hx + 1, -4, 4, tb + H - 8, tb + H + 1))
     for c in cuts:
         body = body.cut(c)
     return body
@@ -275,27 +273,69 @@ def make_canopy(g: FrameGeometry) -> cq.Workplane:
 
 
 # ----------------------------------------------------------------------------- camera cage (PETG-HF)
-def camera_bolt_y(g: FrameGeometry) -> float:
-    """Camera-cage bolts sit just outside the cage side plates; wings end 4 mm beyond (clear of the
-    front socket bosses, which reach in front of the front wall at |y| > ~21 mm)."""
-    return g.camera_w / 2 + 0.3 + 2.5 + 3.5
+CAM_HEAD_R = 2.75     # M3 socket-head radius
+CAM_LOW_Y, CAM_HIGH_Y = 6.0, 9.0
+
+
+def _camera_rows(g: FrameGeometry) -> tuple[float, float | None, float]:
+    """(z of the lower bolt row, z of the upper row or None, camera centre z)."""
+    tb, H = g.t_bp, g.H_int
+    half = g.camera_w / 2
+    z_low = tb + 3.0
+    z_high = tb + H - 3.0
+    clear = CAM_HEAD_R + 0.5
+    if (z_high - clear) - (z_low + clear) >= g.camera_w:   # camera fits between both rows: centre it
+        return z_low, z_high, 0.5 * (z_low + z_high)
+    cz = z_low + clear + half                                # short body: camera sits on the lower row only
+    if cz + half > tb + H + 6.0:
+        raise ValueError(f"Camera ({g.camera_w} mm) does not fit a {H:.1f} mm body with its cage bolts")
+    return z_low, None, cz
+
+
+def camera_bolt_pts(g: FrameGeometry) -> list[tuple[float, float]]:
+    """(y, z) of the camera-cage bolts: below (and, if the body is tall enough, above) the camera.
+
+    Bolting above/below the camera keeps the cage inside |y| < camera_w/2 + 4 mm, so it never meets the
+    front arm sockets, which protrude ahead of the front wall at |y| ~ 17-25 mm when the arms are wide.
+    Head clearance is checked against the untilted camera body, which is the binding case at the back
+    plate: tilting swings the camera's edge up and away from the plate.
+    """
+    z_low, z_high, _ = _camera_rows(g)
+    if z_high is None:
+        return [(-8.0, z_low), (0.0, z_low), (8.0, z_low)]
+    return [(-CAM_LOW_Y, z_low), (CAM_LOW_Y, z_low), (-CAM_HIGH_Y, z_high), (CAM_HIGH_Y, z_high)]
+
+
+def camera_bosses(g: FrameGeometry) -> list[cq.Workplane]:
+    """Insert bosses behind the front wall: floor-standing below, 45-deg-chamfered (self-supporting) above."""
+    x1 = g.body_hx - g.wall_t + 0.1
+    x0 = x1 - 6.1
+    out = []
+    for y, z in camera_bolt_pts(g):
+        if z < g.t_bp + g.H_int / 2:
+            out.append(box(x0, x1, y - 4.5, y + 4.5, g.t_bp, z + 4.5))
+        else:
+            zt = g.t_bp + g.H_int
+            prof = [(x1, zt), (x0, zt), (x0, z - 4.5), (x1, z - 4.5 - (x1 - x0))]
+            out.append(cq.Workplane("XZ").workplane(offset=-(y + 4.5)).polyline(prof).close().extrude(9.0))
+    return out
 
 
 def camera_center(g: FrameGeometry):
-    return (g.body_hx + 3.0 + 12.0, 0.0, g.t_bp + g.H_int / 2 + 2.0)
+    return (g.body_hx + 3.0 + 12.0, 0.0, _camera_rows(g)[2])
 
 
 def make_camera_mount(g: FrameGeometry) -> cq.Workplane:
     hx, H, tb = g.body_hx, g.H_int, g.t_bp
-    cam_y = camera_bolt_y(g)
     gap = g.camera_w / 2 + 0.3
-    back = box(hx, hx + 3.0, -cam_y - 4, cam_y + 4, tb, tb + H)
+    half = gap + 2.5 + 1.0
+    back = box(hx, hx + 3.0, -half, half, tb, tb + H)
     sides = [box(hx + 3.0, hx + 27.0, gap, gap + 2.5, tb, tb + H), box(hx + 3.0, hx + 27.0, -gap - 2.5, -gap, tb, tb + H)]
     cage = union_all([back] + sides)
     cx, _, cz = camera_center(g)
     cuts = []
-    for sy in (1, -1):
-        cuts.append(cq.Workplane("YZ").workplane(offset=hx - 1).center(sy * cam_y, tb + H / 2).circle(g.m3_clear / 2).extrude(5))
+    for y, z in camera_bolt_pts(g):
+        cuts.append(cq.Workplane("YZ").workplane(offset=hx - 1).center(y, z).circle(g.m3_clear / 2).extrude(5))
     # M2 pivot and a 0-45 deg tilt-lock arc (row of overlapping holes) in each side plate
     pivot = cq.Workplane("XZ").workplane(offset=-(gap + 3.0)).center(cx, cz).circle(1.1).extrude(gap * 2 + 6.0)
     cuts.append(pivot)
@@ -303,6 +343,11 @@ def make_camera_mount(g: FrameGeometry) -> cq.Workplane:
         a = math.radians(180 + k)
         px, pz = cx + 8.0 * math.cos(a), cz + 8.0 * math.sin(a)
         cuts.append(cq.Workplane("XZ").workplane(offset=-(gap + 3.0)).center(px, pz).circle(1.1).extrude(gap * 2 + 6.0))
+    # backstop: notch the cage around the front socket bosses (+0.5 mm) whatever the arm width
+    r0 = socket_r0(g)
+    for ang, _ in arm_axes(g)[:2]:
+        w = g.socket_half_w + 0.5
+        cuts.append(place(box(r0 - g.root_radius - 0.5, 0.5, -w, w, tb - 1, tb + H + 1), ang, g.root_radius))
     for c in cuts:
         cage = cage.cut(c)
     return cage

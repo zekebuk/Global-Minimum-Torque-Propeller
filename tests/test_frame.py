@@ -244,3 +244,19 @@ def test_consistency_reports_payload_to_close_the_loop():
     an["auw_g"] = 1e3 * d.multirotor.mass_kg
     _, warnings = consistency(d, an, d.frame)
     assert not any("payload_mass_kg" in w for w in warnings)
+
+
+def test_camera_cage_clears_wide_arm_sockets(cfg, mats):
+    """Regression: at the 28 mm width bound the front sockets protrude ahead of the front wall."""
+    pytest.importorskip("cadquery")
+    from prandtl_prop.frame.cad import parts as P
+    from prandtl_prop.frame.cad.assembly import intersection_volume
+    from prandtl_prop.frame.geometry import derive
+
+    ctx, lay = _ctx(cfg, mats)
+    res = evaluate([28.0, 34.0, 0.45, 2, 14], ctx)
+    g = derive(cfg, {"layout": lay, "arm": {"result": res}})
+    cage, body, cam = P.make_camera_mount(g), P.make_bottom_body(g), P.envelopes(g)["camera"]
+    assert intersection_volume(cage, body) < 1e-3
+    assert intersection_volume(cage, cam) < 1e-3
+    assert intersection_volume(cam, body) < 1e-3
