@@ -23,6 +23,7 @@ bldc-motor = "bldc_motor.cli:main"
 [project.optional-dependencies]
 dev = ["pytest", "black", "ruff"]
 rl = ["gymnasium>=0.29"]
+cad = ["cadquery>=2.4"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

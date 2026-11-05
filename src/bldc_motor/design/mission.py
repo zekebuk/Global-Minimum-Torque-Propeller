@@ -146,8 +146,18 @@ def _thermal_after(thermal, point: PowertrainPoint, x0: np.ndarray, t: float) ->
     return x_ss + expm(a * t) @ (x0 - x_ss), x_ss
 
 
-def evaluate(design: dict, mission: MissionSpec, calibration: model.Calibration | None = None) -> Evaluation:
+def evaluate(
+    design: dict,
+    mission: MissionSpec,
+    calibration: model.Calibration | None = None,
+    mass_override_g: float | None = None,
+) -> Evaluation:
+    """Score ``design`` on ``mission``. ``mass_override_g`` replaces the model's motor mass (e.g. CAD mass)."""
+
     analysis = model.analyze(design, calibration, name="candidate")
+    if mass_override_g is not None and analysis.motor is not None:
+        analysis.motor = analysis.motor.with_updates(mass_g=mass_override_g)
+        analysis.internals["mass_total_g"] = mass_override_g
     rules = manufacturing.dfm_rules(analysis)
     mfg = manufacturing.manufacturability_score(rules)
     cost = manufacturing.unit_cost_usd(analysis)

@@ -1,0 +1,9 @@
+group,cad_g,analytical_model_g,delta_g
+stator core (CAD x stacking 0.95),11.54,11.62,-0.09
+copper winding (model),4.47,4.47,+0.00
+magnets x poles,7.46,7.46,-0.00
+back-iron ring,6.86,6.10,+0.76
+bell,5.52,3.07,+2.45
+base + shaft + bearings + small parts,11.69,8.41,+3.28
+TOTAL (without leads),47.54,41.13,+6.40
+leads 3 x 150 mm 20 AWG,3.14,,

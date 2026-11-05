@@ -108,6 +108,17 @@ bldc-motor design benchmark        # mission-conditioned policy vs per-mission o
 
 See `docs/motor_design_pipeline.md` for the physics, DFM rules, RL formulation, results and limitations.
 
+### Manufacturing package and assembly line
+
+`docs/manufacturing/` holds the rev-P1 manufacturing package for the optimised RL2407 motor:
+
+- a 9-sheet dimensioned drawing set (PDF/SVG), STEP models of every part and the assembly, and the lamination DXF;
+- the winding table, mechanical clearance checks and a CAD mass audit;
+- candidate suppliers with researched indicative prices;
+- an 11-station assembly line plan with $14.8k capital (under $15k including contingency), plus capacity, unit cost, ramp, quality and safety plans.
+
+Regenerate with `bldc-motor design package` and `bldc-motor design production` (needs `pip install -e ".[cad]"`). The drawings are unchecked prototype releases and the prices are not quotes; see `docs/manufacturing/README.md`.
+
 The bundled component library is **illustrative**: generic size-class placeholders, not manufacturer or measured data. Model equations, assumptions, the bench-test protocol and the CSV schema are in `docs/motor_development.md`.
 
 ## Locked Modeled Result

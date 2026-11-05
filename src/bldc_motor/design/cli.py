@@ -131,6 +131,41 @@ def cmd_benchmark(args) -> int:
     return 0
 
 
+def cmd_package(args) -> int:
+    from bldc_motor.design.manufacturing_package import build_package
+
+    result = build_package(args.design, args.out, args.name, args.mission)
+    audit = result["audit"]
+    print(f"mechanical checks: {'all OK' if result['checks_ok'] else 'FAILURES - see mechanical_checks.md'}")
+    print(
+        f"mass: CAD {audit['cad_total_g']:.1f} g (+{audit['leads_g']:.1f} g leads) vs analytical model {audit['model_total_g']:.1f} g"
+    )
+    for label, r in result["rescored"].items():
+        print(
+            f"  {label:22s} AUW {r['auw_g']:.0f} g  hover {r['hover_g_per_w']:.2f} g/W  T/W {r['thrust_to_weight']:.2f}  feasible={r['feasible']}"
+        )
+    print(f"wrote {len(result['files'])} files to {args.out}")
+    return 0 if result["checks_ok"] else 1
+
+
+def cmd_production(args) -> int:
+    from bldc_motor.production import assembly_line, report
+
+    files = report.write_all(args.out)
+    p = assembly_line.plan(args.volume)
+    print(
+        f"capital {p.capital_total:,.0f} USD (equipment {p.equipment_total:,.0f} + contingency {p.contingency:,.0f}); within budget: {p.within_budget}"
+    )
+    print(
+        f"labour {p.labour_min_per_motor:.1f} min/motor, bottleneck {p.bottleneck}; capacity/yr (1-3 operators) {p.capacity_per_year_single_shift}"
+    )
+    for label, u in p.unit_cost.items():
+        print(f"  unit cost {label}: {u['total_usd']:.2f} USD")
+    for key, path in files.items():
+        print(f"  {key}: {path}")
+    return 0 if p.within_budget else 1
+
+
 def add_design_commands(sub) -> None:
     design = sub.add_parser("design", help="RL-driven motor design pipeline (geometry -> hardware package)")
     dsub = design.add_subparsers(dest="design_command", required=True)
@@ -158,6 +193,18 @@ def add_design_commands(sub) -> None:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--out", default="outputs/motor/design/benchmark.json")
     p.set_defaults(func=cmd_benchmark)
+
+    p = dsub.add_parser("package", help="manufacturing data package: STEP, DXF, drawing set (SVG/PDF), mass audit")
+    p.add_argument("--design", default="data/motor_designs/rl_5in_freestyle_6s_v1/design.json")
+    p.add_argument("--name", default="RL2407")
+    p.add_argument("--mission", help="mission for re-scoring at CAD mass (default: from design.json)")
+    p.add_argument("--out", default="docs/manufacturing/rl2407")
+    p.set_defaults(func=cmd_package)
+
+    p = dsub.add_parser("production", help="assembly line plan, suppliers, equipment budget, layout")
+    p.add_argument("--volume", type=float, default=5000.0)
+    p.add_argument("--out", default="docs/manufacturing")
+    p.set_defaults(func=cmd_production)
 
     p = dsub.add_parser("evaluate", help="evaluate a design JSON against a mission")
     p.add_argument("design")

@@ -1,0 +1,268 @@
+{
+  "name": "rl_design_5in_freestyle_6s",
+  "mission": "5in_freestyle_6s",
+  "found_by": "rl_ppo",
+  "design": {
+    "stator_od_mm": 24.0,
+    "stack_mm": 7.5,
+    "inner_ratio": 0.51,
+    "yoke_frac": 0.11,
+    "tooth_frac": 0.43,
+    "slot_opening_mm": 2.5,
+    "airgap_mm": 0.35000000000000003,
+    "magnet_mm": 1.7000000000000002,
+    "magnet_arc": 0.8300000000000001,
+    "bell_mm": 1.0,
+    "slot_pole": [
+      12,
+      14
+    ],
+    "turns": 6,
+    "awg": 23,
+    "strands": 1,
+    "connection": "wye",
+    "magnet_grade": "N52",
+    "lamination_mm": 0.1
+  },
+  "score": 1.7399148375977214,
+  "feasible": true,
+  "metrics": {
+    "manufacturability": 1.0,
+    "unit_cost_usd": 4.70573106813051,
+    "mass_g": 41.133180119508744,
+    "auw_g": 641.7327204780349,
+    "kv_rpm_per_v": 1686.9709560840279,
+    "r_ll_mohm": 87.69428762941793,
+    "km_nm_per_sqrt_w": 0.019115168214637327,
+    "hover_throttle": 0.2794618976239511,
+    "hover_g_per_w": 5.7913602006456,
+    "hover_motor_eff": 0.8966913656724032,
+    "hover_i_total_a": 4.796894497856701,
+    "hover_winding_c": 32.6255658115932,
+    "thrust_to_weight": 8.522279438044901,
+    "punch_i_motor_a": 34.19350895758504,
+    "punch_rpm": 30046.56922008117,
+    "burst_winding_c": 123.1128118853289,
+    "burst_magnet_c": 59.48052569483901,
+    "demag_current_a": 140.36683866774558,
+    "stator_od_mm": 24.0
+  },
+  "penalties": {
+    "thrust_to_weight": 0.0,
+    "winding_temp": 0.0,
+    "magnet_temp": 0.0,
+    "demag_current": 0.0,
+    "esc_current": 0.0,
+    "stator_size": 0.0,
+    "hover_throttle_high": 0.0
+  },
+  "cost_usd": {
+    "magnets": 0.69032095033513,
+    "laminations": 0.5349498675609882,
+    "copper": 0.05362185705447394,
+    "winding_labour": 0.41759999999999997,
+    "bell": 1.3092383931799183,
+    "bearings_shaft": 0.7,
+    "assembly_test": 1.0,
+    "total": 4.70573106813051
+  },
+  "dfm": [
+    {
+      "rule": "slot_fill",
+      "value": 0.3782602074108408,
+      "limit": "<= 0.38 ideal, 0.5 max",
+      "penalty": 0.0,
+      "status": "OK"
+    },
+    {
+      "rule": "needle_access",
+      "value": 2.5,
+      "limit": ">= 1.21 mm",
+      "penalty": 0.0,
+      "status": "OK"
+    },
+    {
+      "rule": "wire_stiffness",
+      "value": 0.5733233943051982,
+      "limit": "<= 0.8 mm",
+      "penalty": 0.0,
+      "status": "OK"
+    },
+    {
+      "rule": "wire_fragility",
+      "value": 0.5733233943051982,
+      "limit": ">= 0.15 mm",
+      "penalty": 0.0,
+      "status": "OK"
+    },
+    {
+      "rule": "strands_in_hand",
+      "value": 1,
+      "limit": "<= 3",
+      "penalty": 0.0,
+      "status": "OK"
+    },
+    {
+      "rule": "turn_count_low",
+      "value": 6,
+      "limit": ">= 3",
+      "penalty": 0.0,
+      "status": "OK"
+    },
+    {
+      "rule": "turn_count_labour",
+      "value": 6,
+      "limit": "strand-turns <= 40",
+      "penalty": 0.0,
+      "status": "OK"
+    },
+    {
+      "rule": "airgap",
+      "value": 0.35000000000000003,
+      "limit": ">= 0.25 mm",
+      "penalty": 0.0,
+      "status": "OK"
+    },
+    {
+      "rule": "magnet_thickness",
+      "value": 1.7000000000000002,
+      "limit": ">= 1.0 mm",
+      "penalty": 0.0,
+      "status": "OK"
+    },
+    {
+      "rule": "tooth_width",
+      "value": 2.7017696820872223,
+      "limit": ">= 1.2 mm",
+      "penalty": 0.0,
+      "status": "OK"
+    },
+    {
+      "rule": "yoke_thickness",
+      "value": 1.32,
+      "limit": ">= 0.8 mm",
+      "penalty": 0.0,
+      "status": "OK"
+    },
+    {
+      "rule": "shoe_overhang",
+      "value": 0.5407078125461822,
+      "limit": ">= 0.25 mm",
+      "penalty": 0.0,
+      "status": "OK"
+    },
+    {
+      "rule": "magnet_count",
+      "value": 14,
+      "limit": "<= 28",
+      "penalty": 0.0,
+      "status": "OK"
+    },
+    {
+      "rule": "unbalanced_pull",
+      "value": 2.0,
+      "limit": "gcd(Q,2p) >= 2",
+      "penalty": 0.0,
+      "status": "OK"
+    },
+    {
+      "rule": "delta_circulating",
+      "value": 0.0,
+      "limit": "wye preferred (no 3rd-harmonic loop)",
+      "penalty": 0.0,
+      "status": "OK"
+    }
+  ],
+  "yield": {
+    "samples": 200,
+    "yield_fraction": 1.0,
+    "score_mean": 1.7393586442889997,
+    "score_p10": 1.7357278125519178,
+    "kv_mean": 1690.3752382118116,
+    "kv_cv": 0.019109850723660046,
+    "burst_winding_p90_c": 132.5411531415211,
+    "failure_modes": {}
+  },
+  "internals": {
+    "carter": 1.3055706125669844,
+    "g_eff_mm": 0.4569497143984446,
+    "bg0_t": 1.0309514205624126,
+    "bg_t": 0.6507376251558583,
+    "b1_t": 0.7991791082099343,
+    "b_tooth_t": 1.5929929624378418,
+    "b_yoke_t": 1.1598172319626892,
+    "b_bell_t": 1.454410808881212,
+    "saturation_factor": 0.6312010558178026,
+    "winding_factor": 0.9330127018922194,
+    "n_series_turns_per_phase": 24,
+    "ke_dc_v_s_rad": 0.005660617066982908,
+    "fill_bare": 0.3782602074108408,
+    "fill_envelope": 0.5441162367885533,
+    "turn_length_mm": 24.330631233143187,
+    "coil_build_mm": 0.7407363479506655,
+    "slot_area_mm2": 8.189922608398351,
+    "tooth_width_mm": 2.7017696820872223,
+    "slot_root_width_mm": 1.193805208364121,
+    "yoke_mm": 1.32,
+    "wire_bare_mm": 0.5733233943051982,
+    "wire_insulated_mm": 0.6093897131058801,
+    "r_phase_ohm": 0.043847143814708965,
+    "mass_stator_iron_g": 11.623120033537056,
+    "mass_teeth_g": 8.558124843797073,
+    "mass_yoke_g": 3.0649951897399834,
+    "mass_copper_g": 4.468488087872829,
+    "mass_magnets_g": 7.460380915184181,
+    "mass_bell_steel_g": 6.100022601493668,
+    "mass_bell_al_g": 3.0691684814210123,
+    "mass_fixed_g": 8.411999999999999,
+    "mass_total_g": 41.133180119508744,
+    "rotor_mass_g": 16.62957199809886,
+    "hysteresis_w_per_rad_s": 0.0005757652293958003,
+    "eddy_w_per_rad_s2": 3.9786760633597355e-07,
+    "friction_torque_nm": 0.00011900826446280991,
+    "demag_current_a": 140.36683866774558,
+    "lamination_count": 75,
+    "magnet_count": 14,
+    "outer_diameter_mm": 30.1,
+    "electrical_hz_per_krpm": 116.66666666666667
+  },
+  "calibration": {
+    "kv_factor": 1.0,
+    "resistance_factor": 1.0,
+    "iron_loss_factor": 1.0,
+    "friction_factor": 1.0,
+    "convection_factor": 1.0,
+    "samples": 0,
+    "source": "uncalibrated analytical model",
+    "history": []
+  },
+  "method_summary": {
+    "rl_ppo": {
+      "evaluations": 157851,
+      "best_raw_score": 1.7202127260376772,
+      "best_raw_feasible": true,
+      "best_refined_score": 1.7474717557154535,
+      "best_feasible_yield": 1.0,
+      "first_feasible_at": 1991,
+      "training_evaluations": 156251,
+      "exploit_mean_final_score": 1.3051490096578533,
+      "final_training_mean_score": 1.0543215221498599
+    },
+    "differential_evolution": {
+      "evaluations": 157845,
+      "best_raw_score": 1.7785190905447041,
+      "best_raw_feasible": true,
+      "best_refined_score": 1.7793679032601966,
+      "best_feasible_yield": 0.725,
+      "first_feasible_at": 1826
+    },
+    "random_search": {
+      "evaluations": 157851,
+      "best_raw_score": 1.5676784123557712,
+      "best_raw_feasible": true,
+      "best_refined_score": 1.679087022136288,
+      "best_feasible_yield": 0.87,
+      "first_feasible_at": 1589
+    }
+  }
+}

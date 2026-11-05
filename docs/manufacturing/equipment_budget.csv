@@ -1,0 +1,28 @@
+key,item,station,qty,unit_usd,total_usd,vendor,url,price_status,notes
+wind_jig,"Hand winding kit: 3D-printed tooth-indexing jig, wire tensioner, spool stand, counters (2 seats)",S3,1,300.00,300.00,DIY (P1S-printed),,estimate,No commercial outrunner hand jig found
+cnc_winder,"Open-source CNC needle winder build (aotenjo-xyz/winder, MIT) - phase 2",S3,1,1000.00,1000.00,GitHub aotenjo-xyz/winder,https://github.com/aotenjo-xyz/winder,estimate,No published BOM; development risk
+press,Grizzly T26414 2-ton arbor press + turned/printed anvils,S7/S8,1,271.47,271.47,Grizzly,https://www.grizzly.com/products/grizzly-2-ton-arbor-press/t26414,snippet,
+oven,"Labnique 30 L forced-air oven, 300 C",S6,1,998.00,998.00,Labnique via reach.dog,https://m.reach.dog/shop/labnique/products/digital-bench-top-forced-air-drying-oven-sterilizing-oven-with-over-heat-protection-and-adjustable-fan-speed-30l-1-1-cu-ft-300-c-800w-110v,snippet,Vent to outside for varnish solvents
+vent,Inline fan + duct for oven/varnish corner,S6,1,150.00,150.00,-,,estimate,
+hipot,GW Instek GPT-9801 AC 5 kV hipot,S5/S10,1,1244.00,1244.00,TestEquity,https://www.testequity.com/product/15249-9-GPT-9801,snippet,
+milliohm,"Tonghui TH2512B+ 4-wire milliohm meter (alt. Hioki RM3548 $1,440)",S5/S10,1,300.00,300.00,"LCSC (reference price, out of stock)",https://lcsc.com/product-detail/Ohmmeter_Tonghui-TH2512B_C34373870.html,snippet,
+psu,Korad KWR103 60 V / 15 A programmable supply (no-load EOL test),S10,1,282.81,282.81,eleshop.eu,https://eleshop.eu/korad-kwr103-power-supply.html,snippet,
+stand,Tyto Robotics Series 1585 thrust stand bundle (sample loaded test),S10,1,1075.00,1075.00,Tyto Robotics,https://www.tytorobotics.com/products/series-1580-test-stand-bundle,page,Listed SOLD OUT on 2026-11-05: lead-time risk
+tach,UNI-T UT372 optical tachometer,S10,1,72.99,72.99,eBay,https://www.ebay.com/itm/385065354507,snippet,
+test_power,"6S packs (2), charger, ESCs, props, safety cage for loaded test",S10,1,450.00,450.00,-,,estimate,
+solder,Hakko FX-888DX station + Pinecil V2 + Hakko FA-400 fume extractor,S4,1,249.57,249.57,SparkFun / Ameridroid / Hakko,https://www.sparkfun.com/hakko-fx-888dx-soldering-station.html,snippet,
+solder_pot,Small solder pot for enamel stripping of AWG23 ends,S4,1,60.00,60.00,-,,estimate,
+esd,Desco 16310 ESD mat kit,S4/S10,2,47.62,95.24,Test Equipment Depot,https://mcstaging.testequipmentdepot.com/desco-16310-trustat-b80-vinyl-mat-kit-blue-0080-in-x-24-in-x-36-in.html,snippet,
+dispenser,983A pneumatic dispenser + small compressor,S7/S8,1,250.00,250.00,eBay listings + compressor (est.),https://www.ebay.de/itm/406152295250,listing,
+printer,"Bambu Lab P1S (fixtures, jigs, nests)",all,1,399.00,399.00,bambuhub tracker,https://bambuhub.net/bambu-price-tracking,snippet,Being phased out; P2S $549
+metrology,Mitutoyo caliper + micrometer kit 64PKA076B,S1,1,516.85,516.85,Walmart,https://walmart.com/c/brand/mitutoyo,snippet,
+indicator,Mitutoyo 64PKA079B dial indicator + magnetic base (runout),S1/S9,1,302.99,302.99,riswll,https://www.riswll.com/products/mitutoyo-64pka079b-mitutoyo-dial-indicator-0-to-1-in-0-100,snippet,
+scale,"American Weigh AMW-SC-501 500 g x 0.01 g (balance weights, mass audit)",S1/S9,1,25.99,25.99,Walmart,https://www.walmart.com/ip/28643541,snippet,Upgrade: Ohaus Scout STX422 $436.68
+dmm,Brymen BM235 multimeter,S5,1,117.06,117.06,TME,https://www.tme.com/,snippet,Alt. Fluke 117 $227.57 (Provantage)
+lcr,DER EE DE-5000 LCR meter (phase inductance check),S10,1,181.25,181.25,eBay,https://www.ebay.com/p/13011030190,snippet,
+gauss,Gaussmeter / pole checker for magnet incoming + pole order,S1/S8,1,150.00,150.00,-,,estimate,Not researched
+balancer,Vibromera Balanset-1A 2-plane balancer + in-house spindle fixture,S9,1,2231.16,2231.16,Vibromera,https://vibromera.eu/,snippet,Fallback: UAV belt balancer listing $3.8-5.2k
+benches,BenchPro RD3072 ESD workbench 30x72 in,all,2,409.99,819.98,Webstaurant,https://www.webstaurantstore.com/benchpro-roosevelt-series-30-x-72-lisstat-esd-laminate-top-adjustable-workbench-with-gray-frame-and-round-front-edge-rd3072/595RD3072.html,snippet,Third bench later from contingency
+shelving,Uline H-8407 heavy-duty shelving,S1/S11,2,200.00,400.00,Uline,https://www.uline.com/Product/Detail/H-8407/Industrial-Steel-Shelving/Heavy-Duty-Boltless-Shelving-48-x-24-x-72,snippet,
+safety,"Safety: Z87 glasses, gloves, non-magnetic tweezers/tools, first aid, magnet spacers",all,1,250.00,250.00,-,,estimate,
+consumables,"Start-up consumables: Loctite 638/641/648/AA326+7649/243, varnish, 10 lb AWG23, silicone wire, sleeving, solder, IPA",all,1,650.00,650.00,see suppliers,,estimate,

@@ -1,0 +1,13 @@
+tooth,phase,direction,turns,strands_in_hand,awg,connection
+1,A,CW,6,1,23,wye
+2,A,CCW,6,1,23,wye
+3,C,CCW,6,1,23,wye
+4,C,CW,6,1,23,wye
+5,B,CW,6,1,23,wye
+6,B,CCW,6,1,23,wye
+7,A,CCW,6,1,23,wye
+8,A,CW,6,1,23,wye
+9,C,CW,6,1,23,wye
+10,C,CCW,6,1,23,wye
+11,B,CCW,6,1,23,wye
+12,B,CW,6,1,23,wye
