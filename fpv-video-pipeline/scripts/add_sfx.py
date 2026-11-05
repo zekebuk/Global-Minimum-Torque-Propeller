@@ -23,6 +23,7 @@ def main() -> int:
     ap.add_argument("cutlist", type=Path)
     ap.add_argument("--library", type=Path, help="default: [paths].sfx")
     ap.add_argument("--clear", action="store_true")
+    ap.add_argument("--bed", help="location ambience under everything: mountain_wind, beach, river, snow, ...")
     ap.add_argument("--config", type=Path)
     a = ap.parse_args()
     c = cl.CutList.load(a.cutlist)
@@ -38,7 +39,7 @@ def main() -> int:
         raise SystemExit(f"no sounds in {root}: run scripts/make_sfx_library.py first")
     beats = np.array(c.beats_s)
     bar = float(np.median(np.diff(beats))) * 4 if len(beats) > 4 else None
-    c.sfx = sfx.plan(c, lib, transitions.analyse(c), bar)
+    c.sfx = sfx.plan(c, lib, transitions.analyse(c), bar, a.bed)
     c.save(a.cutlist)
     for s in sorted(c.sfx, key=lambda s: s["at"]):
         print(f"{s['at']:7.2f}s  {s['gain_db']:6.1f} dB  {s['name']}")

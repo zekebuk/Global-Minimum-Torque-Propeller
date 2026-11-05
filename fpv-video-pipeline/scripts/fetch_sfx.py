@@ -67,11 +67,11 @@ def main() -> int:
                 d = duration_s(tmp)
             except Exception as e:
                 tmp.unlink(missing_ok=True)
-                print(f"✗ {rel}: {e}")
+                print(f"FAILED {rel}: {e}")
                 failed += 1
                 continue
             if d <= 0 or abs(d - snd["duration_s"]) > max(0.15, 0.1 * snd["duration_s"]):
-                print(f"✗ {rel}: length {d:.2f}s, expected {snd['duration_s']}s; kept as .part for inspection")
+                print(f"FAILED {rel}: length {d:.2f}s, expected {snd['duration_s']}s; kept as .part for inspection")
                 failed += 1
                 continue
             tmp.replace(out)
@@ -79,7 +79,7 @@ def main() -> int:
                           "model": "eleven_text_to_sound_v2", "generated": manifest.get("generated", ""),
                           "generation_id": take["generation_id"], "source": "ElevenLabs sound effects (creative flow)"}
             ok += 1
-            print(f"✓ {rel} ({d:.2f}s)")
+            print(f"ok {rel} ({d:.2f}s)")
     root.mkdir(parents=True, exist_ok=True)
     index_path.write_text(json.dumps(index, indent=2))
     print(f"\n{ok} downloaded, {skipped} already there, {failed} failed -> {root}")
