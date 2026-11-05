@@ -21,10 +21,14 @@ import numpy as np
 
 from . import cutlist as cl
 
-MIN_GAP_S = 1.2
+MIN_GAP_S = 2.0
 MOTION_MIN = 0.45
-GAIN = {"whoosh_short": -9.0, "whoosh_long": -11.0, "whoosh_reverse": -12.0, "sub_hit": -7.0, "riser_1bar": -15.0,
-        "riser_2bar": -15.0, "dive_wind": -17.0, "wind_rush_loop": -27.0, "prop_wash_loop": -31.0, "bed": -24.0}
+# Level against the music's RMS in this reel, in dB. Generated sounds differ by 25 dB between takes and names, so a fixed
+# gain says nothing: hits are matched by their loudest 50 ms, loops and beds by RMS.
+PEAK_OVER_MUSIC = {"whoosh_short": -4.0, "whoosh_long": -5.0, "whoosh_reverse": -5.0, "sub_hit": 2.5, "riser_1bar": -4.5,
+                   "riser_2bar": -4.5, "dive_wind": -6.5}
+RMS_OVER_MUSIC = {"wind_rush_loop": -22.5, "prop_wash_loop": -26.0, "bed": -24.5}
+RISER_ROOM_S = 1.9
 TRACK_FX, TRACK_BED = 1, 3                # the song is on the [reel] music_track, A2
 
 
@@ -38,6 +42,29 @@ def loudest(path: Path, hz: int = 8000) -> tuple[float, float]:
     k = hz // 20
     e = np.convolve(x * x, np.ones(k) / k, mode="same")
     return float(np.argmax(e)) / hz, len(x) / hz
+
+
+def levels(x: np.ndarray, hz: int = 8000) -> tuple[float, float]:
+    """(loudest 50 ms, RMS) in dBFS."""
+    k = max(1, hz // 20)
+    e = np.convolve(x * x, np.ones(k) / k, mode="same")
+    return 10 * float(np.log10(e.max() + 1e-9)), 10 * float(np.log10((x * x).mean() + 1e-9))
+
+
+def _decode(path: Path, start: float = 0.0, dur: float | None = None, hz: int = 8000) -> np.ndarray:
+    cmd = ["ffmpeg", "-v", "error", "-ss", f"{start:.3f}"] + (["-t", f"{dur:.3f}"] if dur else [])
+    raw = subprocess.run(cmd + ["-i", str(path), "-ac", "1", "-ar", str(hz), "-f", "f32le", "-"], capture_output=True).stdout
+    return np.frombuffer(raw, np.float32)
+
+
+def fitted_gain(name: str, f: Path, music_rms: float, bed: bool = False) -> float:
+    """The gain that puts this file at its level against the music."""
+    peak, rms = levels(_decode(f))
+    if bed:
+        return round(music_rms + RMS_OVER_MUSIC["bed"] - rms, 1)
+    if name in RMS_OVER_MUSIC:
+        return round(music_rms + RMS_OVER_MUSIC[name] - rms, 1)
+    return round(music_rms + PEAK_OVER_MUSIC.get(name, -6.0) - peak, 1)
 
 
 def library(root: Path) -> dict[str, list[Path]]:
@@ -69,8 +96,9 @@ def plan(c: cl.CutList, lib: dict[str, list[Path]], cuts: list, bar_s: float | N
     """Placements for a cut list. cuts = transitions.analyse(c): one per cut, with music onset, loudness jump and motion.
     bed = a location ambience from the library (mountain_wind, beach, river, snow ...) under everything."""
     takes, out, total = _Takes(lib), [], c.duration()
+    music_rms = levels(_decode(Path(c.music), c.music_in_s, total))[1] if c.music else -12.0
 
-    def add(name, at, align=None, gain=None, **kw):
+    def add(name, at, align=None, is_bed=False, **kw):
         """at = when the sound starts, or align="peak" / "end" = when its loudest point / its end lands."""
         f = takes.next(name)
         if f is None or at >= total:
@@ -78,7 +106,7 @@ def plan(c: cl.CutList, lib: dict[str, list[Path]], cuts: list, bar_s: float | N
         if align:
             peak, length = loudest(f)
             at -= peak if align == "peak" else length
-        out.append({"file": str(f), "at": round(max(0.0, at), 3), "gain_db": GAIN.get(name, -12.0) if gain is None else gain,
+        out.append({"file": str(f), "at": round(max(0.0, at), 3), "gain_db": fitted_gain(name, f, music_rms, is_bed),
                     "name": name, "track": TRACK_FX, **kw})
     starts = c.starts()
     drops = [t for t, s in zip(starts, c.shots) if s.note.startswith("DROP")]
@@ -93,14 +121,14 @@ def plan(c: cl.CutList, lib: dict[str, list[Path]], cuts: list, bar_s: float | N
     for t in hits:
         add("sub_hit", t, align="peak")
     for t in drops:                         # a riser needs room, so a drop on the first frame goes without
-        if t >= (bar_s or 2.7):
+        if t >= RISER_ROOM_S:
             add("riser_1bar", t, align="end")
     if len(c.shots) > 1 and cuts:
         k = max(range(len(cuts)), key=lambda j: cuts[j].motion_in)
         add("dive_wind", cuts[k].t, fade_out=0.5, dur=min(3.0, c.shots[k + 1].dur))
     add("wind_rush_loop", 0.0, loop=True, dur=total, fade_out=1.0, track=TRACK_BED)
     if bed:
-        add(bed, 0.0, gain=GAIN["bed"], loop=True, dur=total, fade_out=1.0, track=TRACK_BED + 1)
+        add(bed, 0.0, is_bed=True, loop=True, dur=total, fade_out=1.0, track=TRACK_BED + 1)
     return out
 
 
